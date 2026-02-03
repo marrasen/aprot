@@ -2,6 +2,9 @@
 
 A Go library for building type-safe WebSocket APIs with automatic TypeScript client generation.
 
+> **Warning**
+> This library is currently unstable and under active development. Breaking changes will occur between versions until v1.0.0 is released.
+
 ## Features
 
 - **Type-safe handlers** - Define request/response types as Go structs
@@ -15,7 +18,7 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 ## Installation
 
 ```bash
-go get aprot
+go get github.com/marrasen/aprot
 ```
 
 ## Project Structure
@@ -77,6 +80,12 @@ type UserCreatedEvent struct {
 ```go
 package api
 
+import (
+    "context"
+
+    "github.com/marrasen/aprot"
+)
+
 type Handlers struct {
     broadcaster aprot.Broadcaster
 }
@@ -101,7 +110,7 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 ```go
 package api
 
-import "aprot"
+import "github.com/marrasen/aprot"
 
 func NewRegistry() *aprot.Registry {
     registry := aprot.NewRegistry()
@@ -117,8 +126,10 @@ func NewRegistry() *aprot.Registry {
 package main
 
 import (
+    "net/http"
+
+    "github.com/marrasen/aprot"
     "myapp/api"
-    "aprot"
 )
 
 func main() {
@@ -142,8 +153,8 @@ func main() {
 package main
 
 import (
+    "github.com/marrasen/aprot"
     "myapp/api"
-    "aprot"
 )
 
 func main() {
