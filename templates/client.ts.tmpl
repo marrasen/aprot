@@ -8,6 +8,38 @@ export interface {{.Name}} {
 }
 
 {{end -}}
+// Standard error codes
+export const ErrorCode = {
+    ParseError: -32700,
+    InvalidRequest: -32600,
+    MethodNotFound: -32601,
+    InvalidParams: -32602,
+    InternalError: -32603,
+    Canceled: -32800,
+    Unauthorized: -32001,
+    Forbidden: -32003,
+} as const;
+
+export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
+
+// ApiError is thrown when the server returns an error response
+export class ApiError extends Error {
+    readonly code: number;
+
+    constructor(code: number, message: string) {
+        super(message);
+        this.name = 'ApiError';
+        this.code = code;
+    }
+
+    // Helper methods for checking error types
+    isUnauthorized(): boolean { return this.code === ErrorCode.Unauthorized; }
+    isForbidden(): boolean { return this.code === ErrorCode.Forbidden; }
+    isNotFound(): boolean { return this.code === ErrorCode.MethodNotFound; }
+    isInvalidParams(): boolean { return this.code === ErrorCode.InvalidParams; }
+    isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
+}
+
 export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
@@ -75,7 +107,7 @@ export class ApiClient {
                 const p = this.pending.get(msg.id);
                 if (p) {
                     this.pending.delete(msg.id);
-                    p.reject(new Error(`[${msg.code}] ${msg.message}`));
+                    p.reject(new ApiError(msg.code, msg.message));
                 }
                 break;
             }

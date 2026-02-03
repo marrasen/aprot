@@ -326,13 +326,79 @@ func LoggingMiddleware() aprot.Middleware {
 }
 ```
 
-### Error Codes
+### Error Handling
 
-Built-in error helpers for authentication:
+#### Server-side (Go)
+
+Use `ProtocolError` to return typed errors to clients:
 
 ```go
-aprot.ErrUnauthorized("invalid token")  // Code: -32001
-aprot.ErrForbidden("access denied")     // Code: -32003
+// Built-in error helpers
+aprot.ErrUnauthorized("invalid token")     // Code: -32001
+aprot.ErrForbidden("access denied")        // Code: -32003
+aprot.ErrInvalidParams("name is required") // Code: -32602
+aprot.ErrInternal(err)                     // Code: -32603
+
+// Custom errors with your own codes
+aprot.NewError(1001, "insufficient balance")
+aprot.NewError(1002, "item out of stock")
+
+// Wrap existing errors
+aprot.WrapError(1003, "database error", err)
+```
+
+Standard error codes:
+| Code | Constant | Description |
+|------|----------|-------------|
+| -32700 | `CodeParseError` | Invalid JSON |
+| -32600 | `CodeInvalidRequest` | Invalid request structure |
+| -32601 | `CodeMethodNotFound` | Method not found |
+| -32602 | `CodeInvalidParams` | Invalid parameters |
+| -32603 | `CodeInternalError` | Internal server error |
+| -32800 | `CodeCanceled` | Request canceled |
+| -32001 | `CodeUnauthorized` | Not authenticated |
+| -32003 | `CodeForbidden` | Not authorized |
+
+#### Client-side (TypeScript)
+
+The generated client throws `ApiError` with a `code` property:
+
+```typescript
+import { ApiError, ErrorCode } from './api/client';
+
+try {
+    await client.createUser({ name: '', email: '' });
+} catch (err) {
+    if (err instanceof ApiError) {
+        // Check specific error codes
+        if (err.isUnauthorized()) {
+            // Redirect to login
+        } else if (err.isInvalidParams()) {
+            // Show validation error
+        } else if (err.code === 1001) {
+            // Handle custom error code
+        }
+        console.log(`Error ${err.code}: ${err.message}`);
+    }
+}
+```
+
+Available `ErrorCode` constants and helper methods:
+
+```typescript
+// Constants
+ErrorCode.Unauthorized  // -32001
+ErrorCode.Forbidden     // -32003
+ErrorCode.InvalidParams // -32602
+ErrorCode.MethodNotFound // -32601
+// ... etc
+
+// Helper methods on ApiError
+err.isUnauthorized()  // err.code === -32001
+err.isForbidden()     // err.code === -32003
+err.isInvalidParams() // err.code === -32602
+err.isNotFound()      // err.code === -32601
+err.isCanceled()      // err.code === -32800
 ```
 
 ## Generated Output
