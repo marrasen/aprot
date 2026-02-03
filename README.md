@@ -10,9 +10,11 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 - **Type-safe handlers** - Define request/response types as Go structs
 - **Automatic TypeScript generation** - Generate fully typed client code from your Go types
 - **React hooks** - Optional React integration with query/mutation hooks
+- **Middleware support** - Add cross-cutting concerns like authentication, logging, and rate limiting
+- **User-targeted push** - Send push messages to specific users across multiple connections
 - **Progress reporting** - Built-in support for long-running operations with progress updates
 - **Request cancellation** - Clients can cancel in-flight requests via AbortController
-- **Server push** - Broadcast events to connected clients
+- **Server push** - Broadcast events to all connected clients
 - **JSON-RPC style protocol** - Simple, debuggable wire format
 
 ## Installation
@@ -31,6 +33,7 @@ myapp/
 │   ├── types.go              # Request/response structs
 │   ├── events.go             # Push event types
 │   ├── handlers.go           # Handler implementations
+│   ├── middleware.go         # Custom middleware (optional)
 │   └── registry.go           # NewRegistry() function
 ├── server/
 │   └── main.go               # Server entry point
@@ -103,6 +106,15 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
     h.broadcaster.Broadcast("UserCreated", &UserCreatedEvent{...})
     return &CreateUserResponse{...}, nil
 }
+
+func (h *Handlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) (*DeleteUserResponse, error) {
+    // This method requires auth (see registry.go)
+    // Access connection if needed:
+    conn := aprot.Connection(ctx)
+    userID := conn.UserID() // Set by auth middleware
+    // ...
+    return &DeleteUserResponse{}, nil
+}
 ```
 
 ### 4. Create registry (api/registry.go)
@@ -112,9 +124,16 @@ package api
 
 import "github.com/marrasen/aprot"
 
-func NewRegistry() *aprot.Registry {
+func NewRegistry(handlers *Handlers) *aprot.Registry {
     registry := aprot.NewRegistry()
-    registry.Register(&Handlers{})
+
+    // Register with per-method options
+    registry.RegisterWithOptions(handlers, map[string][]aprot.Option{
+        "CreateUser": {},                 // Public
+        "GetUser":    {},                 // Public
+        "DeleteUser": {aprot.WithAuth()}, // Requires auth
+    })
+
     registry.RegisterPushEvent("UserCreated", UserCreatedEvent{})
     return registry
 }
@@ -133,12 +152,17 @@ import (
 )
 
 func main() {
-    registry := api.NewRegistry()
+    handlers := api.NewHandlers()
+    registry := api.NewRegistry(handlers)
     server := aprot.NewServer(registry)
 
-    handlers := api.NewHandlers()
     handlers.SetBroadcaster(server)
-    registry.Register(handlers)
+
+    // Add middleware (optional)
+    server.Use(
+        api.LoggingMiddleware(),
+        api.AuthMiddleware(),
+    )
 
     http.Handle("/ws", server)
     http.ListenAndServe(":8080", nil)
@@ -171,6 +195,106 @@ Add a go:generate directive in `tools/generate/doc.go`:
 ```go
 //go:generate go run main.go
 package main
+```
+
+## Middleware
+
+Middleware allows you to add cross-cutting concerns like authentication, logging, and rate limiting to your handlers.
+
+### Defining Middleware
+
+```go
+func LoggingMiddleware() aprot.Middleware {
+    return func(next aprot.Handler) aprot.Handler {
+        return func(ctx context.Context, req *aprot.Request) (any, error) {
+            start := time.Now()
+            result, err := next(ctx, req)
+            log.Printf("[%s] %s completed in %v", req.ID, req.Method, time.Since(start))
+            return result, err
+        }
+    }
+}
+```
+
+### Using Middleware
+
+```go
+server := aprot.NewServer(registry)
+server.Use(
+    LoggingMiddleware(),
+    AuthMiddleware(),
+)
+```
+
+Middleware executes in the order added, wrapping inward (first middleware is outermost).
+
+### Handler Options
+
+Mark handlers with options for middleware to inspect:
+
+```go
+registry.RegisterWithOptions(handlers, map[string][]aprot.Option{
+    "Login":       {},                                    // Public
+    "GetProfile":  {aprot.WithAuth()},                    // Requires auth
+    "DeleteUser":  {aprot.WithAuth(), aprot.WithTags("admin")},
+    "RateLimit":   {aprot.WithCustom("requests_per_min", 100)},
+})
+```
+
+Access options in middleware:
+
+```go
+func AuthMiddleware() aprot.Middleware {
+    return func(next aprot.Handler) aprot.Handler {
+        return func(ctx context.Context, req *aprot.Request) (any, error) {
+            info := aprot.HandlerInfoFromContext(ctx)
+            if info != nil && info.Options.RequireAuth {
+                // Validate auth token...
+                if !valid {
+                    return nil, aprot.ErrUnauthorized("invalid token")
+                }
+            }
+            return next(ctx, req)
+        }
+    }
+}
+```
+
+### User-Targeted Push
+
+Associate connections with user IDs to send push messages to specific users:
+
+```go
+// In auth middleware, after validating the user:
+conn := aprot.Connection(ctx)
+if conn != nil {
+    conn.SetUserID(user.ID)  // User can have multiple connections
+}
+
+// Later, send push to specific user (e.g., from a background job):
+server.PushToUser("user_123", "Notification", &NotificationEvent{
+    Message: "You have a new message",
+})
+```
+
+### Context Helpers
+
+Access request metadata in handlers and middleware:
+
+```go
+info := aprot.HandlerInfoFromContext(ctx)  // Handler metadata and options
+req := aprot.RequestFromContext(ctx)       // Request ID, method, params
+conn := aprot.Connection(ctx)              // WebSocket connection
+progress := aprot.Progress(ctx)            // Progress reporter
+```
+
+### Error Codes
+
+Built-in error helpers for authentication:
+
+```go
+aprot.ErrUnauthorized("invalid token")  // Code: -32001
+aprot.ErrForbidden("access denied")     // Code: -32003
 ```
 
 ## Generated Output
