@@ -437,6 +437,39 @@ err.isInsufficientBalance() // custom
 
 ## Generated Output
 
+The generator creates split files for better organization:
+
+- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, shared utilities
+- **`{handler-name}.ts`** - Handler-specific interfaces and methods (extends ApiClient via module augmentation)
+
+```
+api/
+├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl
+├── user-handlers.ts    # UserHandlers interfaces + methods
+└── order-handlers.ts   # OrderHandlers interfaces + methods
+```
+
+Import and use:
+
+```typescript
+import { ApiClient, ApiError, ErrorCode, getWebSocketUrl } from './api/client';
+import './api/user-handlers';   // Adds user methods to ApiClient
+import './api/order-handlers';  // Adds order methods to ApiClient
+
+const client = new ApiClient(getWebSocketUrl());
+await client.connect();
+
+// Methods from all imported handlers are available
+await client.createUser({ name: 'Alice' });
+await client.createOrder({ items: [...] });
+```
+
+For single-file output (legacy), use `GenerateTo()`:
+
+```go
+gen.GenerateTo(os.Stdout)  // Everything in one file
+```
+
 ### Vanilla TypeScript
 
 ```typescript

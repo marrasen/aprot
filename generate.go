@@ -109,8 +109,41 @@ type errorCodeData struct {
 
 // Generate writes TypeScript client code for all handler groups.
 // Returns a map of filename to content, or writes to OutputDir if set.
+// Generates:
+//   - client.ts: Base client with ApiClient, ApiError, ErrorCode, etc.
+//   - {handler-name}.ts: Handler-specific interfaces and methods for each handler group
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
+
+	// Generate base client file
+	baseData := templateData{
+		StructName: "Base",
+		FileName:   "client.ts",
+	}
+	for _, ec := range g.registry.ErrorCodes() {
+		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
+			Name:       ec.Name,
+			Code:       ec.Code,
+			MethodName: "is" + ec.Name,
+		})
+	}
+
+	var baseBuf strings.Builder
+	baseTemplateName := "client-base.ts.tmpl"
+	if g.options.Mode == OutputReact {
+		baseTemplateName = "client-base-react.ts.tmpl"
+	}
+
+	if err := templates.ExecuteTemplate(&baseBuf, baseTemplateName, baseData); err != nil {
+		return nil, err
+	}
+	results["client.ts"] = baseBuf.String()
+
+	// Generate handler files
+	handlerTemplateName := "client-handler.ts.tmpl"
+	if g.options.Mode == OutputReact {
+		handlerTemplateName = "client-handler-react.ts.tmpl"
+	}
 
 	for _, group := range g.registry.Groups() {
 		g.types = make(map[reflect.Type]string) // Reset types per group
@@ -127,12 +160,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 		data := g.buildTemplateData(group)
 
 		var buf strings.Builder
-		templateName := "client.ts.tmpl"
-		if g.options.Mode == OutputReact {
-			templateName = "client-react.ts.tmpl"
-		}
-
-		if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
+		if err := templates.ExecuteTemplate(&buf, handlerTemplateName, data); err != nil {
 			return nil, err
 		}
 

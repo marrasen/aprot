@@ -186,18 +186,48 @@ func TestGenerateMultipleFiles(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 
-	if len(files) != 1 {
-		t.Errorf("Expected 1 file, got %d", len(files))
+	// Should generate 2 files: client.ts (base) and test-handlers.ts (handler)
+	if len(files) != 2 {
+		t.Errorf("Expected 2 files, got %d: %v", len(files), mapKeys(files))
 	}
 
-	content, ok := files["test-handlers.ts"]
+	// Check base client file
+	baseContent, ok := files["client.ts"]
 	if !ok {
-		t.Fatalf("Expected test-handlers.ts, got files: %v", files)
+		t.Fatalf("Expected client.ts, got files: %v", mapKeys(files))
+	}
+	if !strings.Contains(baseContent, "export class ApiClient") {
+		t.Error("Missing ApiClient in client.ts")
+	}
+	if !strings.Contains(baseContent, "export const ErrorCode") {
+		t.Error("Missing ErrorCode in client.ts")
+	}
+	if !strings.Contains(baseContent, "export class ApiError") {
+		t.Error("Missing ApiError in client.ts")
 	}
 
-	if !strings.Contains(content, "export class ApiClient") {
-		t.Error("Missing ApiClient in generated file")
+	// Check handler file
+	handlerContent, ok := files["test-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected test-handlers.ts, got files: %v", mapKeys(files))
 	}
+	if !strings.Contains(handlerContent, "import { ApiClient") {
+		t.Error("Missing import from client.ts in handler file")
+	}
+	if !strings.Contains(handlerContent, "export interface CreateUserRequest") {
+		t.Error("Missing CreateUserRequest in handler file")
+	}
+	if !strings.Contains(handlerContent, "ApiClient.prototype.createUser") {
+		t.Error("Missing createUser method extension in handler file")
+	}
+}
+
+func mapKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func TestGenerateReact(t *testing.T) {
