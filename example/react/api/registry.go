@@ -10,9 +10,9 @@ func NewRegistry() *aprot.Registry {
 	registry.Register(&Handlers{})
 
 	// Register push events
-	registry.RegisterPushEvent("UserCreated", UserCreatedEvent{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
-	registry.RegisterPushEvent("SystemNotification", SystemNotification{})
+	registry.RegisterPushEvent(UserCreatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEvent(SystemNotificationEvent{})
 
 	return registry
 }

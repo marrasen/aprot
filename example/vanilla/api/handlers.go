@@ -16,39 +16,49 @@ type UserPusher interface {
 	PushToUser(userID string, event string, data any)
 }
 
-// Handlers implements the API methods.
-type Handlers struct {
-	broadcaster aprot.Broadcaster
-	userPusher  UserPusher
-	tokenStore  *TokenStore
-	users       map[string]*User
-	authUsers   map[string]*AuthUser // username -> AuthUser
-	mu          sync.RWMutex
-	nextID      int
+// SharedState holds state shared between handler groups.
+type SharedState struct {
+	Broadcaster aprot.Broadcaster
+	UserPusher  UserPusher
+	TokenStore  *TokenStore
+	Users       map[string]*User
+	AuthUsers   map[string]*AuthUser // username -> AuthUser
+	Mu          sync.RWMutex
+	NextID      int
 }
 
-// NewHandlers creates a new Handlers instance.
-func NewHandlers(tokenStore *TokenStore) *Handlers {
-	return &Handlers{
-		tokenStore: tokenStore,
-		users:      make(map[string]*User),
-		authUsers:  make(map[string]*AuthUser),
-		nextID:     1,
+// NewSharedState creates a new shared state instance.
+func NewSharedState(tokenStore *TokenStore) *SharedState {
+	return &SharedState{
+		TokenStore: tokenStore,
+		Users:      make(map[string]*User),
+		AuthUsers:  make(map[string]*AuthUser),
+		NextID:     1,
 	}
 }
 
-// SetBroadcaster sets the broadcaster for push events.
-func (h *Handlers) SetBroadcaster(b aprot.Broadcaster) {
-	h.broadcaster = b
+// PublicHandlers implements public API methods that don't require authentication.
+type PublicHandlers struct {
+	state *SharedState
 }
 
-// SetUserPusher sets the user pusher for targeted push events.
-func (h *Handlers) SetUserPusher(p UserPusher) {
-	h.userPusher = p
+// NewPublicHandlers creates a new PublicHandlers instance.
+func NewPublicHandlers(state *SharedState) *PublicHandlers {
+	return &PublicHandlers{state: state}
+}
+
+// ProtectedHandlers implements API methods that require authentication.
+type ProtectedHandlers struct {
+	state *SharedState
+}
+
+// NewProtectedHandlers creates a new ProtectedHandlers instance.
+func NewProtectedHandlers(state *SharedState) *ProtectedHandlers {
+	return &ProtectedHandlers{state: state}
 }
 
 // CreateUser creates a new user.
-func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
+func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
 	if req.Name == "" {
 		return nil, aprot.ErrInvalidParams("name is required")
 	}
@@ -56,20 +66,20 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 		return nil, aprot.ErrInvalidParams("email is required")
 	}
 
-	h.mu.Lock()
-	id := fmt.Sprintf("user_%d", h.nextID)
-	h.nextID++
+	h.state.Mu.Lock()
+	id := fmt.Sprintf("user_%d", h.state.NextID)
+	h.state.NextID++
 	user := &User{
 		ID:    id,
 		Name:  req.Name,
 		Email: req.Email,
 	}
-	h.users[id] = user
-	h.mu.Unlock()
+	h.state.Users[id] = user
+	h.state.Mu.Unlock()
 
 	// Broadcast to all clients that a user was created
-	if h.broadcaster != nil {
-		h.broadcaster.Broadcast("UserCreated", &UserCreatedEvent{
+	if h.state.Broadcaster != nil {
+		h.state.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{
 			ID:    user.ID,
 			Name:  user.Name,
 			Email: user.Email,
@@ -84,14 +94,14 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 }
 
 // GetUser retrieves a user by ID.
-func (h *Handlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+func (h *PublicHandlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
 	if req.ID == "" {
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 
-	h.mu.RLock()
-	user, ok := h.users[req.ID]
-	h.mu.RUnlock()
+	h.state.Mu.RLock()
+	user, ok := h.state.Users[req.ID]
+	h.state.Mu.RUnlock()
 
 	if !ok {
 		return nil, aprot.NewError(404, "user not found")
@@ -105,12 +115,12 @@ func (h *Handlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserRe
 }
 
 // ListUsers returns all users.
-func (h *Handlers) ListUsers(ctx context.Context, req *ListUsersRequest) (*ListUsersResponse, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (h *PublicHandlers) ListUsers(ctx context.Context, req *ListUsersRequest) (*ListUsersResponse, error) {
+	h.state.Mu.RLock()
+	defer h.state.Mu.RUnlock()
 
-	users := make([]User, 0, len(h.users))
-	for _, u := range h.users {
+	users := make([]User, 0, len(h.state.Users))
+	for _, u := range h.state.Users {
 		users = append(users, *u)
 	}
 
@@ -118,7 +128,7 @@ func (h *Handlers) ListUsers(ctx context.Context, req *ListUsersRequest) (*ListU
 }
 
 // ProcessBatch processes items with progress reporting.
-func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (*ProcessBatchResponse, error) {
+func (h *PublicHandlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (*ProcessBatchResponse, error) {
 	if len(req.Items) == 0 {
 		return nil, aprot.ErrInvalidParams("items cannot be empty")
 	}
@@ -150,7 +160,7 @@ func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (
 }
 
 // SendNotification sends a notification to the requesting client.
-func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotification) (*SystemNotification, error) {
+func (h *PublicHandlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
 	conn := aprot.Connection(ctx)
 	if conn != nil {
 		conn.Push("SystemNotification", req)
@@ -160,7 +170,7 @@ func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotification
 
 // Login authenticates a user and returns a token.
 // This is a public method that doesn't require authentication.
-func (h *Handlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
+func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
 	if req.Username == "" {
 		return nil, aprot.ErrInvalidParams("username is required")
 	}
@@ -170,18 +180,18 @@ func (h *Handlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse
 
 	// Simple demo auth: any username/password combo works
 	// In production, you'd verify against a database
-	h.mu.Lock()
-	user, exists := h.authUsers[req.Username]
+	h.state.Mu.Lock()
+	user, exists := h.state.AuthUsers[req.Username]
 	if !exists {
 		// Create new user on first login (demo only)
 		user = &AuthUser{
-			ID:       fmt.Sprintf("auth_%d", h.nextID),
+			ID:       fmt.Sprintf("auth_%d", h.state.NextID),
 			Username: req.Username,
 		}
-		h.nextID++
-		h.authUsers[req.Username] = user
+		h.state.NextID++
+		h.state.AuthUsers[req.Username] = user
 	}
-	h.mu.Unlock()
+	h.state.Mu.Unlock()
 
 	// Generate token
 	tokenBytes := make([]byte, 32)
@@ -189,7 +199,7 @@ func (h *Handlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse
 	token := hex.EncodeToString(tokenBytes)
 
 	// Store token
-	h.tokenStore.Store(token, user)
+	h.state.TokenStore.Store(token, user)
 
 	// Associate connection with user for push messages
 	conn := aprot.Connection(ctx)
@@ -205,8 +215,8 @@ func (h *Handlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse
 }
 
 // GetProfile returns the authenticated user's profile.
-// This method requires authentication (marked with WithAuth in registry).
-func (h *Handlers) GetProfile(ctx context.Context, req *GetProfileRequest) (*GetProfileResponse, error) {
+// This method requires authentication (middleware applied via registry).
+func (h *ProtectedHandlers) GetProfile(ctx context.Context, req *GetProfileRequest) (*GetProfileResponse, error) {
 	user := AuthUserFromContext(ctx)
 	if user == nil {
 		return nil, aprot.ErrUnauthorized("not authenticated")
@@ -219,8 +229,8 @@ func (h *Handlers) GetProfile(ctx context.Context, req *GetProfileRequest) (*Get
 }
 
 // SendMessage sends a direct message to another user.
-// This method requires authentication (marked with WithAuth in registry).
-func (h *Handlers) SendMessage(ctx context.Context, req *SendMessageRequest) (*SendMessageResponse, error) {
+// This method requires authentication (middleware applied via registry).
+func (h *ProtectedHandlers) SendMessage(ctx context.Context, req *SendMessageRequest) (*SendMessageResponse, error) {
 	sender := AuthUserFromContext(ctx)
 	if sender == nil {
 		return nil, aprot.ErrUnauthorized("not authenticated")
@@ -234,8 +244,8 @@ func (h *Handlers) SendMessage(ctx context.Context, req *SendMessageRequest) (*S
 	}
 
 	// Send push to the recipient
-	if h.userPusher != nil {
-		h.userPusher.PushToUser(req.ToUserID, "DirectMessage", &DirectMessage{
+	if h.state.UserPusher != nil {
+		h.state.UserPusher.PushToUser(req.ToUserID, "DirectMessage", &DirectMessageEvent{
 			FromUserID: sender.ID,
 			FromUser:   sender.Username,
 			Message:    req.Message,

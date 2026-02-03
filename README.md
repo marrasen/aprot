@@ -124,17 +124,16 @@ package api
 
 import "github.com/marrasen/aprot"
 
-func NewRegistry(handlers *Handlers) *aprot.Registry {
+func NewRegistry(publicHandlers *PublicHandlers, protectedHandlers *ProtectedHandlers, authMiddleware aprot.Middleware) *aprot.Registry {
     registry := aprot.NewRegistry()
 
-    // Register with per-method options
-    registry.RegisterWithOptions(handlers, map[string][]aprot.Option{
-        "CreateUser": {},                 // Public
-        "GetUser":    {},                 // Public
-        "DeleteUser": {aprot.WithAuth()}, // Requires auth
-    })
+    // Register public handlers (no middleware)
+    registry.Register(publicHandlers)
 
-    registry.RegisterPushEvent("UserCreated", UserCreatedEvent{})
+    // Register protected handlers (with auth middleware)
+    registry.Register(protectedHandlers, authMiddleware)
+
+    registry.RegisterPushEvent(UserCreatedEvent{})
     return registry
 }
 ```
@@ -228,31 +227,39 @@ server.Use(
 
 Middleware executes in the order added, wrapping inward (first middleware is outermost).
 
-### Handler Options
+### Per-Handler Middleware
 
-Mark handlers with options for middleware to inspect:
+Apply middleware at the handler group level for safety. This ensures you can't accidentally forget to protect an endpoint - if a handler needs authentication, it's registered with the auth middleware.
 
 ```go
-registry.RegisterWithOptions(handlers, map[string][]aprot.Option{
-    "Login":       {},                                    // Public
-    "GetProfile":  {aprot.WithAuth()},                    // Requires auth
-    "DeleteUser":  {aprot.WithAuth(), aprot.WithTags("admin")},
-    "RateLimit":   {aprot.WithCustom("requests_per_min", 100)},
-})
+// Split handlers by their middleware requirements
+registry.Register(&PublicHandlers{})                    // No middleware
+registry.Register(&UserHandlers{}, authMiddleware)      // With auth
+registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
 ```
 
-Access options in middleware:
+Both server-level and handler-level middleware can be used together:
+- **Server middleware** applies to all handlers (e.g., logging)
+- **Handler middleware** applies only to that handler group (e.g., auth)
 
 ```go
-func AuthMiddleware() aprot.Middleware {
+// Server-level middleware (applies to all handlers)
+server.Use(LoggingMiddleware())
+
+// Handler-level middleware (applies only to protected handlers)
+registry.Register(&ProtectedHandlers{}, AuthMiddleware(tokenStore))
+```
+
+Execution order: server middleware (outer) → handler middleware (inner) → actual handler
+
+```go
+func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
     return func(next aprot.Handler) aprot.Handler {
         return func(ctx context.Context, req *aprot.Request) (any, error) {
-            info := aprot.HandlerInfoFromContext(ctx)
-            if info != nil && info.Options.RequireAuth {
-                // Validate auth token...
-                if !valid {
-                    return nil, aprot.ErrUnauthorized("invalid token")
-                }
+            // Extract and validate token
+            // ...
+            if !valid {
+                return nil, aprot.ErrUnauthorized("invalid token")
             }
             return next(ctx, req)
         }

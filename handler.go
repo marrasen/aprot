@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -21,41 +22,6 @@ type HandlerInfo struct {
 	StructName   string
 	method       reflect.Value
 	handler      reflect.Value
-	Options      HandlerOptions
-}
-
-// HandlerOptions contains per-method metadata for middleware.
-type HandlerOptions struct {
-	RequireAuth bool
-	Tags        []string
-	Custom      map[string]any
-}
-
-// Option is a function that modifies HandlerOptions.
-type Option func(*HandlerOptions)
-
-// WithAuth marks a handler as requiring authentication.
-func WithAuth() Option {
-	return func(o *HandlerOptions) {
-		o.RequireAuth = true
-	}
-}
-
-// WithTags adds tags to a handler for filtering/categorization.
-func WithTags(tags ...string) Option {
-	return func(o *HandlerOptions) {
-		o.Tags = append(o.Tags, tags...)
-	}
-}
-
-// WithCustom adds a custom key-value pair to handler options.
-func WithCustom(key string, value any) Option {
-	return func(o *HandlerOptions) {
-		if o.Custom == nil {
-			o.Custom = make(map[string]any)
-		}
-		o.Custom[key] = value
-	}
 }
 
 // PushEventInfo describes a push event for code generation.
@@ -82,6 +48,7 @@ type HandlerGroup struct {
 	Name       string
 	Handlers   map[string]*HandlerInfo
 	PushEvents []PushEventInfo
+	middleware []Middleware
 }
 
 // Registry holds registered handlers and their methods.
@@ -107,10 +74,17 @@ func NewRegistry() *Registry {
 }
 
 // Register registers all valid handler methods from the given struct.
+// Optional middleware will be applied to all methods in this handler.
 // A valid handler method has the signature:
 //
 //	func(ctx context.Context, req *T) (*U, error)
-func (r *Registry) Register(handler any) error {
+//
+// Example:
+//
+//	registry.Register(&PublicHandlers{})                    // No middleware
+//	registry.Register(&UserHandlers{}, authMiddleware)      // With auth
+//	registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
+func (r *Registry) Register(handler any, middleware ...Middleware) error {
 	v := reflect.ValueOf(handler)
 	t := v.Type()
 
@@ -120,47 +94,14 @@ func (r *Registry) Register(handler any) error {
 
 	structName := t.Elem().Name()
 	group := &HandlerGroup{
-		Name:     structName,
-		Handlers: make(map[string]*HandlerInfo),
+		Name:       structName,
+		Handlers:   make(map[string]*HandlerInfo),
+		middleware: middleware,
 	}
 
 	for i := 0; i < t.NumMethod(); i++ {
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
-			r.handlers[info.Name] = info
-			group.Handlers[info.Name] = info
-		}
-	}
-
-	r.groups[structName] = group
-	return nil
-}
-
-// RegisterWithOptions registers all valid handler methods with per-method options.
-// methodOptions maps method names to their options.
-func (r *Registry) RegisterWithOptions(handler any, methodOptions map[string][]Option) error {
-	v := reflect.ValueOf(handler)
-	t := v.Type()
-
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("handler must be a pointer to a struct")
-	}
-
-	structName := t.Elem().Name()
-	group := &HandlerGroup{
-		Name:     structName,
-		Handlers: make(map[string]*HandlerInfo),
-	}
-
-	for i := 0; i < t.NumMethod(); i++ {
-		method := t.Method(i)
-		if info := validateMethod(method, v, structName); info != nil {
-			// Apply options if provided for this method
-			if opts, ok := methodOptions[info.Name]; ok {
-				for _, opt := range opts {
-					opt(&info.Options)
-				}
-			}
 			r.handlers[info.Name] = info
 			group.Handlers[info.Name] = info
 		}
@@ -171,13 +112,20 @@ func (r *Registry) RegisterWithOptions(handler any, methodOptions map[string][]O
 }
 
 // RegisterPushEvent registers a push event type for code generation.
-// The event will be associated with the most recently registered handler struct,
-// or can be associated with a specific struct by calling this after Register.
-func (r *Registry) RegisterPushEvent(name string, dataType any) {
+// The event name is derived from the type name (e.g., UserCreatedEvent → "UserCreated").
+// The event will be associated with the most recently registered handler struct.
+//
+// Example:
+//
+//	registry.RegisterPushEvent(UserCreatedEvent{})
+func (r *Registry) RegisterPushEvent(dataType any) {
 	t := reflect.TypeOf(dataType)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
+
+	// Derive event name from type name, stripping "Event" suffix
+	eventName := strings.TrimSuffix(t.Name(), "Event")
 
 	// Find the last registered group to associate with
 	var structName string
@@ -186,7 +134,7 @@ func (r *Registry) RegisterPushEvent(name string, dataType any) {
 	}
 
 	event := PushEventInfo{
-		Name:       name,
+		Name:       eventName,
 		DataType:   t,
 		StructName: structName,
 	}
@@ -198,16 +146,30 @@ func (r *Registry) RegisterPushEvent(name string, dataType any) {
 	}
 }
 
-// RegisterPushEventFor registers a push event associated with a specific handler struct.
-func (r *Registry) RegisterPushEventFor(structName, eventName string, dataType any) {
-	t := reflect.TypeOf(dataType)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
+// RegisterPushEventFor registers a push event associated with a specific handler.
+// The event name is derived from the type name (e.g., UserCreatedEvent → "UserCreated").
+//
+// Example:
+//
+//	registry.RegisterPushEventFor(publicHandlers, UserCreatedEvent{})
+func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
+	// Get struct name from handler
+	ht := reflect.TypeOf(handler)
+	if ht.Kind() == reflect.Ptr {
+		ht = ht.Elem()
 	}
+	structName := ht.Name()
+
+	// Get event type and derive name
+	dt := reflect.TypeOf(dataType)
+	if dt.Kind() == reflect.Ptr {
+		dt = dt.Elem()
+	}
+	eventName := strings.TrimSuffix(dt.Name(), "Event")
 
 	event := PushEventInfo{
 		Name:       eventName,
-		DataType:   t,
+		DataType:   dt,
 		StructName: structName,
 	}
 	r.pushEvents = append(r.pushEvents, event)
@@ -278,6 +240,19 @@ func (r *Registry) LookupError(err error) (int, bool) {
 func (r *Registry) Get(method string) (*HandlerInfo, bool) {
 	info, ok := r.handlers[method]
 	return info, ok
+}
+
+// GetMiddleware returns the middleware for a specific handler method.
+func (r *Registry) GetMiddleware(method string) []Middleware {
+	info, ok := r.handlers[method]
+	if !ok {
+		return nil
+	}
+	group, ok := r.groups[info.StructName]
+	if !ok {
+		return nil
+	}
+	return group.middleware
 }
 
 // Methods returns all registered method names.

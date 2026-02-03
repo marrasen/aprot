@@ -1,8 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
+import { ApiClient, ApiClientProvider, useConnection } from './api/client'
 import {
-  ApiClient,
-  ApiClientProvider,
-  useConnection,
   useListUsers,
   useCreateUserMutation,
   useProcessBatchMutation,
@@ -233,7 +231,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    client.connect().then(() => setConnected(true)).catch((err) => setError(err.message))
+    client.connect().then(() => setConnected(true)).catch((err: Error) => setError(err.message))
   }, [])
 
   if (error) {

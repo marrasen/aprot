@@ -14,12 +14,12 @@ type UserUpdatedEvent struct {
 	Email string `json:"email"`
 }
 
-type SystemNotification struct {
+type SystemNotificationEvent struct {
 	Message string `json:"message"`
 	Level   string `json:"level"` // info, warning, error
 }
 
-type DirectMessage struct {
+type DirectMessageEvent struct {
 	FromUserID string `json:"from_user_id"`
 	FromUser   string `json:"from_user"`
 	Message    string `json:"message"`

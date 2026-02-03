@@ -53,14 +53,23 @@ func (s *Server) Use(mw ...Middleware) {
 }
 
 // buildHandler creates the middleware chain for a handler.
+// The chain is: server middleware -> handler middleware -> actual handler
+// Server middleware is outermost (executed first on request, last on response).
 func (s *Server) buildHandler(info *HandlerInfo) Handler {
 	// The final handler that calls the actual method
 	final := func(ctx context.Context, req *Request) (any, error) {
 		return info.Call(ctx, req.Params)
 	}
 
-	// Build chain in reverse order so middleware[0] is outermost
 	handler := final
+
+	// Apply handler-specific middleware (inner layer)
+	handlerMW := s.registry.GetMiddleware(info.Name)
+	for i := len(handlerMW) - 1; i >= 0; i-- {
+		handler = handlerMW[i](handler)
+	}
+
+	// Apply server middleware (outer layer)
 	for i := len(s.middleware) - 1; i >= 0; i-- {
 		handler = s.middleware[i](handler)
 	}

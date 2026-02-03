@@ -133,7 +133,7 @@ func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (
 }
 
 // SendNotification sends a notification to the requesting client.
-func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotification) (*SystemNotification, error) {
+func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
 	conn := aprot.Connection(ctx)
 	if conn != nil {
 		conn.Push("SystemNotification", req)

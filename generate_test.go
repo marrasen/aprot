@@ -80,7 +80,7 @@ func TestRegistry(t *testing.T) {
 func TestRegistryGroups(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	groups := registry.Groups()
 	if len(groups) != 1 {
@@ -124,7 +124,7 @@ func TestHandlerCall(t *testing.T) {
 func TestGenerate(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 
@@ -177,7 +177,7 @@ func TestGenerate(t *testing.T) {
 func TestGenerateMultipleFiles(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 
@@ -233,7 +233,7 @@ func mapKeys(m map[string]string) []string {
 func TestGenerateReact(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
 		Mode: OutputReact,
@@ -282,7 +282,7 @@ func TestGenerateReact(t *testing.T) {
 func TestGenerateOutput(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 

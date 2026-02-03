@@ -75,16 +75,10 @@ func LoggingMiddleware() aprot.Middleware {
 
 // AuthMiddleware validates tokens and sets up user context.
 // It also associates the user with the connection for targeted push.
+// Apply this middleware only to handlers that require authentication.
 func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
-			info := aprot.HandlerInfoFromContext(ctx)
-
-			// Skip auth for methods that don't require it
-			if info == nil || !info.Options.RequireAuth {
-				return next(ctx, req)
-			}
-
 			// Extract token from params
 			var params struct {
 				AuthToken string `json:"auth_token"`

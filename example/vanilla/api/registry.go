@@ -3,30 +3,24 @@ package api
 import "github.com/marrasen/aprot"
 
 // NewRegistry creates and configures the API registry with all handlers and push events.
-// The handlers parameter is used to set up method options.
-func NewRegistry(handlers *Handlers) *aprot.Registry {
+// Middleware is applied per-handler group for safety - you can't accidentally forget
+// to protect an endpoint.
+func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Registry {
 	registry := aprot.NewRegistry()
 
-	// Register handlers with per-method options
-	registry.RegisterWithOptions(handlers, map[string][]aprot.Option{
-		// Public methods (no auth required)
-		"CreateUser":       {},
-		"GetUser":          {},
-		"ListUsers":        {},
-		"ProcessBatch":     {},
-		"SendNotification": {},
-		"Login":            {},
+	// Register public handlers (no middleware)
+	publicHandlers := NewPublicHandlers(state)
+	registry.Register(publicHandlers)
 
-		// Protected methods (require authentication)
-		"GetProfile":  {aprot.WithAuth()},
-		"SendMessage": {aprot.WithAuth(), aprot.WithTags("messaging")},
-	})
+	// Register protected handlers (with auth middleware)
+	protectedHandlers := NewProtectedHandlers(state)
+	registry.Register(protectedHandlers, authMiddleware)
 
 	// Register push events
-	registry.RegisterPushEvent("UserCreated", UserCreatedEvent{})
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
-	registry.RegisterPushEvent("SystemNotification", SystemNotification{})
-	registry.RegisterPushEvent("DirectMessage", DirectMessage{})
+	registry.RegisterPushEventFor(publicHandlers, UserCreatedEvent{})
+	registry.RegisterPushEventFor(publicHandlers, UserUpdatedEvent{})
+	registry.RegisterPushEventFor(publicHandlers, SystemNotificationEvent{})
+	registry.RegisterPushEventFor(protectedHandlers, DirectMessageEvent{})
 
 	return registry
 }

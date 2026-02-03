@@ -108,7 +108,7 @@ func Example_generate() {
 	registry.Register(&MyHandlers{})
 
 	// Register push events on the registry
-	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
 
 	// Create generator and generate TypeScript to stdout (or file)
 	gen := aprot.NewGenerator(registry)

@@ -11,10 +11,11 @@ import (
 )
 
 func main() {
-	// Create handlers and registry for code generation
+	// Create shared state and registry for code generation
 	tokenStore := api.NewTokenStore()
-	handlers := api.NewHandlers(tokenStore)
-	registry := api.NewRegistry(handlers)
+	state := api.NewSharedState(tokenStore)
+	authMiddleware := api.AuthMiddleware(tokenStore)
+	registry := api.NewRegistry(state, authMiddleware)
 
 	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 		OutputDir: "../../client/static/api",

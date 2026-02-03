@@ -14,7 +14,7 @@ type UserUpdatedEvent struct {
 	Email string `json:"email"`
 }
 
-type SystemNotification struct {
+type SystemNotificationEvent struct {
 	Message string `json:"message"`
 	Level   string `json:"level"` // info, warning, error
 }

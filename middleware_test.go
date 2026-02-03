@@ -41,10 +41,6 @@ type MWSecretResponse struct {
 	Secret string `json:"secret"`
 }
 
-func (h *MiddlewareTestHandler) GetSecret(ctx context.Context, req *MWSecretRequest) (*MWSecretResponse, error) {
-	return &MWSecretResponse{Secret: "classified"}, nil
-}
-
 type contextKeyType string
 
 const testUserKey contextKeyType = "test_user"
@@ -231,26 +227,37 @@ func TestMiddlewareRequestRejection(t *testing.T) {
 	}
 }
 
-func TestRequireAuthOption(t *testing.T) {
-	// Middleware that checks RequireAuth option
+// PublicTestHandler is a handler with no middleware
+type PublicTestHandler struct{}
+
+func (h *PublicTestHandler) Echo(ctx context.Context, req *MWEchoRequest) (*MWEchoResponse, error) {
+	userID := ""
+	if u := ctx.Value(testUserKey); u != nil {
+		userID = u.(string)
+	}
+	return &MWEchoResponse{Message: req.Message, UserID: userID}, nil
+}
+
+// ProtectedTestHandler is a handler that requires auth middleware
+type ProtectedTestHandler struct{}
+
+func (h *ProtectedTestHandler) GetSecret(ctx context.Context, req *MWSecretRequest) (*MWSecretResponse, error) {
+	return &MWSecretResponse{Secret: "classified"}, nil
+}
+
+func TestPerHandlerMiddleware(t *testing.T) {
+	// Auth middleware that always rejects (for testing)
 	authMiddleware := func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) (any, error) {
-			info := HandlerInfoFromContext(ctx)
-			if info != nil && info.Options.RequireAuth {
-				return nil, ErrUnauthorized("authentication required")
-			}
-			return next(ctx, req)
+			return nil, ErrUnauthorized("authentication required")
 		}
 	}
 
 	registry := NewRegistry()
-	registry.RegisterWithOptions(&MiddlewareTestHandler{}, map[string][]Option{
-		"Echo":      {},             // No auth required
-		"GetSecret": {WithAuth()},   // Auth required
-	})
+	registry.Register(&PublicTestHandler{})                   // No middleware
+	registry.Register(&ProtectedTestHandler{}, authMiddleware) // With auth
 
 	server := NewServer(registry)
-	server.Use(authMiddleware)
 
 	ts := httptest.NewServer(server)
 	defer ts.Close()
@@ -262,7 +269,7 @@ func TestRequireAuthOption(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Test Echo (no auth required) - should succeed
+	// Test Echo (public handler, no auth required) - should succeed
 	echoReq := map[string]any{
 		"type":   "request",
 		"id":     "1",
@@ -282,7 +289,7 @@ func TestRequireAuthOption(t *testing.T) {
 		t.Errorf("Echo: expected response type, got %v", echoResp["type"])
 	}
 
-	// Test GetSecret (auth required) - should fail
+	// Test GetSecret (protected handler, auth required) - should fail
 	secretReq := map[string]any{
 		"type":   "request",
 		"id":     "2",
@@ -306,45 +313,102 @@ func TestRequireAuthOption(t *testing.T) {
 	}
 }
 
-func TestHandlerOptionsWithTags(t *testing.T) {
+func TestGetMiddleware(t *testing.T) {
+	testMiddleware := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			return next(ctx, req)
+		}
+	}
+
 	registry := NewRegistry()
-	registry.RegisterWithOptions(&MiddlewareTestHandler{}, map[string][]Option{
-		"GetSecret": {WithAuth(), WithTags("admin", "sensitive")},
-	})
+	registry.Register(&PublicTestHandler{})                   // No middleware
+	registry.Register(&ProtectedTestHandler{}, testMiddleware) // With middleware
 
-	info, ok := registry.Get("GetSecret")
-	if !ok {
-		t.Fatal("GetSecret handler not found")
+	// Check middleware retrieval
+	publicMW := registry.GetMiddleware("Echo")
+	if len(publicMW) != 0 {
+		t.Errorf("expected no middleware for Echo, got %d", len(publicMW))
 	}
 
-	if !info.Options.RequireAuth {
-		t.Error("expected RequireAuth=true")
-	}
-
-	if len(info.Options.Tags) != 2 {
-		t.Fatalf("expected 2 tags, got %d", len(info.Options.Tags))
-	}
-	if info.Options.Tags[0] != "admin" || info.Options.Tags[1] != "sensitive" {
-		t.Errorf("unexpected tags: %v", info.Options.Tags)
+	protectedMW := registry.GetMiddleware("GetSecret")
+	if len(protectedMW) != 1 {
+		t.Errorf("expected 1 middleware for GetSecret, got %d", len(protectedMW))
 	}
 }
 
-func TestHandlerOptionsWithCustom(t *testing.T) {
+func TestServerAndHandlerMiddlewareCombined(t *testing.T) {
+	var order []string
+	var mu sync.Mutex
+
+	serverMiddleware := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			mu.Lock()
+			order = append(order, "server-before")
+			mu.Unlock()
+			result, err := next(ctx, req)
+			mu.Lock()
+			order = append(order, "server-after")
+			mu.Unlock()
+			return result, err
+		}
+	}
+
+	handlerMiddleware := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			mu.Lock()
+			order = append(order, "handler-before")
+			mu.Unlock()
+			result, err := next(ctx, req)
+			mu.Lock()
+			order = append(order, "handler-after")
+			mu.Unlock()
+			return result, err
+		}
+	}
+
 	registry := NewRegistry()
-	registry.RegisterWithOptions(&MiddlewareTestHandler{}, map[string][]Option{
-		"Echo": {WithCustom("rate_limit", 100), WithCustom("timeout", "30s")},
-	})
+	registry.Register(&ProtectedTestHandler{}, handlerMiddleware)
 
-	info, ok := registry.Get("Echo")
-	if !ok {
-		t.Fatal("Echo handler not found")
+	server := NewServer(registry)
+	server.Use(serverMiddleware)
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	reqMsg := map[string]any{
+		"type":   "request",
+		"id":     "1",
+		"method": "GetSecret",
+		"params": map[string]any{},
+	}
+	if err := ws.WriteJSON(reqMsg); err != nil {
+		t.Fatalf("write error: %v", err)
 	}
 
-	if info.Options.Custom["rate_limit"] != 100 {
-		t.Errorf("expected rate_limit=100, got %v", info.Options.Custom["rate_limit"])
+	var resp map[string]any
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("read error: %v", err)
 	}
-	if info.Options.Custom["timeout"] != "30s" {
-		t.Errorf("expected timeout=30s, got %v", info.Options.Custom["timeout"])
+
+	// Verify execution order: server middleware is outer, handler middleware is inner
+	mu.Lock()
+	defer mu.Unlock()
+
+	expected := []string{"server-before", "handler-before", "handler-after", "server-after"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d middleware calls, got %d: %v", len(expected), len(order), order)
+	}
+	for i, exp := range expected {
+		if order[i] != exp {
+			t.Errorf("expected order[%d]=%s, got %s", i, exp, order[i])
+		}
 	}
 }
 

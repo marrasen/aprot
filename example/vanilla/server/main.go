@@ -15,23 +15,27 @@ func main() {
 	// Create token store for authentication
 	tokenStore := api.NewTokenStore()
 
-	// Create handlers with token store
-	handlers := api.NewHandlers(tokenStore)
+	// Create shared state for handlers
+	state := api.NewSharedState(tokenStore)
+
+	// Create auth middleware (applied only to protected handlers)
+	authMiddleware := api.AuthMiddleware(tokenStore)
 
 	// Create registry with handlers
-	registry := api.NewRegistry(handlers)
+	// - PublicHandlers: no middleware
+	// - ProtectedHandlers: auth middleware
+	registry := api.NewRegistry(state, authMiddleware)
 
 	// Create server
 	server := aprot.NewServer(registry)
 
-	// Set up handlers with broadcaster and user pusher
-	handlers.SetBroadcaster(server)
-	handlers.SetUserPusher(server)
+	// Set up shared state with broadcaster and user pusher
+	state.Broadcaster = server
+	state.UserPusher = server
 
-	// Add middleware (order matters: logging first, then auth)
+	// Add server-level middleware (applies to all handlers)
 	server.Use(
 		api.LoggingMiddleware(),
-		api.AuthMiddleware(tokenStore),
 	)
 
 	// Serve static files
@@ -49,7 +53,7 @@ func main() {
 	fmt.Printf("Server starting on http://localhost%s\n", addr)
 	fmt.Printf("WebSocket endpoint: ws://localhost%s/ws\n", addr)
 	fmt.Println("\nOpen http://localhost:8080 in your browser")
-	fmt.Println("\nMiddleware enabled: Logging, Authentication")
+	fmt.Println("\nMiddleware: Logging (all), Authentication (protected handlers)")
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)
