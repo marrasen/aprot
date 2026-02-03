@@ -178,7 +178,12 @@ package main
 ### Vanilla TypeScript
 
 ```typescript
-const client = new ApiClient('ws://localhost:8080/ws');
+import { ApiClient, getWebSocketUrl } from './api/client';
+
+// getWebSocketUrl() automatically uses the current page's host
+// - http://localhost:8080 → ws://localhost:8080/ws
+// - https://myapp.com → wss://myapp.com/ws
+const client = new ApiClient(getWebSocketUrl());
 await client.connect();
 
 const user = await client.createUser({ name: 'Alice', email: 'alice@example.com' });
@@ -191,7 +196,9 @@ client.onUserCreated((event) => {
 ### React Hooks
 
 ```tsx
-import { ApiClientProvider, useListUsers, useCreateUserMutation, useUserCreated } from './api/handlers';
+import { ApiClient, ApiClientProvider, getWebSocketUrl, useListUsers, useCreateUserMutation, useUserCreated } from './api/client';
+
+const client = new ApiClient(getWebSocketUrl());
 
 function App() {
     return (
