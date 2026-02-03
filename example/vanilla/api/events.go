@@ -18,3 +18,9 @@ type SystemNotification struct {
 	Message string `json:"message"`
 	Level   string `json:"level"` // info, warning, error
 }
+
+type DirectMessage struct {
+	FromUserID string `json:"from_user_id"`
+	FromUser   string `json:"from_user"`
+	Message    string `json:"message"`
+}

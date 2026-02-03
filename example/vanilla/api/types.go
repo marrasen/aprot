@@ -45,3 +45,40 @@ type ProcessBatchResponse struct {
 	Processed int      `json:"processed"`
 	Results   []string `json:"results"`
 }
+
+// Authentication types
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token    string `json:"token"`
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+}
+
+type GetProfileRequest struct {
+	// Auth token is validated by middleware
+}
+
+type GetProfileResponse struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+}
+
+type SendMessageRequest struct {
+	ToUserID string `json:"to_user_id"`
+	Message  string `json:"message"`
+}
+
+type SendMessageResponse struct {
+	Sent bool `json:"sent"`
+}
+
+// AuthUser represents an authenticated user in the context.
+type AuthUser struct {
+	ID       string
+	Username string
+}

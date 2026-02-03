@@ -11,7 +11,10 @@ import (
 )
 
 func main() {
-	registry := api.NewRegistry()
+	// Create handlers and registry for code generation
+	tokenStore := api.NewTokenStore()
+	handlers := api.NewHandlers(tokenStore)
+	registry := api.NewRegistry(handlers)
 
 	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 		OutputDir: "../../client/static/api",

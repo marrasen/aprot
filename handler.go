@@ -20,6 +20,41 @@ type HandlerInfo struct {
 	StructName   string
 	method       reflect.Value
 	handler      reflect.Value
+	Options      HandlerOptions
+}
+
+// HandlerOptions contains per-method metadata for middleware.
+type HandlerOptions struct {
+	RequireAuth bool
+	Tags        []string
+	Custom      map[string]any
+}
+
+// Option is a function that modifies HandlerOptions.
+type Option func(*HandlerOptions)
+
+// WithAuth marks a handler as requiring authentication.
+func WithAuth() Option {
+	return func(o *HandlerOptions) {
+		o.RequireAuth = true
+	}
+}
+
+// WithTags adds tags to a handler for filtering/categorization.
+func WithTags(tags ...string) Option {
+	return func(o *HandlerOptions) {
+		o.Tags = append(o.Tags, tags...)
+	}
+}
+
+// WithCustom adds a custom key-value pair to handler options.
+func WithCustom(key string, value any) Option {
+	return func(o *HandlerOptions) {
+		if o.Custom == nil {
+			o.Custom = make(map[string]any)
+		}
+		o.Custom[key] = value
+	}
 }
 
 // PushEventInfo describes a push event for code generation.
@@ -73,6 +108,40 @@ func (r *Registry) Register(handler any) error {
 	for i := 0; i < t.NumMethod(); i++ {
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
+			r.handlers[info.Name] = info
+			group.Handlers[info.Name] = info
+		}
+	}
+
+	r.groups[structName] = group
+	return nil
+}
+
+// RegisterWithOptions registers all valid handler methods with per-method options.
+// methodOptions maps method names to their options.
+func (r *Registry) RegisterWithOptions(handler any, methodOptions map[string][]Option) error {
+	v := reflect.ValueOf(handler)
+	t := v.Type()
+
+	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("handler must be a pointer to a struct")
+	}
+
+	structName := t.Elem().Name()
+	group := &HandlerGroup{
+		Name:     structName,
+		Handlers: make(map[string]*HandlerInfo),
+	}
+
+	for i := 0; i < t.NumMethod(); i++ {
+		method := t.Method(i)
+		if info := validateMethod(method, v, structName); info != nil {
+			// Apply options if provided for this method
+			if opts, ok := methodOptions[info.Name]; ok {
+				for _, opt := range opts {
+					opt(&info.Options)
+				}
+			}
 			r.handlers[info.Name] = info
 			group.Handlers[info.Name] = info
 		}

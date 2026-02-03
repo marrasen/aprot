@@ -12,18 +12,27 @@ import (
 )
 
 func main() {
-	// Create registry from shared API package
-	registry := api.NewRegistry()
+	// Create token store for authentication
+	tokenStore := api.NewTokenStore()
+
+	// Create handlers with token store
+	handlers := api.NewHandlers(tokenStore)
+
+	// Create registry with handlers
+	registry := api.NewRegistry(handlers)
 
 	// Create server
 	server := aprot.NewServer(registry)
 
-	// Create handlers with broadcaster for push events
-	handlers := api.NewHandlers()
+	// Set up handlers with broadcaster and user pusher
 	handlers.SetBroadcaster(server)
+	handlers.SetUserPusher(server)
 
-	// Re-register with the actual handler instance
-	registry.Register(handlers)
+	// Add middleware (order matters: logging first, then auth)
+	server.Use(
+		api.LoggingMiddleware(),
+		api.AuthMiddleware(tokenStore),
+	)
 
 	// Serve static files
 	staticDir := "../client/static"
@@ -40,6 +49,7 @@ func main() {
 	fmt.Printf("Server starting on http://localhost%s\n", addr)
 	fmt.Printf("WebSocket endpoint: ws://localhost%s/ws\n", addr)
 	fmt.Println("\nOpen http://localhost:8080 in your browser")
+	fmt.Println("\nMiddleware enabled: Logging, Authentication")
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)

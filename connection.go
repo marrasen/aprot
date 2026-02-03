@@ -16,6 +16,41 @@ type Conn struct {
 	requests map[string]context.CancelFunc
 	mu       sync.Mutex
 	closed   bool
+	userID   string // associated user ID (set by middleware)
+}
+
+// SetUserID associates this connection with a user ID.
+// Call this from auth middleware after successful authentication.
+// A user can have multiple connections (multiple tabs/devices).
+func (c *Conn) SetUserID(userID string) {
+	c.mu.Lock()
+	oldUserID := c.userID
+	c.userID = userID
+	c.mu.Unlock()
+
+	// Disassociate old user if changing
+	if oldUserID != "" && oldUserID != userID {
+		c.server.mu.Lock()
+		if conns, ok := c.server.userConns[oldUserID]; ok {
+			delete(conns, c)
+			if len(conns) == 0 {
+				delete(c.server.userConns, oldUserID)
+			}
+		}
+		c.server.mu.Unlock()
+	}
+
+	// Associate new user
+	if userID != "" {
+		c.server.associateUser(c, userID)
+	}
+}
+
+// UserID returns the associated user ID, or empty string if not set.
+func (c *Conn) UserID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.userID
 }
 
 func newConn(ws *websocket.Conn, server *Server) *Conn {
@@ -166,7 +201,20 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
 
-	result, err := info.Call(ctx, msg.Params)
+	// Add handler info to context for middleware
+	ctx = withHandlerInfo(ctx, info)
+
+	// Create request object for middleware
+	req := &Request{
+		ID:     msg.ID,
+		Method: msg.Method,
+		Params: msg.Params,
+	}
+	ctx = withRequest(ctx, req)
+
+	// Build and execute middleware chain
+	handler := c.server.buildHandler(info)
+	result, err := handler(ctx, req)
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {

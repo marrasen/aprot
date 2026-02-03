@@ -7,6 +7,8 @@ type contextKey int
 const (
 	progressKey contextKey = iota
 	connectionKey
+	handlerInfoKey
+	requestKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -35,4 +37,32 @@ func withProgress(ctx context.Context, p ProgressReporter) context.Context {
 // withConnection returns a context with the given connection.
 func withConnection(ctx context.Context, c *Conn) context.Context {
 	return context.WithValue(ctx, connectionKey, c)
+}
+
+// HandlerInfoFromContext returns the HandlerInfo from the context.
+// Returns nil if not present.
+func HandlerInfoFromContext(ctx context.Context) *HandlerInfo {
+	if info, ok := ctx.Value(handlerInfoKey).(*HandlerInfo); ok {
+		return info
+	}
+	return nil
+}
+
+// RequestFromContext returns the Request from the context.
+// Returns nil if not present.
+func RequestFromContext(ctx context.Context) *Request {
+	if req, ok := ctx.Value(requestKey).(*Request); ok {
+		return req
+	}
+	return nil
+}
+
+// withHandlerInfo returns a context with the given handler info.
+func withHandlerInfo(ctx context.Context, info *HandlerInfo) context.Context {
+	return context.WithValue(ctx, handlerInfoKey, info)
+}
+
+// withRequest returns a context with the given request.
+func withRequest(ctx context.Context, req *Request) context.Context {
+	return context.WithValue(ctx, requestKey, req)
 }

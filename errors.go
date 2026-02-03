@@ -10,6 +10,8 @@ const (
 	CodeInvalidParams  = -32602
 	CodeInternalError  = -32603
 	CodeCanceled       = -32800
+	CodeUnauthorized   = -32001
+	CodeForbidden      = -32003
 )
 
 // ProtocolError represents an error that can be sent to the client.
@@ -58,4 +60,14 @@ func ErrInternal(cause error) *ProtocolError {
 // ErrCanceled returns a canceled error.
 func ErrCanceled() *ProtocolError {
 	return NewError(CodeCanceled, "request canceled")
+}
+
+// ErrUnauthorized returns an unauthorized error.
+func ErrUnauthorized(message string) *ProtocolError {
+	return NewError(CodeUnauthorized, message)
+}
+
+// ErrForbidden returns a forbidden error.
+func ErrForbidden(message string) *ProtocolError {
+	return NewError(CodeForbidden, message)
 }
