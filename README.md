@@ -82,6 +82,8 @@ type UserCreatedEvent struct {
 
 ### 3. Implement handlers (api/handlers.go)
 
+Split handlers by their middleware requirements:
+
 ```go
 package api
 
@@ -91,27 +93,29 @@ import (
     "github.com/marrasen/aprot"
 )
 
-type Handlers struct {
-    broadcaster aprot.Broadcaster
+// Shared state between handler groups
+type SharedState struct {
+    Broadcaster aprot.Broadcaster
 }
 
-func NewHandlers() *Handlers {
-    return &Handlers{}
+// PublicHandlers - no authentication required
+type PublicHandlers struct {
+    state *SharedState
 }
 
-func (h *Handlers) SetBroadcaster(b aprot.Broadcaster) {
-    h.broadcaster = b
-}
-
-func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
+func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
     // Implementation...
-    h.broadcaster.Broadcast("UserCreated", &UserCreatedEvent{...})
+    h.state.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{...})
     return &CreateUserResponse{...}, nil
 }
 
-func (h *Handlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) (*DeleteUserResponse, error) {
-    // This method requires auth (see registry.go)
-    // Access connection if needed:
+// ProtectedHandlers - requires authentication middleware
+type ProtectedHandlers struct {
+    state *SharedState
+}
+
+func (h *ProtectedHandlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) (*DeleteUserResponse, error) {
+    // Auth middleware has already validated the user
     conn := aprot.Connection(ctx)
     userID := conn.UserID() // Set by auth middleware
     // ...
@@ -153,17 +157,20 @@ import (
 )
 
 func main() {
-    handlers := api.NewHandlers()
-    registry := api.NewRegistry(handlers)
+    // Create shared state and handlers
+    state := &api.SharedState{}
+    publicHandlers := &api.PublicHandlers{State: state}
+    protectedHandlers := &api.ProtectedHandlers{State: state}
+
+    // Create registry with per-handler middleware
+    authMiddleware := api.AuthMiddleware()
+    registry := api.NewRegistry(publicHandlers, protectedHandlers, authMiddleware)
+
     server := aprot.NewServer(registry)
+    state.Broadcaster = server
 
-    handlers.SetBroadcaster(server)
-
-    // Add middleware (optional)
-    server.Use(
-        api.LoggingMiddleware(),
-        api.AuthMiddleware(),
-    )
+    // Server-level middleware (applies to all handlers)
+    server.Use(api.LoggingMiddleware())
 
     http.Handle("/ws", server)
     http.ListenAndServe(":8080", nil)
@@ -183,7 +190,15 @@ import (
 )
 
 func main() {
-    gen := aprot.NewGenerator(api.NewRegistry()).WithOptions(aprot.GeneratorOptions{
+    // Create minimal instances for code generation (no actual state needed)
+    state := &api.SharedState{}
+    registry := api.NewRegistry(
+        &api.PublicHandlers{State: state},
+        &api.ProtectedHandlers{State: state},
+        api.AuthMiddleware(),
+    )
+
+    gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
         OutputDir: "../../client/src/api",
         Mode:      aprot.OutputReact, // or aprot.OutputVanilla
     })
@@ -500,7 +515,8 @@ client.onUserCreated((event) => {
 ### React Hooks
 
 ```tsx
-import { ApiClient, ApiClientProvider, getWebSocketUrl, useListUsers, useCreateUserMutation, useUserCreated } from './api/client';
+import { ApiClient, ApiClientProvider, getWebSocketUrl } from './api/client';
+import { useListUsers, useCreateUserMutation, useUserCreated } from './api/handlers';
 
 const client = new ApiClient(getWebSocketUrl());
 
