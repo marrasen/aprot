@@ -1,5 +1,7 @@
 # aprot
 
+**A**PI **P**rotocol for **R**eal-time **O**perations with **T**ypeScript
+
 A Go library for building type-safe WebSocket APIs with automatic TypeScript client generation.
 
 > **Warning**
