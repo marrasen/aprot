@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"os"
 
-	"aprot"
+	"github.com/marrasen/aprot"
 )
 
 // Request and response types

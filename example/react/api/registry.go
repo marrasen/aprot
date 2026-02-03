@@ -1,6 +1,6 @@
 package api
 
-import "aprot"
+import "github.com/marrasen/aprot"
 
 // NewRegistry creates and configures the API registry with all handlers and push events.
 func NewRegistry() *aprot.Registry {

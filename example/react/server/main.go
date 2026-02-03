@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"aprot"
-	"aprot/example/react/api"
+	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/example/react/api"
 )
 
 func main() {

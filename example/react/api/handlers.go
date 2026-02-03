@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"aprot"
+	"github.com/marrasen/aprot"
 )
 
 // Handlers implements the API methods.

@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"aprot"
-	"aprot/example/vanilla/api"
+	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/example/vanilla/api"
 )
 
 func main() {
