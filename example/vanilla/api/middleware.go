@@ -50,14 +50,22 @@ func LoggingMiddleware() aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
 			start := time.Now()
+			conn := aprot.Connection(ctx)
 
 			result, err := next(ctx, req)
 
 			duration := time.Since(start)
+			connID := uint64(0)
+			remoteAddr := "unknown"
+			if conn != nil {
+				connID = conn.ID()
+				remoteAddr = conn.RemoteAddr()
+			}
+
 			if err != nil {
-				log.Printf("[%s] %s - ERROR: %v (%s)", req.ID, req.Method, err, duration)
+				log.Printf("[conn:%d %s] %s %s - ERROR: %v (%s)", connID, remoteAddr, req.ID, req.Method, err, duration)
 			} else {
-				log.Printf("[%s] %s - OK (%s)", req.ID, req.Method, duration)
+				log.Printf("[conn:%d %s] %s %s - OK (%s)", connID, remoteAddr, req.ID, req.Method, duration)
 			}
 
 			return result, err

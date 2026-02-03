@@ -288,6 +288,44 @@ conn := aprot.Connection(ctx)              // WebSocket connection
 progress := aprot.Progress(ctx)            // Progress reporter
 ```
 
+### Connection Info
+
+Each connection has a unique ID and HTTP request info captured at connection time:
+
+```go
+conn := aprot.Connection(ctx)
+conn.ID()          // uint64 - unique connection ID (increments per connection)
+conn.RemoteAddr()  // string - client's remote address
+conn.UserID()      // string - associated user ID (set via SetUserID)
+
+// Full HTTP info from the upgrade request
+info := conn.Info()
+info.RemoteAddr    // "192.168.1.100:54321"
+info.Header        // http.Header - all request headers
+info.Cookies       // []*http.Cookie - parsed cookies
+info.URL           // "/ws?token=abc"
+info.Host          // "example.com"
+```
+
+Example logging middleware using connection info:
+
+```go
+func LoggingMiddleware() aprot.Middleware {
+    return func(next aprot.Handler) aprot.Handler {
+        return func(ctx context.Context, req *aprot.Request) (any, error) {
+            conn := aprot.Connection(ctx)
+            start := time.Now()
+
+            result, err := next(ctx, req)
+
+            log.Printf("[conn:%d %s] %s - %v",
+                conn.ID(), conn.RemoteAddr(), req.Method, time.Since(start))
+            return result, err
+        }
+    }
+}
+```
+
 ### Error Codes
 
 Built-in error helpers for authentication:

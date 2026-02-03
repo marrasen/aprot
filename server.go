@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -23,6 +24,7 @@ type Server struct {
 	register   chan *Conn
 	unregister chan *Conn
 	middleware []Middleware
+	nextConnID uint64 // atomic counter for connection IDs
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -116,7 +118,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := newConn(ws, s)
+	connID := atomic.AddUint64(&s.nextConnID, 1)
+	conn := newConn(ws, s, connID, r)
 	s.register <- conn
 
 	go conn.writePump()

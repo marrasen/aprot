@@ -2,11 +2,21 @@ package aprot
 
 import (
 	"context"
+	"net/http"
 	"sync"
 
 	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
+
+// ConnInfo contains HTTP request information captured at connection time.
+type ConnInfo struct {
+	RemoteAddr string
+	Header     http.Header
+	Cookies    []*http.Cookie
+	URL        string
+	Host       string
+}
 
 // Conn represents a single WebSocket connection.
 type Conn struct {
@@ -17,6 +27,8 @@ type Conn struct {
 	mu       sync.Mutex
 	closed   bool
 	userID   string // associated user ID (set by middleware)
+	id       uint64 // unique connection ID
+	info     ConnInfo
 }
 
 // SetUserID associates this connection with a user ID.
@@ -53,12 +65,35 @@ func (c *Conn) UserID() string {
 	return c.userID
 }
 
-func newConn(ws *websocket.Conn, server *Server) *Conn {
+// ID returns the unique connection ID.
+func (c *Conn) ID() uint64 {
+	return c.id
+}
+
+// Info returns HTTP request information captured at connection time.
+func (c *Conn) Info() ConnInfo {
+	return c.info
+}
+
+// RemoteAddr returns the remote address of the connection.
+func (c *Conn) RemoteAddr() string {
+	return c.info.RemoteAddr
+}
+
+func newConn(ws *websocket.Conn, server *Server, id uint64, r *http.Request) *Conn {
 	return &Conn{
 		ws:       ws,
 		server:   server,
 		send:     make(chan []byte, 256),
 		requests: make(map[string]context.CancelFunc),
+		id:       id,
+		info: ConnInfo{
+			RemoteAddr: r.RemoteAddr,
+			Header:     r.Header.Clone(),
+			Cookies:    r.Cookies(),
+			URL:        r.URL.String(),
+			Host:       r.Host,
+		},
 	}
 }
 
