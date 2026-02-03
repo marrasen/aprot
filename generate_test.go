@@ -70,6 +70,35 @@ func TestRegistry(t *testing.T) {
 	if info.ResponseType.Name() != "CreateUserResponse" {
 		t.Errorf("Expected CreateUserResponse, got %s", info.ResponseType.Name())
 	}
+
+	// Check struct name is recorded
+	if info.StructName != "TestHandlers" {
+		t.Errorf("Expected StructName TestHandlers, got %s", info.StructName)
+	}
+}
+
+func TestRegistryGroups(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+
+	groups := registry.Groups()
+	if len(groups) != 1 {
+		t.Errorf("Expected 1 group, got %d", len(groups))
+	}
+
+	group, ok := groups["TestHandlers"]
+	if !ok {
+		t.Fatal("TestHandlers group not found")
+	}
+
+	if len(group.Handlers) != 2 {
+		t.Errorf("Expected 2 handlers in group, got %d", len(group.Handlers))
+	}
+
+	if len(group.PushEvents) != 1 {
+		t.Errorf("Expected 1 push event in group, got %d", len(group.PushEvents))
+	}
 }
 
 func TestHandlerCall(t *testing.T) {
@@ -95,12 +124,12 @@ func TestHandlerCall(t *testing.T) {
 func TestGenerate(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
-	gen.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
 
 	var buf bytes.Buffer
-	err := gen.Generate(&buf)
+	err := gen.GenerateTo(&buf)
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
@@ -145,15 +174,90 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+func TestGenerateMultipleFiles(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+
+	gen := NewGenerator(registry)
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("Expected 1 file, got %d", len(files))
+	}
+
+	content, ok := files["test-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected test-handlers.ts, got files: %v", files)
+	}
+
+	if !strings.Contains(content, "export class ApiClient") {
+		t.Error("Missing ApiClient in generated file")
+	}
+}
+
+func TestGenerateReact(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Check for React imports
+	if !strings.Contains(output, "import { useState, useEffect") {
+		t.Error("Missing React imports")
+	}
+
+	// Check for hooks
+	if !strings.Contains(output, "export function useCreateUser") {
+		t.Error("Missing useCreateUser hook")
+	}
+	if !strings.Contains(output, "export function useGetUser") {
+		t.Error("Missing useGetUser hook")
+	}
+
+	// Check for mutation hooks
+	if !strings.Contains(output, "export function useCreateUserMutation") {
+		t.Error("Missing useCreateUserMutation hook")
+	}
+
+	// Check for push event hooks
+	if !strings.Contains(output, "export function useUserUpdated") {
+		t.Error("Missing useUserUpdated hook")
+	}
+
+	// Check for context
+	if !strings.Contains(output, "ApiClientProvider") {
+		t.Error("Missing ApiClientProvider")
+	}
+	if !strings.Contains(output, "useApiClient") {
+		t.Error("Missing useApiClient hook")
+	}
+}
+
 func TestGenerateOutput(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
-	gen.RegisterPushEvent("UserUpdated", UserUpdatedEvent{})
 
 	var buf bytes.Buffer
-	gen.Generate(&buf)
+	gen.GenerateTo(&buf)
 
 	// Print the generated code for manual inspection
 	t.Logf("Generated TypeScript:\n%s", buf.String())

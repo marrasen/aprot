@@ -25,10 +25,12 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
-# Node (for example client)
+# Node
 node_modules/
 dist/
 
-# Generated files (optional - you may want to commit these)
-# example/client/generated/
-example/static/app.js
+# Generated client files
+example/vanilla/client/static/api/
+example/vanilla/client/static/app.js
+example/react/client/src/api/
+example/react/client/dist/

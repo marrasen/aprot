@@ -7,6 +7,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Broadcaster is an interface for broadcasting push events to all clients.
+type Broadcaster interface {
+	Broadcast(event string, data any)
+}
+
 // Server manages WebSocket connections and handler dispatch.
 type Server struct {
 	registry   *Registry

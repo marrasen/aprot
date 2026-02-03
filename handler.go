@@ -15,19 +15,38 @@ type HandlerInfo struct {
 	Name         string
 	RequestType  reflect.Type
 	ResponseType reflect.Type
+	StructName   string
 	method       reflect.Value
 	handler      reflect.Value
 }
 
+// PushEventInfo describes a push event for code generation.
+type PushEventInfo struct {
+	Name       string
+	DataType   reflect.Type
+	StructName string
+}
+
+// HandlerGroup contains all methods from a single handler struct.
+type HandlerGroup struct {
+	Name       string
+	Handlers   map[string]*HandlerInfo
+	PushEvents []PushEventInfo
+}
+
 // Registry holds registered handlers and their methods.
 type Registry struct {
-	handlers map[string]*HandlerInfo
+	handlers   map[string]*HandlerInfo
+	groups     map[string]*HandlerGroup
+	pushEvents []PushEventInfo
 }
 
 // NewRegistry creates a new handler registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		handlers: make(map[string]*HandlerInfo),
+		handlers:   make(map[string]*HandlerInfo),
+		groups:     make(map[string]*HandlerGroup),
+		pushEvents: []PushEventInfo{},
 	}
 }
 
@@ -43,14 +62,79 @@ func (r *Registry) Register(handler any) error {
 		return fmt.Errorf("handler must be a pointer to a struct")
 	}
 
+	structName := t.Elem().Name()
+	group := &HandlerGroup{
+		Name:     structName,
+		Handlers: make(map[string]*HandlerInfo),
+	}
+
 	for i := 0; i < t.NumMethod(); i++ {
 		method := t.Method(i)
-		if info := validateMethod(method, v); info != nil {
+		if info := validateMethod(method, v, structName); info != nil {
 			r.handlers[info.Name] = info
+			group.Handlers[info.Name] = info
 		}
 	}
 
+	r.groups[structName] = group
 	return nil
+}
+
+// RegisterPushEvent registers a push event type for code generation.
+// The event will be associated with the most recently registered handler struct,
+// or can be associated with a specific struct by calling this after Register.
+func (r *Registry) RegisterPushEvent(name string, dataType any) {
+	t := reflect.TypeOf(dataType)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	// Find the last registered group to associate with
+	var structName string
+	for name := range r.groups {
+		structName = name
+	}
+
+	event := PushEventInfo{
+		Name:       name,
+		DataType:   t,
+		StructName: structName,
+	}
+	r.pushEvents = append(r.pushEvents, event)
+
+	// Also add to the group
+	if group, ok := r.groups[structName]; ok {
+		group.PushEvents = append(group.PushEvents, event)
+	}
+}
+
+// RegisterPushEventFor registers a push event associated with a specific handler struct.
+func (r *Registry) RegisterPushEventFor(structName, eventName string, dataType any) {
+	t := reflect.TypeOf(dataType)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+
+	event := PushEventInfo{
+		Name:       eventName,
+		DataType:   t,
+		StructName: structName,
+	}
+	r.pushEvents = append(r.pushEvents, event)
+
+	if group, ok := r.groups[structName]; ok {
+		group.PushEvents = append(group.PushEvents, event)
+	}
+}
+
+// Groups returns all registered handler groups.
+func (r *Registry) Groups() map[string]*HandlerGroup {
+	return r.groups
+}
+
+// PushEvents returns all registered push events.
+func (r *Registry) PushEvents() []PushEventInfo {
+	return r.pushEvents
 }
 
 // Get returns the handler info for the given method name.
@@ -74,7 +158,7 @@ func (r *Registry) Handlers() map[string]*HandlerInfo {
 }
 
 // validateMethod checks if a method matches the handler signature.
-func validateMethod(method reflect.Method, handlerValue reflect.Value) *HandlerInfo {
+func validateMethod(method reflect.Method, handlerValue reflect.Value, structName string) *HandlerInfo {
 	mt := method.Type
 
 	// Must have exactly 3 inputs: receiver, context.Context, *RequestType
@@ -113,6 +197,7 @@ func validateMethod(method reflect.Method, handlerValue reflect.Value) *HandlerI
 		Name:         method.Name,
 		RequestType:  reqType.Elem(),
 		ResponseType: respType.Elem(),
+		StructName:   structName,
 		method:       handlerValue.Method(method.Index),
 		handler:      handlerValue,
 	}

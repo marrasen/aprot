@@ -6,7 +6,9 @@
       "Bash(timeout:*)",
       "Bash(go generate:*)",
       "Bash(npm install)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go run:*)"
     ]
   }
 }

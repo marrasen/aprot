@@ -8,27 +8,28 @@ import (
 	"path/filepath"
 
 	"aprot"
+	"aprot/example/react/api"
 )
 
 func main() {
-	// Create registry and register handlers
-	registry := aprot.NewRegistry()
-	handlers := NewHandlers()
-
-	if err := registry.Register(handlers); err != nil {
-		log.Fatalf("Failed to register handlers: %v", err)
-	}
+	// Create registry from shared API package
+	registry := api.NewRegistry()
 
 	// Create server
 	server := aprot.NewServer(registry)
-	handlers.SetServer(server)
 
-	// Serve static files
-	staticDir := "./static"
+	// Create handlers with broadcaster for push events
+	handlers := api.NewHandlers()
+	handlers.SetBroadcaster(server)
+
+	// Re-register with the actual handler instance
+	registry.Register(handlers)
+
+	// Serve static files (Vite build output)
+	staticDir := "../client/dist"
 	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
-		// Try relative to executable
 		exe, _ := os.Executable()
-		staticDir = filepath.Join(filepath.Dir(exe), "static")
+		staticDir = filepath.Join(filepath.Dir(exe), "client", "dist")
 	}
 
 	// Routes

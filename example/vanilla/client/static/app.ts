@@ -1,4 +1,4 @@
-import { ApiClient } from './client';
+import { ApiClient } from './api/handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
@@ -29,15 +29,12 @@ function clearLog(): void {
 
 async function createUser(): Promise<void> {
     if (!client) return;
-
     const name = (document.getElementById('userName') as HTMLInputElement).value.trim();
     const email = (document.getElementById('userEmail') as HTMLInputElement).value.trim();
-
     if (!name || !email) {
         log('Please enter name and email', 'error');
         return;
     }
-
     try {
         const result = await client.createUser({ name, email });
         log(`Created user: ${JSON.stringify(result)}`, 'response');
@@ -50,11 +47,9 @@ async function createUser(): Promise<void> {
 
 async function listUsers(): Promise<void> {
     if (!client) return;
-
     try {
         const result = await client.listUsers({});
         const listEl = document.getElementById('usersList')!;
-
         if (result.users.length === 0) {
             listEl.innerHTML = '<li>No users yet</li>';
         } else {
@@ -69,24 +64,18 @@ async function listUsers(): Promise<void> {
 
 async function processBatch(): Promise<void> {
     if (!client) return;
-
     const itemsStr = (document.getElementById('batchItems') as HTMLInputElement).value.trim();
     const delay = parseInt((document.getElementById('batchDelay') as HTMLInputElement).value) || 500;
-
     if (!itemsStr) {
         log('Please enter items', 'error');
         return;
     }
-
     const items = itemsStr.split(',').map(s => s.trim()).filter(s => s);
-
     (document.getElementById('batchBtn') as HTMLButtonElement).disabled = true;
     (document.getElementById('cancelBtn') as HTMLButtonElement).disabled = false;
     (document.getElementById('progressFill') as HTMLElement).style.width = '0%';
     document.getElementById('progressText')!.textContent = 'Starting...';
-
     abortController = new AbortController();
-
     try {
         const result = await client.processBatch(
             { items, delay },
@@ -123,7 +112,6 @@ function cancelBatch(): void {
 async function init(): Promise<void> {
     client = new ApiClient(`ws://${window.location.host}/ws`);
 
-    // Set up push event handlers using generated typed methods
     client.onUserCreated((data) => {
         log(`User created: ${data.name} (${data.id})`, 'push');
         listUsers();
@@ -137,13 +125,6 @@ async function init(): Promise<void> {
     client.onSystemNotification((data) => {
         log(`Notification [${data.level}]: ${data.message}`, 'push');
     });
-
-    // Handle connection close
-    const origConnect = client.connect.bind(client);
-    client.connect = async () => {
-        await origConnect();
-        // Re-setup close handler to update status
-    };
 
     try {
         await client.connect();
@@ -172,5 +153,4 @@ window.processBatch = processBatch;
 window.cancelBatch = cancelBatch;
 window.clearLog = clearLog;
 
-// Start the app
 init();

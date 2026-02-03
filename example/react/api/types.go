@@ -1,6 +1,6 @@
-package main
+package api
 
-// Request/Response types for the example API
+// Request/Response types for the API
 
 type CreateUserRequest struct {
 	Name  string `json:"name"`
@@ -44,23 +44,4 @@ type ProcessBatchRequest struct {
 type ProcessBatchResponse struct {
 	Processed int      `json:"processed"`
 	Results   []string `json:"results"`
-}
-
-// Push event types
-
-type UserCreatedEvent struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
-type UserUpdatedEvent struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
-type SystemNotification struct {
-	Message string `json:"message"`
-	Level   string `json:"level"` // info, warning, error
 }

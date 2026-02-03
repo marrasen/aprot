@@ -3,6 +3,8 @@ package aprot
 import (
 	"embed"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -13,44 +15,60 @@ import (
 //go:embed templates/*.tmpl
 var templateFS embed.FS
 
-var tsTemplate = template.Must(template.ParseFS(templateFS, "templates/client.ts.tmpl"))
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	"toLowerCamel": toLowerCamel,
+	"toKebab":      toKebab,
+}).ParseFS(templateFS, "templates/*.tmpl"))
 
-// PushEventInfo describes a push event for code generation.
-type PushEventInfo struct {
-	Name     string
-	DataType reflect.Type
+// OutputMode specifies the type of client code to generate.
+type OutputMode string
+
+const (
+	OutputVanilla OutputMode = "vanilla"
+	OutputReact   OutputMode = "react"
+)
+
+// GeneratorOptions configures the code generator.
+type GeneratorOptions struct {
+	// OutputDir is the directory to write generated files to.
+	// If empty, files are written to current directory.
+	OutputDir string
+
+	// Mode specifies vanilla or react output.
+	Mode OutputMode
 }
 
 // Generator generates TypeScript client code from a registry.
 type Generator struct {
-	registry   *Registry
-	pushEvents []PushEventInfo
-	types      map[reflect.Type]string
+	registry *Registry
+	options  GeneratorOptions
+	types    map[reflect.Type]string
 }
 
 // NewGenerator creates a new TypeScript generator.
 func NewGenerator(registry *Registry) *Generator {
 	return &Generator{
-		registry:   registry,
-		pushEvents: []PushEventInfo{},
-		types:      make(map[reflect.Type]string),
+		registry: registry,
+		options: GeneratorOptions{
+			Mode: OutputVanilla,
+		},
+		types: make(map[reflect.Type]string),
 	}
 }
 
-// RegisterPushEvent registers a push event type for generation.
-func (g *Generator) RegisterPushEvent(name string, dataType any) {
-	t := reflect.TypeOf(dataType)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
+// WithOptions sets generator options.
+func (g *Generator) WithOptions(opts GeneratorOptions) *Generator {
+	g.options = opts
+	if g.options.Mode == "" {
+		g.options.Mode = OutputVanilla
 	}
-	g.pushEvents = append(g.pushEvents, PushEventInfo{
-		Name:     name,
-		DataType: t,
-	})
+	return g
 }
 
 // templateData holds all data needed for template rendering.
 type templateData struct {
+	StructName string
+	FileName   string
 	Interfaces []interfaceData
 	Methods    []methodData
 	PushEvents []pushEventData
@@ -70,6 +88,7 @@ type fieldData struct {
 type methodData struct {
 	Name         string
 	MethodName   string
+	HookName     string
 	RequestType  string
 	ResponseType string
 }
@@ -77,29 +96,145 @@ type methodData struct {
 type pushEventData struct {
 	Name        string
 	HandlerName string
+	HookName    string
 	DataType    string
 }
 
-// Generate writes the TypeScript client code to the writer.
-func (g *Generator) Generate(w io.Writer) error {
-	// Collect all types
-	for _, info := range g.registry.Handlers() {
-		g.collectType(info.RequestType)
-		g.collectType(info.ResponseType)
-	}
-	for _, event := range g.pushEvents {
-		g.collectType(event.DataType)
+// Generate writes TypeScript client code for all handler groups.
+// Returns a map of filename to content, or writes to OutputDir if set.
+func (g *Generator) Generate() (map[string]string, error) {
+	results := make(map[string]string)
+
+	for _, group := range g.registry.Groups() {
+		g.types = make(map[reflect.Type]string) // Reset types per group
+
+		// Collect types for this group
+		for _, info := range group.Handlers {
+			g.collectType(info.RequestType)
+			g.collectType(info.ResponseType)
+		}
+		for _, event := range group.PushEvents {
+			g.collectType(event.DataType)
+		}
+
+		data := g.buildTemplateData(group)
+
+		var buf strings.Builder
+		templateName := "client.ts.tmpl"
+		if g.options.Mode == OutputReact {
+			templateName = "client-react.ts.tmpl"
+		}
+
+		if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
+			return nil, err
+		}
+
+		results[data.FileName] = buf.String()
 	}
 
-	// Build template data
-	data := g.buildTemplateData()
+	// Write to files if OutputDir is set
+	if g.options.OutputDir != "" {
+		if err := os.MkdirAll(g.options.OutputDir, 0755); err != nil {
+			return nil, err
+		}
+		for filename, content := range results {
+			path := filepath.Join(g.options.OutputDir, filename)
+			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				return nil, err
+			}
+		}
+	}
 
-	// Execute template
-	return tsTemplate.ExecuteTemplate(w, "client.ts.tmpl", data)
+	return results, nil
 }
 
-func (g *Generator) buildTemplateData() templateData {
-	data := templateData{}
+// GenerateTo writes TypeScript client code to a single writer.
+// This combines all handler groups into one file (legacy behavior).
+func (g *Generator) GenerateTo(w io.Writer) error {
+	// Collect all types from all groups
+	for _, group := range g.registry.Groups() {
+		for _, info := range group.Handlers {
+			g.collectType(info.RequestType)
+			g.collectType(info.ResponseType)
+		}
+		for _, event := range group.PushEvents {
+			g.collectType(event.DataType)
+		}
+	}
+
+	// Build combined template data
+	data := templateData{
+		StructName: "Combined",
+		FileName:   "client.ts",
+	}
+
+	// Build interfaces
+	types := make([]reflect.Type, 0, len(g.types))
+	for t := range g.types {
+		types = append(types, t)
+	}
+	sort.Slice(types, func(i, j int) bool {
+		return types[i].Name() < types[j].Name()
+	})
+
+	for _, t := range types {
+		iface := interfaceData{Name: t.Name()}
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			iface.Fields = append(iface.Fields, fieldData{
+				Name:     g.getJSONName(field),
+				Type:     g.goTypeToTS(field.Type),
+				Optional: g.isOptional(field),
+			})
+		}
+		data.Interfaces = append(data.Interfaces, iface)
+	}
+
+	// Build methods from all groups
+	handlers := g.registry.Handlers()
+	names := make([]string, 0, len(handlers))
+	for name := range handlers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		info := handlers[name]
+		data.Methods = append(data.Methods, methodData{
+			Name:         name,
+			MethodName:   toLowerCamel(name),
+			HookName:     "use" + name,
+			RequestType:  info.RequestType.Name(),
+			ResponseType: info.ResponseType.Name(),
+		})
+	}
+
+	// Build push events from all groups
+	for _, event := range g.registry.PushEvents() {
+		data.PushEvents = append(data.PushEvents, pushEventData{
+			Name:        event.Name,
+			HandlerName: "on" + event.Name,
+			HookName:    "use" + event.Name,
+			DataType:    event.DataType.Name(),
+		})
+	}
+
+	templateName := "client.ts.tmpl"
+	if g.options.Mode == OutputReact {
+		templateName = "client-react.ts.tmpl"
+	}
+
+	return templates.ExecuteTemplate(w, templateName, data)
+}
+
+func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
+	data := templateData{
+		StructName: group.Name,
+		FileName:   toKebab(group.Name) + ".ts",
+	}
 
 	// Build interfaces
 	types := make([]reflect.Type, 0, len(g.types))
@@ -127,28 +262,29 @@ func (g *Generator) buildTemplateData() templateData {
 	}
 
 	// Build methods
-	handlers := g.registry.Handlers()
-	names := make([]string, 0, len(handlers))
-	for name := range handlers {
+	names := make([]string, 0, len(group.Handlers))
+	for name := range group.Handlers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	for _, name := range names {
-		info := handlers[name]
+		info := group.Handlers[name]
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
-			MethodName:   g.toLowerCamel(name),
+			MethodName:   toLowerCamel(name),
+			HookName:     "use" + name,
 			RequestType:  info.RequestType.Name(),
 			ResponseType: info.ResponseType.Name(),
 		})
 	}
 
 	// Build push events
-	for _, event := range g.pushEvents {
+	for _, event := range group.PushEvents {
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
 			HandlerName: "on" + event.Name,
+			HookName:    "use" + event.Name,
 			DataType:    event.DataType.Name(),
 		})
 	}
@@ -184,11 +320,11 @@ func (g *Generator) collectType(t reflect.Type) {
 func (g *Generator) getJSONName(field reflect.StructField) string {
 	tag := field.Tag.Get("json")
 	if tag == "" {
-		return g.toLowerCamel(field.Name)
+		return toLowerCamel(field.Name)
 	}
 	parts := strings.Split(tag, ",")
 	if parts[0] == "" || parts[0] == "-" {
-		return g.toLowerCamel(field.Name)
+		return toLowerCamel(field.Name)
 	}
 	return parts[0]
 }
@@ -238,11 +374,26 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	}
 }
 
-func (g *Generator) toLowerCamel(s string) string {
+func toLowerCamel(s string) string {
 	if s == "" {
 		return s
 	}
 	runes := []rune(s)
 	runes[0] = unicode.ToLower(runes[0])
 	return string(runes)
+}
+
+func toKebab(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				result.WriteRune('-')
+			}
+			result.WriteRune(unicode.ToLower(r))
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }
