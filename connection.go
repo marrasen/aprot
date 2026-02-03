@@ -2,9 +2,9 @@ package aprot
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 
+	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
 

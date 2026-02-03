@@ -1,6 +1,6 @@
 package aprot
 
-import "encoding/json"
+import "github.com/go-json-experiment/json/jsontext"
 
 // MessageType represents the type of protocol message.
 type MessageType string
@@ -16,10 +16,10 @@ const (
 
 // IncomingMessage represents a message from client to server.
 type IncomingMessage struct {
-	Type   MessageType     `json:"type"`
-	ID     string          `json:"id,omitempty"`
-	Method string          `json:"method,omitempty"`
-	Params json.RawMessage `json:"params,omitempty"`
+	Type   MessageType    `json:"type"`
+	ID     string         `json:"id,omitempty"`
+	Method string         `json:"method,omitempty"`
+	Params jsontext.Value `json:"params,omitempty"`
 }
 
 // ResponseMessage represents a successful response from server to client.

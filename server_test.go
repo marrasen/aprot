@@ -2,13 +2,14 @@ package aprot
 
 import (
 	"context"
-	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gorilla/websocket"
 )
 
@@ -111,7 +112,7 @@ func TestServerEcho(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Echo",
-		Params: json.RawMessage(`{"message":"hello"}`),
+		Params: jsontext.Value(`{"message":"hello"}`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -176,7 +177,7 @@ func TestServerProgress(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Slow",
-		Params: json.RawMessage(`{"steps":3}`),
+		Params: jsontext.Value(`{"steps":3}`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -218,7 +219,7 @@ func TestServerCancel(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Slow",
-		Params: json.RawMessage(`{"steps":100}`),
+		Params: jsontext.Value(`{"steps":100}`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -270,7 +271,7 @@ func TestServerPush(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "TriggerPush",
-		Params: json.RawMessage(`{"message":"pushed"}`),
+		Params: jsontext.Value(`{"message":"pushed"}`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)

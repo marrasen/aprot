@@ -8,7 +8,11 @@
       "Bash(npm install)",
       "Bash(npm run build:*)",
       "Bash(go mod tidy:*)",
-      "Bash(go run:*)"
+      "Bash(go run:*)",
+      "Bash(go version:*)",
+      "Bash(go list:*)",
+      "Bash(go doc:*)",
+      "Bash(go get:*)"
     ]
   }
 }

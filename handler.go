@@ -2,9 +2,11 @@ package aprot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
+
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
@@ -204,7 +206,7 @@ func validateMethod(method reflect.Method, handlerValue reflect.Value, structNam
 }
 
 // Call invokes the handler with the given context and JSON params.
-func (info *HandlerInfo) Call(ctx context.Context, params json.RawMessage) (any, error) {
+func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, error) {
 	// Create new request instance
 	reqPtr := reflect.New(info.RequestType)
 
