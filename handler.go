@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 
@@ -64,6 +65,18 @@ type PushEventInfo struct {
 	StructName string
 }
 
+// ErrorCodeInfo describes a custom error code for code generation.
+type ErrorCodeInfo struct {
+	Name string // e.g., "EndOfFile"
+	Code int    // e.g., 1000
+}
+
+// errorMapping maps a Go error to a code for automatic conversion.
+type errorMapping struct {
+	err  error
+	code int
+}
+
 // HandlerGroup contains all methods from a single handler struct.
 type HandlerGroup struct {
 	Name       string
@@ -73,17 +86,23 @@ type HandlerGroup struct {
 
 // Registry holds registered handlers and their methods.
 type Registry struct {
-	handlers   map[string]*HandlerInfo
-	groups     map[string]*HandlerGroup
-	pushEvents []PushEventInfo
+	handlers      map[string]*HandlerInfo
+	groups        map[string]*HandlerGroup
+	pushEvents    []PushEventInfo
+	errorCodes    []ErrorCodeInfo  // custom error codes for generation
+	errorMappings []errorMapping   // error -> code mappings
+	nextErrorCode int              // auto-incrementing error code
 }
 
 // NewRegistry creates a new handler registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		handlers:   make(map[string]*HandlerInfo),
-		groups:     make(map[string]*HandlerGroup),
-		pushEvents: []PushEventInfo{},
+		handlers:      make(map[string]*HandlerInfo),
+		groups:        make(map[string]*HandlerGroup),
+		pushEvents:    []PushEventInfo{},
+		errorCodes:    []ErrorCodeInfo{},
+		errorMappings: []errorMapping{},
+		nextErrorCode: 1000, // Start custom codes at 1000
 	}
 }
 
@@ -206,6 +225,53 @@ func (r *Registry) Groups() map[string]*HandlerGroup {
 // PushEvents returns all registered push events.
 func (r *Registry) PushEvents() []PushEventInfo {
 	return r.pushEvents
+}
+
+// RegisterError registers a Go error with a name for code generation.
+// When handlers return this error, it will be automatically converted
+// to a ProtocolError with the assigned code.
+// Codes are auto-assigned starting at 1000.
+func (r *Registry) RegisterError(err error, name string) {
+	code := r.nextErrorCode
+	r.nextErrorCode++
+
+	r.errorCodes = append(r.errorCodes, ErrorCodeInfo{
+		Name: name,
+		Code: code,
+	})
+	r.errorMappings = append(r.errorMappings, errorMapping{
+		err:  err,
+		code: code,
+	})
+}
+
+// RegisterErrorCode registers a custom error code name without an error mapping.
+// Use this for errors that will be created manually with NewError().
+func (r *Registry) RegisterErrorCode(name string) int {
+	code := r.nextErrorCode
+	r.nextErrorCode++
+
+	r.errorCodes = append(r.errorCodes, ErrorCodeInfo{
+		Name: name,
+		Code: code,
+	})
+	return code
+}
+
+// ErrorCodes returns all registered custom error codes.
+func (r *Registry) ErrorCodes() []ErrorCodeInfo {
+	return r.errorCodes
+}
+
+// LookupError checks if an error matches any registered error mapping.
+// Returns the code and true if found, or 0 and false if not.
+func (r *Registry) LookupError(err error) (int, bool) {
+	for _, m := range r.errorMappings {
+		if errors.Is(err, m.err) {
+			return m.code, true
+		}
+	}
+	return 0, false
 }
 
 // Get returns the handler info for the given method name.

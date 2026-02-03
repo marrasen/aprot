@@ -67,11 +67,12 @@ func (g *Generator) WithOptions(opts GeneratorOptions) *Generator {
 
 // templateData holds all data needed for template rendering.
 type templateData struct {
-	StructName string
-	FileName   string
-	Interfaces []interfaceData
-	Methods    []methodData
-	PushEvents []pushEventData
+	StructName       string
+	FileName         string
+	Interfaces       []interfaceData
+	Methods          []methodData
+	PushEvents       []pushEventData
+	CustomErrorCodes []errorCodeData
 }
 
 type interfaceData struct {
@@ -98,6 +99,12 @@ type pushEventData struct {
 	HandlerName string
 	HookName    string
 	DataType    string
+}
+
+type errorCodeData struct {
+	Name       string // e.g., "EndOfFile"
+	Code       int    // e.g., 1000
+	MethodName string // e.g., "isEndOfFile"
 }
 
 // Generate writes TypeScript client code for all handler groups.
@@ -222,6 +229,15 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		})
 	}
 
+	// Build custom error codes
+	for _, ec := range g.registry.ErrorCodes() {
+		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
+			Name:       ec.Name,
+			Code:       ec.Code,
+			MethodName: "is" + ec.Name,
+		})
+	}
+
 	templateName := "client.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		templateName = "client-react.ts.tmpl"
@@ -286,6 +302,15 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 			HandlerName: "on" + event.Name,
 			HookName:    "use" + event.Name,
 			DataType:    event.DataType.Name(),
+		})
+	}
+
+	// Build custom error codes
+	for _, ec := range g.registry.ErrorCodes() {
+		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
+			Name:       ec.Name,
+			Code:       ec.Code,
+			MethodName: "is" + ec.Name,
 		})
 	}
 

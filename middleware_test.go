@@ -2,6 +2,8 @@ package aprot
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -598,6 +600,163 @@ func TestErrorCodes(t *testing.T) {
 				t.Errorf("expected message %q, got %q", tt.message, tt.err.Message)
 			}
 		})
+	}
+}
+
+// Sentinel errors for testing
+var (
+	ErrTestNotFound = errors.New("not found")
+	ErrTestTimeout  = errors.New("timeout")
+)
+
+func TestRegisterError(t *testing.T) {
+	registry := NewRegistry()
+
+	// Register custom errors
+	registry.RegisterError(ErrTestNotFound, "NotFound")
+	registry.RegisterError(ErrTestTimeout, "Timeout")
+
+	// Verify error codes were registered
+	codes := registry.ErrorCodes()
+	if len(codes) != 2 {
+		t.Fatalf("expected 2 error codes, got %d", len(codes))
+	}
+
+	if codes[0].Name != "NotFound" || codes[0].Code != 1000 {
+		t.Errorf("expected NotFound:1000, got %s:%d", codes[0].Name, codes[0].Code)
+	}
+	if codes[1].Name != "Timeout" || codes[1].Code != 1001 {
+		t.Errorf("expected Timeout:1001, got %s:%d", codes[1].Name, codes[1].Code)
+	}
+
+	// Verify lookup works
+	code, found := registry.LookupError(ErrTestNotFound)
+	if !found || code != 1000 {
+		t.Errorf("expected to find ErrTestNotFound with code 1000, got %d, found=%v", code, found)
+	}
+
+	code, found = registry.LookupError(ErrTestTimeout)
+	if !found || code != 1001 {
+		t.Errorf("expected to find ErrTestTimeout with code 1001, got %d, found=%v", code, found)
+	}
+
+	// Verify unknown error returns not found
+	code, found = registry.LookupError(errors.New("unknown"))
+	if found {
+		t.Errorf("expected unknown error to not be found, got code %d", code)
+	}
+}
+
+func TestRegisterErrorCode(t *testing.T) {
+	registry := NewRegistry()
+
+	// Register error code without mapping
+	code1 := registry.RegisterErrorCode("InsufficientBalance")
+	code2 := registry.RegisterErrorCode("OutOfStock")
+
+	if code1 != 1000 {
+		t.Errorf("expected code 1000, got %d", code1)
+	}
+	if code2 != 1001 {
+		t.Errorf("expected code 1001, got %d", code2)
+	}
+
+	codes := registry.ErrorCodes()
+	if len(codes) != 2 {
+		t.Fatalf("expected 2 error codes, got %d", len(codes))
+	}
+}
+
+func TestRegisterErrorWrapped(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterError(ErrTestNotFound, "NotFound")
+
+	// Test that wrapped errors are also matched
+	wrappedErr := fmt.Errorf("failed to get user: %w", ErrTestNotFound)
+
+	code, found := registry.LookupError(wrappedErr)
+	if !found || code != 1000 {
+		t.Errorf("expected wrapped error to match, got code %d, found=%v", code, found)
+	}
+}
+
+// Handler that returns registered errors
+type ErrorTestHandler struct{}
+
+type ErrorTestRequest struct{}
+type ErrorTestResponse struct {
+	OK bool `json:"ok"`
+}
+
+func (h *ErrorTestHandler) TriggerNotFound(ctx context.Context, req *ErrorTestRequest) (*ErrorTestResponse, error) {
+	return nil, ErrTestNotFound
+}
+
+func (h *ErrorTestHandler) TriggerWrapped(ctx context.Context, req *ErrorTestRequest) (*ErrorTestResponse, error) {
+	return nil, fmt.Errorf("wrapped: %w", ErrTestNotFound)
+}
+
+func TestRegisteredErrorSentToClient(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterError(ErrTestNotFound, "NotFound")
+	registry.Register(&ErrorTestHandler{})
+
+	server := NewServer(registry)
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	defer ws.Close()
+
+	// Test direct error
+	reqMsg := map[string]any{
+		"type":   "request",
+		"id":     "1",
+		"method": "TriggerNotFound",
+		"params": map[string]any{},
+	}
+	if err := ws.WriteJSON(reqMsg); err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+
+	var resp map[string]any
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+
+	if resp["type"] != "error" {
+		t.Errorf("expected error type, got %v", resp["type"])
+	}
+	if resp["code"].(float64) != 1000 {
+		t.Errorf("expected code 1000, got %v", resp["code"])
+	}
+
+	// Test wrapped error
+	reqMsg2 := map[string]any{
+		"type":   "request",
+		"id":     "2",
+		"method": "TriggerWrapped",
+		"params": map[string]any{},
+	}
+	if err := ws.WriteJSON(reqMsg2); err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+
+	var resp2 map[string]any
+	if err := ws.ReadJSON(&resp2); err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+
+	if resp2["type"] != "error" {
+		t.Errorf("expected error type, got %v", resp2["type"])
+	}
+	if resp2["code"].(float64) != 1000 {
+		t.Errorf("expected code 1000 for wrapped error, got %v", resp2["code"])
 	}
 }
 

@@ -260,6 +260,8 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	if err != nil {
 		if perr, ok := err.(*ProtocolError); ok {
 			c.sendError(msg.ID, perr.Code, perr.Message)
+		} else if code, found := c.server.registry.LookupError(err); found {
+			c.sendError(msg.ID, code, err.Error())
 		} else {
 			c.sendError(msg.ID, CodeInternalError, err.Error())
 		}

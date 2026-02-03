@@ -330,21 +330,42 @@ func LoggingMiddleware() aprot.Middleware {
 
 #### Server-side (Go)
 
-Use `ProtocolError` to return typed errors to clients:
+**Register Go errors for automatic conversion:**
 
 ```go
-// Built-in error helpers
+// Register standard Go errors - they'll be auto-converted when returned
+// Codes are auto-assigned starting at 1000
+registry.RegisterError(io.EOF, "EndOfFile")
+registry.RegisterError(sql.ErrNoRows, "NotFound")
+registry.RegisterError(context.DeadlineExceeded, "Timeout")
+
+// Register code-only (for manual use with NewError)
+insufficientBalanceCode := registry.RegisterErrorCode("InsufficientBalance")
+```
+
+Now handlers can return standard Go errors:
+
+```go
+func (h *Handlers) ReadData(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+    data, err := h.reader.Read()
+    if err != nil {
+        return nil, err  // io.EOF automatically becomes code 1000
+    }
+    return &ReadResponse{Data: data}, nil
+}
+```
+
+**Built-in error helpers:**
+
+```go
 aprot.ErrUnauthorized("invalid token")     // Code: -32001
 aprot.ErrForbidden("access denied")        // Code: -32003
 aprot.ErrInvalidParams("name is required") // Code: -32602
 aprot.ErrInternal(err)                     // Code: -32603
 
-// Custom errors with your own codes
-aprot.NewError(1001, "insufficient balance")
-aprot.NewError(1002, "item out of stock")
-
-// Wrap existing errors
-aprot.WrapError(1003, "database error", err)
+// Manual custom errors
+aprot.NewError(code, "message")
+aprot.WrapError(code, "message", cause)
 ```
 
 Standard error codes:
@@ -361,44 +382,57 @@ Standard error codes:
 
 #### Client-side (TypeScript)
 
-The generated client throws `ApiError` with a `code` property:
+The generated client throws `ApiError` with a `code` property. Custom error codes registered with `RegisterError` are automatically included:
 
 ```typescript
 import { ApiError, ErrorCode } from './api/client';
 
 try {
-    await client.createUser({ name: '', email: '' });
+    await client.readData({ id: '123' });
 } catch (err) {
     if (err instanceof ApiError) {
-        // Check specific error codes
+        // Check standard errors
         if (err.isUnauthorized()) {
             // Redirect to login
-        } else if (err.isInvalidParams()) {
-            // Show validation error
-        } else if (err.code === 1001) {
-            // Handle custom error code
         }
+
+        // Check custom registered errors (auto-generated)
+        if (err.isEndOfFile()) {
+            // Handle EOF
+        } else if (err.isNotFound()) {
+            // Handle not found
+        }
+
         console.log(`Error ${err.code}: ${err.message}`);
     }
 }
 ```
 
-Available `ErrorCode` constants and helper methods:
+Generated `ErrorCode` constants include both standard and custom codes:
 
 ```typescript
-// Constants
-ErrorCode.Unauthorized  // -32001
-ErrorCode.Forbidden     // -32003
-ErrorCode.InvalidParams // -32602
-ErrorCode.MethodNotFound // -32601
-// ... etc
+export const ErrorCode = {
+    // Standard codes
+    Unauthorized: -32001,
+    Forbidden: -32003,
+    InvalidParams: -32602,
+    // ...
 
-// Helper methods on ApiError
-err.isUnauthorized()  // err.code === -32001
-err.isForbidden()     // err.code === -32003
-err.isInvalidParams() // err.code === -32602
-err.isNotFound()      // err.code === -32601
-err.isCanceled()      // err.code === -32800
+    // Custom codes (from RegisterError/RegisterErrorCode)
+    EndOfFile: 1000,
+    NotFound: 1001,
+    Timeout: 1002,
+    InsufficientBalance: 1003,
+} as const;
+```
+
+Helper methods are generated for all error types:
+
+```typescript
+err.isUnauthorized()        // standard
+err.isEndOfFile()           // custom
+err.isNotFound()            // custom
+err.isInsufficientBalance() // custom
 ```
 
 ## Generated Output

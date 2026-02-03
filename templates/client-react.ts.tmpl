@@ -20,6 +20,9 @@ export const ErrorCode = {
     Canceled: -32800,
     Unauthorized: -32001,
     Forbidden: -32003,
+{{- range .CustomErrorCodes}}
+    {{.Name}}: {{.Code}},
+{{- end}}
 } as const;
 
 export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
@@ -40,6 +43,9 @@ export class ApiError extends Error {
     isNotFound(): boolean { return this.code === ErrorCode.MethodNotFound; }
     isInvalidParams(): boolean { return this.code === ErrorCode.InvalidParams; }
     isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
+{{- range .CustomErrorCodes}}
+    {{.MethodName}}(): boolean { return this.code === ErrorCode.{{.Name}}; }
+{{- end}}
 }
 
 export interface RequestOptions {
