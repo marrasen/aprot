@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aprot Example</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            color: #555;
+            font-size: 1.2em;
+        }
+        .status {
+            padding: 8px 16px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="text"], input[type="email"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: #28a745;
+            transition: width 0.3s;
+        }
+        .progress-text {
+            color: #666;
+            font-size: 14px;
+        }
+        .log {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 3px 0;
+            border-bottom: 1px solid #333;
+        }
+        .log-entry.push {
+            color: #4ec9b0;
+        }
+        .log-entry.response {
+            color: #9cdcfe;
+        }
+        .log-entry.error {
+            color: #f14c4c;
+        }
+        .log-entry.progress {
+            color: #dcdcaa;
+        }
+        .users-list {
+            list-style: none;
+            padding: 0;
+        }
+        .users-list li {
+            padding: 10px;
+            background: #f8f9fa;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>aprot Example</h1>
+
+    <div id="status" class="status disconnected">Disconnected</div>
+
+    <div class="grid">
+        <div class="card">
+            <h2>Create User</h2>
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" id="userName" placeholder="John Doe">
+            </div>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="userEmail" placeholder="john@example.com">
+            </div>
+            <button onclick="createUser()">Create User</button>
+        </div>
+
+        <div class="card">
+            <h2>Users</h2>
+            <button onclick="listUsers()">Refresh List</button>
+            <ul id="usersList" class="users-list">
+                <li>No users yet</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Batch Processing (with Progress & Cancellation)</h2>
+        <div class="form-group">
+            <label>Items (comma-separated)</label>
+            <input type="text" id="batchItems" value="apple, banana, cherry, date, elderberry">
+        </div>
+        <div class="form-group">
+            <label>Delay per item (ms)</label>
+            <input type="number" id="batchDelay" value="500">
+        </div>
+        <button id="batchBtn" onclick="processBatch()">Process Batch</button>
+        <button id="cancelBtn" class="danger" onclick="cancelBatch()" disabled>Cancel</button>
+
+        <div class="progress-bar">
+            <div id="progressFill" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+        <div id="progressText" class="progress-text">Ready</div>
+    </div>
+
+    <div class="card">
+        <h2>Event Log</h2>
+        <button onclick="clearLog()">Clear Log</button>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        // Generated client will be loaded here
+        // For now, we'll use a simple inline client
+
+        class ApiClient {
+            constructor(url) {
+                this.url = url;
+                this.ws = null;
+                this.requestId = 0;
+                this.pending = new Map();
+                this.pushHandlers = new Map();
+            }
+
+            connect() {
+                return new Promise((resolve, reject) => {
+                    this.ws = new WebSocket(this.url);
+                    this.ws.onopen = () => resolve();
+                    this.ws.onerror = (e) => reject(e);
+                    this.ws.onmessage = (e) => this.handleMessage(e.data);
+                    this.ws.onclose = () => {
+                        for (const [, p] of this.pending) {
+                            p.reject(new Error('Connection closed'));
+                        }
+                        this.pending.clear();
+                        updateStatus(false);
+                    };
+                });
+            }
+
+            disconnect() {
+                this.ws?.close();
+                this.ws = null;
+            }
+
+            handleMessage(data) {
+                const msg = JSON.parse(data);
+                switch (msg.type) {
+                    case 'response': {
+                        const p = this.pending.get(msg.id);
+                        if (p) {
+                            this.pending.delete(msg.id);
+                            p.resolve(msg.result);
+                        }
+                        break;
+                    }
+                    case 'error': {
+                        const p = this.pending.get(msg.id);
+                        if (p) {
+                            this.pending.delete(msg.id);
+                            p.reject(new Error(`[${msg.code}] ${msg.message}`));
+                        }
+                        break;
+                    }
+                    case 'progress': {
+                        const p = this.pending.get(msg.id);
+                        if (p?.onProgress) {
+                            p.onProgress(msg.current, msg.total, msg.message);
+                        }
+                        break;
+                    }
+                    case 'push': {
+                        const handlers = this.pushHandlers.get(msg.event);
+                        if (handlers) {
+                            for (const handler of handlers) {
+                                handler(msg.data);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            request(method, params, options) {
+                return new Promise((resolve, reject) => {
+                    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                        reject(new Error('Not connected'));
+                        return;
+                    }
+                    const id = String(++this.requestId);
+                    this.pending.set(id, { resolve, reject, onProgress: options?.onProgress });
+                    if (options?.signal) {
+                        options.signal.addEventListener('abort', () => {
+                            this.ws?.send(JSON.stringify({ type: 'cancel', id }));
+                            this.pending.delete(id);
+                            reject(new Error('Request aborted'));
+                        });
+                    }
+                    this.ws.send(JSON.stringify({ type: 'request', id, method, params }));
+                });
+            }
+
+            on(event, handler) {
+                if (!this.pushHandlers.has(event)) {
+                    this.pushHandlers.set(event, new Set());
+                }
+                this.pushHandlers.get(event).add(handler);
+                return () => this.pushHandlers.get(event)?.delete(handler);
+            }
+
+            // API methods
+            createUser(req, options) {
+                return this.request('CreateUser', req, options);
+            }
+
+            getUser(req, options) {
+                return this.request('GetUser', req, options);
+            }
+
+            listUsers(req, options) {
+                return this.request('ListUsers', req || {}, options);
+            }
+
+            processBatch(req, options) {
+                return this.request('ProcessBatch', req, options);
+            }
+        }
+
+        // Global client instance
+        let client = null;
+        let abortController = null;
+
+        // Initialize
+        async function init() {
+            client = new ApiClient(`ws://${window.location.host}/ws`);
+
+            // Set up push event handlers
+            client.on('UserCreated', (data) => {
+                log(`User created: ${data.name} (${data.id})`, 'push');
+                listUsers();
+            });
+
+            client.on('UserUpdated', (data) => {
+                log(`User updated: ${data.name} (${data.id})`, 'push');
+                listUsers();
+            });
+
+            client.on('SystemNotification', (data) => {
+                log(`Notification [${data.level}]: ${data.message}`, 'push');
+            });
+
+            try {
+                await client.connect();
+                updateStatus(true);
+                log('Connected to server', 'response');
+                listUsers();
+            } catch (err) {
+                log(`Connection failed: ${err.message}`, 'error');
+            }
+        }
+
+        function updateStatus(connected) {
+            const el = document.getElementById('status');
+            if (connected) {
+                el.textContent = 'Connected';
+                el.className = 'status connected';
+            } else {
+                el.textContent = 'Disconnected';
+                el.className = 'status disconnected';
+            }
+        }
+
+        function log(message, type = '') {
+            const logEl = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(entry);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+
+        async function createUser() {
+            const name = document.getElementById('userName').value.trim();
+            const email = document.getElementById('userEmail').value.trim();
+
+            if (!name || !email) {
+                log('Please enter name and email', 'error');
+                return;
+            }
+
+            try {
+                const result = await client.createUser({ name, email });
+                log(`Created user: ${JSON.stringify(result)}`, 'response');
+                document.getElementById('userName').value = '';
+                document.getElementById('userEmail').value = '';
+            } catch (err) {
+                log(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        async function listUsers() {
+            try {
+                const result = await client.listUsers();
+                const listEl = document.getElementById('usersList');
+
+                if (result.users.length === 0) {
+                    listEl.innerHTML = '<li>No users yet</li>';
+                } else {
+                    listEl.innerHTML = result.users.map(u =>
+                        `<li><strong>${u.name}</strong> - ${u.email} (${u.id})</li>`
+                    ).join('');
+                }
+            } catch (err) {
+                log(`Error listing users: ${err.message}`, 'error');
+            }
+        }
+
+        async function processBatch() {
+            const itemsStr = document.getElementById('batchItems').value.trim();
+            const delay = parseInt(document.getElementById('batchDelay').value) || 500;
+
+            if (!itemsStr) {
+                log('Please enter items', 'error');
+                return;
+            }
+
+            const items = itemsStr.split(',').map(s => s.trim()).filter(s => s);
+
+            document.getElementById('batchBtn').disabled = true;
+            document.getElementById('cancelBtn').disabled = false;
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('progressText').textContent = 'Starting...';
+
+            abortController = new AbortController();
+
+            try {
+                const result = await client.processBatch(
+                    { items, delay },
+                    {
+                        signal: abortController.signal,
+                        onProgress: (current, total, message) => {
+                            const pct = (current / total) * 100;
+                            document.getElementById('progressFill').style.width = `${pct}%`;
+                            document.getElementById('progressText').textContent = `${current}/${total}: ${message}`;
+                            log(`Progress: ${current}/${total} - ${message}`, 'progress');
+                        }
+                    }
+                );
+                document.getElementById('progressFill').style.width = '100%';
+                document.getElementById('progressText').textContent = `Done! Processed ${result.processed} items`;
+                log(`Batch complete: ${JSON.stringify(result)}`, 'response');
+            } catch (err) {
+                log(`Batch error: ${err.message}`, 'error');
+                document.getElementById('progressText').textContent = `Error: ${err.message}`;
+            } finally {
+                document.getElementById('batchBtn').disabled = false;
+                document.getElementById('cancelBtn').disabled = true;
+                abortController = null;
+            }
+        }
+
+        function cancelBatch() {
+            if (abortController) {
+                abortController.abort();
+                log('Cancellation requested', 'error');
+            }
+        }
+
+        // Start the app
+        init();
+    </script>
+</body>
+</html>
