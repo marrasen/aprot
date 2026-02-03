@@ -1,0 +1,12 @@
+{
+  "name": "aprot-example",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020",
+    "watch": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020 --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  }
+}

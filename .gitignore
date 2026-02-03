@@ -31,3 +31,4 @@ dist/
 
 # Generated files (optional - you may want to commit these)
 # example/client/generated/
+example/static/app.js

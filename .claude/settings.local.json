@@ -4,7 +4,9 @@
       "Bash(go test:*)",
       "Bash(go build:*)",
       "Bash(timeout:*)",
-      "Bash(go generate:*)"
+      "Bash(go generate:*)",
+      "Bash(npm install)",
+      "Bash(npm run build:*)"
     ]
   }
 }
