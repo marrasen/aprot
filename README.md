@@ -11,6 +11,7 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 
 - **Type-safe handlers** - Define request/response types as Go structs
 - **Automatic TypeScript generation** - Generate fully typed client code from your Go types
+- **Enum support** - Register Go enums and generate TypeScript const objects with type safety
 - **React hooks** - Optional React integration with query/mutation hooks
 - **Middleware support** - Add cross-cutting concerns like authentication, logging, and rate limiting
 - **User-targeted push** - Send push messages to specific users across multiple connections
@@ -457,6 +458,136 @@ err.isUnauthorized()        // standard
 err.isEndOfFile()           // custom
 err.isNotFound()            // custom
 err.isInsufficientBalance() // custom
+```
+
+### Enum Support
+
+Register Go enum types to generate TypeScript const objects with full type safety.
+
+#### Defining Enums (Go)
+
+```go
+// String-based enum
+type TaskStatus string
+
+const (
+    TaskStatusPending   TaskStatus = "pending"
+    TaskStatusRunning   TaskStatus = "running"
+    TaskStatusCompleted TaskStatus = "completed"
+    TaskStatusFailed    TaskStatus = "failed"
+)
+
+// Required: Values() function returning all enum values
+func TaskStatusValues() []TaskStatus {
+    return []TaskStatus{
+        TaskStatusPending,
+        TaskStatusRunning,
+        TaskStatusCompleted,
+        TaskStatusFailed,
+    }
+}
+```
+
+For int-based enums, implement the `Stringer` interface to provide names:
+
+```go
+type Priority int
+
+const (
+    PriorityLow Priority = iota
+    PriorityMedium
+    PriorityHigh
+)
+
+func (p Priority) String() string {
+    switch p {
+    case PriorityLow:
+        return "Low"
+    case PriorityMedium:
+        return "Medium"
+    case PriorityHigh:
+        return "High"
+    default:
+        return "Unknown"
+    }
+}
+
+func PriorityValues() []Priority {
+    return []Priority{PriorityLow, PriorityMedium, PriorityHigh}
+}
+```
+
+#### Registering Enums
+
+```go
+registry := aprot.NewRegistry()
+registry.RegisterEnum(TaskStatusValues())
+registry.RegisterEnum(PriorityValues())
+```
+
+#### Using Enums in Types
+
+```go
+type Task struct {
+    ID       string     `json:"id"`
+    Name     string     `json:"name"`
+    Status   TaskStatus `json:"status"`
+    Priority Priority   `json:"priority"`
+}
+```
+
+#### Generated TypeScript
+
+```typescript
+// String-based enum - names derived by capitalizing value
+export const TaskStatus = {
+    Pending: "pending",
+    Running: "running",
+    Completed: "completed",
+    Failed: "failed",
+} as const;
+export type TaskStatusType = typeof TaskStatus[keyof typeof TaskStatus];
+
+// Int-based enum - names from String() method
+export const Priority = {
+    Low: 0,
+    Medium: 1,
+    High: 2,
+} as const;
+export type PriorityType = typeof Priority[keyof typeof Priority];
+
+// Struct fields use enum types instead of string/number
+export interface Task {
+    id: string;
+    name: string;
+    status: TaskStatusType;   // not string!
+    priority: PriorityType;   // not number!
+}
+```
+
+#### Using Enums (TypeScript)
+
+```typescript
+import { TaskStatus, TaskStatusType } from './api/handlers';
+
+// Type-safe comparison
+if (task.status === TaskStatus.Running) {
+    console.log('Task is running');
+}
+
+// Type-safe switch with exhaustive checking
+function getStatusLabel(status: TaskStatusType): string {
+    switch (status) {
+        case TaskStatus.Pending:
+            return 'Pending';
+        case TaskStatus.Running:
+            return 'Running';
+        case TaskStatus.Completed:
+            return 'Completed';
+        case TaskStatus.Failed:
+            return 'Failed';
+    }
+}
 ```
 
 ## Generated Output
