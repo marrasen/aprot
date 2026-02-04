@@ -646,8 +646,8 @@ client.onUserCreated((event) => {
 ### React Hooks
 
 ```tsx
-import { ApiClient, ApiClientProvider, getWebSocketUrl } from './api/client';
-import { useListUsers, useCreateUserMutation, useUserCreated } from './api/handlers';
+import { ApiClient, ApiClientProvider, getWebSocketUrl, useApiClient } from './api/client';
+import { useListUsers } from './api/handlers';
 
 const client = new ApiClient(getWebSocketUrl());
 
@@ -660,17 +660,27 @@ function App() {
 }
 
 function UsersList() {
-    const { data, isLoading, refetch } = useListUsers({ params: {} });
-    const { mutate } = useCreateUserMutation();
-    const { lastEvent } = useUserCreated();
+    const api = useApiClient();
+    const { data, isLoading, error, mutate } = useListUsers({ params: {} });
 
-    useEffect(() => {
-        if (lastEvent) refetch();
-    }, [lastEvent]);
+    const addUser = useCallback((name: string) => {
+        // mutate() runs the async action, shows loading state, then refetches
+        mutate(api.createUser({ name }));
+    }, [mutate, api]);
 
-    return <ul>{data?.users.map(u => <li key={u.id}>{u.name}</li>)}</ul>;
+    if (error) return <div>Error: {error.message}</div>;
+    if (isLoading) return <div>Loading...</div>;
+
+    return (
+        <>
+            <button onClick={() => addUser('New User')}>Add User</button>
+            <ul>{data?.users.map(u => <li key={u.id}>{u.name}</li>)}</ul>
+        </>
+    );
 }
 ```
+
+The `mutate` function accepts a Promise or async function. It sets `isLoading=true`, awaits the action, refetches data on success, or sets `error` on failure. This consolidates loading/error state for all operations on the resource.
 
 ## Protocol
 

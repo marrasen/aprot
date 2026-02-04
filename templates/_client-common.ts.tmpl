@@ -403,7 +403,7 @@ export interface UseQueryResult<TRes> {
     error: Error | null;
     isLoading: boolean;
     refetch: () => void;
-    mutate: (data: TRes | null) => void;
+    mutate: (action: Promise<any> | (() => Promise<any>)) => Promise<void>;
 }
 
 // Mutation hook options
