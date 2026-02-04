@@ -14,6 +14,21 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// connectWSMW connects to the test server and reads the initial config message
+func connectWSMW(t *testing.T, ts *httptest.Server) *websocket.Conn {
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial error: %v", err)
+	}
+	// Read and discard the config message
+	var cfg map[string]any
+	if err := ws.ReadJSON(&cfg); err != nil {
+		t.Fatalf("read config error: %v", err)
+	}
+	return ws
+}
+
 // Test handler for middleware tests
 type MiddlewareTestHandler struct{}
 
@@ -84,11 +99,7 @@ func TestMiddlewareChainExecutionOrder(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	// Send request
@@ -145,11 +156,7 @@ func TestMiddlewareContextModification(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	// Send request
@@ -192,11 +199,7 @@ func TestMiddlewareRequestRejection(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	// Send request
@@ -262,11 +265,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	// Test Echo (public handler, no auth required) - should succeed
@@ -375,11 +374,7 @@ func TestServerAndHandlerMiddlewareCombined(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	reqMsg := map[string]any{
@@ -422,26 +417,14 @@ func TestUserTargetedPush(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-
-	// Connect two clients for user1
-	ws1a, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	// Connect and read config messages
+	ws1a := connectWSMW(t, ts)
 	defer ws1a.Close()
 
-	ws1b, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws1b := connectWSMW(t, ts)
 	defer ws1b.Close()
 
-	// Connect one client for user2
-	ws2, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws2 := connectWSMW(t, ts)
 	defer ws2.Close()
 
 	// Wait for connections to be registered
@@ -533,11 +516,7 @@ func TestRequestFromContext(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	reqMsg := map[string]any{
@@ -574,11 +553,7 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	time.Sleep(50 * time.Millisecond)
@@ -770,11 +745,7 @@ func TestRegisteredErrorSentToClient(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	// Test direct error
@@ -834,11 +805,7 @@ func TestMiddlewareWithNoMiddleware(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http")
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("dial error: %v", err)
-	}
+	ws := connectWSMW(t, ts)
 	defer ws.Close()
 
 	reqMsg := map[string]any{

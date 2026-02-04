@@ -14,21 +14,77 @@ type Broadcaster interface {
 	Broadcast(event string, data any)
 }
 
+// ConnectHook is called when a new connection is established.
+// Return an error to reject the connection.
+type ConnectHook func(ctx context.Context, conn *Conn) error
+
+// DisconnectHook is called when a connection is closed.
+type DisconnectHook func(ctx context.Context, conn *Conn)
+
+// ServerOptions configures the server behavior.
+type ServerOptions struct {
+	// ReconnectInterval is the initial reconnect delay in milliseconds. Default: 1000
+	ReconnectInterval int
+	// ReconnectMaxInterval is the maximum reconnect delay in milliseconds. Default: 30000
+	ReconnectMaxInterval int
+	// ReconnectMaxAttempts is the maximum number of reconnect attempts. 0 = unlimited. Default: 0
+	ReconnectMaxAttempts int
+	// HeartbeatInterval is the heartbeat interval in milliseconds. Default: 30000
+	HeartbeatInterval int
+	// HeartbeatTimeout is the heartbeat timeout in milliseconds. Default: 5000
+	HeartbeatTimeout int
+}
+
+func defaultServerOptions() ServerOptions {
+	return ServerOptions{
+		ReconnectInterval:    1000,
+		ReconnectMaxInterval: 30000,
+		ReconnectMaxAttempts: 0,
+		HeartbeatInterval:    30000,
+		HeartbeatTimeout:     5000,
+	}
+}
+
 // Server manages WebSocket connections and handler dispatch.
 type Server struct {
-	registry   *Registry
-	upgrader   websocket.Upgrader
-	conns      map[*Conn]struct{}
-	userConns  map[string]map[*Conn]struct{} // userID -> connections
-	mu         sync.RWMutex
-	register   chan *Conn
-	unregister chan *Conn
-	middleware []Middleware
-	nextConnID uint64 // atomic counter for connection IDs
+	registry        *Registry
+	upgrader        websocket.Upgrader
+	conns           map[*Conn]struct{}
+	userConns       map[string]map[*Conn]struct{} // userID -> connections
+	mu              sync.RWMutex
+	register        chan *Conn
+	unregister      chan *Conn
+	middleware      []Middleware
+	nextConnID      uint64 // atomic counter for connection IDs
+	options         ServerOptions
+	connectHooks    []ConnectHook
+	disconnectHooks []DisconnectHook
 }
 
 // NewServer creates a new WebSocket server with the given registry.
-func NewServer(registry *Registry) *Server {
+// An optional ServerOptions can be passed to configure server behavior.
+func NewServer(registry *Registry, opts ...ServerOptions) *Server {
+	options := defaultServerOptions()
+	if len(opts) > 0 {
+		// Merge provided options with defaults
+		opt := opts[0]
+		if opt.ReconnectInterval > 0 {
+			options.ReconnectInterval = opt.ReconnectInterval
+		}
+		if opt.ReconnectMaxInterval > 0 {
+			options.ReconnectMaxInterval = opt.ReconnectMaxInterval
+		}
+		if opt.ReconnectMaxAttempts > 0 {
+			options.ReconnectMaxAttempts = opt.ReconnectMaxAttempts
+		}
+		if opt.HeartbeatInterval > 0 {
+			options.HeartbeatInterval = opt.HeartbeatInterval
+		}
+		if opt.HeartbeatTimeout > 0 {
+			options.HeartbeatTimeout = opt.HeartbeatTimeout
+		}
+	}
+
 	s := &Server{
 		registry: registry,
 		upgrader: websocket.Upgrader{
@@ -41,6 +97,7 @@ func NewServer(registry *Registry) *Server {
 		register:   make(chan *Conn),
 		unregister: make(chan *Conn),
 		middleware: []Middleware{},
+		options:    options,
 	}
 	go s.run()
 	return s
@@ -50,6 +107,39 @@ func NewServer(registry *Registry) *Server {
 // Middleware is executed in the order it is added.
 func (s *Server) Use(mw ...Middleware) {
 	s.middleware = append(s.middleware, mw...)
+}
+
+// OnConnect registers a hook to be called when a new connection is established.
+// Hooks are called in the order they are registered.
+// If a hook returns an error, the connection is rejected and subsequent hooks are not called.
+func (s *Server) OnConnect(hook ConnectHook) {
+	s.connectHooks = append(s.connectHooks, hook)
+}
+
+// OnDisconnect registers a hook to be called when a connection is closed.
+// Hooks are called in the order they are registered.
+// The connection's UserID is still available when the hook is called.
+func (s *Server) OnDisconnect(hook DisconnectHook) {
+	s.disconnectHooks = append(s.disconnectHooks, hook)
+}
+
+// runConnectHooks executes all connect hooks in order.
+// Returns the first error encountered, or nil if all hooks succeed.
+func (s *Server) runConnectHooks(ctx context.Context, conn *Conn) error {
+	for _, hook := range s.connectHooks {
+		if err := hook(ctx, conn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runDisconnectHooks executes all disconnect hooks in order.
+func (s *Server) runDisconnectHooks(conn *Conn) {
+	ctx := conn.ctx
+	for _, hook := range s.disconnectHooks {
+		hook(ctx, conn)
+	}
 }
 
 // buildHandler creates the middleware chain for a handler.
@@ -128,7 +218,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	connID := atomic.AddUint64(&s.nextConnID, 1)
-	conn := newConn(ws, s, connID, r)
+	ctx := r.Context()
+	conn := newConn(ws, s, connID, r, ctx)
+
+	// Run connect hooks before starting message processing
+	if err := s.runConnectHooks(ctx, conn); err != nil {
+		conn.sendConnectionRejected(err)
+		ws.Close()
+		return
+	}
+
+	// Send client configuration (writes directly to ws before pumps start)
+	conn.sendConfig(s.options)
+
 	s.register <- conn
 
 	go conn.writePump()
@@ -160,13 +262,18 @@ func (s *Server) run() {
 			s.conns[conn] = struct{}{}
 			s.mu.Unlock()
 		case conn := <-s.unregister:
-			s.disassociateUser(conn)
 			s.mu.Lock()
-			if _, ok := s.conns[conn]; ok {
+			_, existed := s.conns[conn]
+			if existed {
 				delete(s.conns, conn)
-				conn.close()
 			}
 			s.mu.Unlock()
+
+			if existed {
+				s.runDisconnectHooks(conn) // Before disassociate so UserID() works
+				s.disassociateUser(conn)
+				conn.close()
+			}
 		}
 	}
 }

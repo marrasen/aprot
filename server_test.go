@@ -2,9 +2,11 @@ package aprot
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,6 +98,11 @@ func connectWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
 	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
+	}
+	// Read and discard the config message that is sent on connect
+	_, _, err = ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Failed to read config message: %v", err)
 	}
 	return ws
 }
@@ -351,4 +358,360 @@ func TestServerBroadcast(t *testing.T) {
 	go checkPush(ws2)
 
 	wg.Wait()
+}
+
+func TestOnConnectHookCalled(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var called int32
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		atomic.AddInt32(&called, 1)
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if atomic.LoadInt32(&called) != 1 {
+		t.Errorf("Expected hook called once, got %d", atomic.LoadInt32(&called))
+	}
+}
+
+func TestOnConnectHookRejectsConnection(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		return ErrConnectionRejected("max connections reached")
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer ws.Close()
+
+	// Should receive error message
+	_, data, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var msg ErrorMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if msg.Type != TypeError {
+		t.Errorf("Expected error type, got %s", msg.Type)
+	}
+	if msg.Code != CodeConnectionRejected {
+		t.Errorf("Expected connection rejected code, got %d", msg.Code)
+	}
+	if msg.Message != "max connections reached" {
+		t.Errorf("Expected 'max connections reached', got %s", msg.Message)
+	}
+
+	// Connection should be closed - server should have 0 connections
+	time.Sleep(50 * time.Millisecond)
+	if server.ConnectionCount() != 0 {
+		t.Errorf("Expected 0 connections, got %d", server.ConnectionCount())
+	}
+}
+
+func TestOnConnectMultipleHooks(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var order []int
+	var mu sync.Mutex
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		mu.Lock()
+		order = append(order, 1)
+		mu.Unlock()
+		return nil
+	})
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		mu.Lock()
+		order = append(order, 2)
+		mu.Unlock()
+		return errors.New("second hook fails")
+	})
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		mu.Lock()
+		order = append(order, 3)
+		mu.Unlock()
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer ws.Close()
+
+	// Read error message
+	ws.ReadMessage()
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(order) != 2 {
+		t.Errorf("Expected 2 hooks called, got %d", len(order))
+	}
+	if len(order) >= 2 && (order[0] != 1 || order[1] != 2) {
+		t.Errorf("Expected order [1,2], got %v", order)
+	}
+}
+
+func TestOnDisconnectHookCalled(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var called int32
+	server.OnDisconnect(func(ctx context.Context, conn *Conn) {
+		atomic.AddInt32(&called, 1)
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+
+	// Wait for connection to be registered
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the connection
+	ws.Close()
+
+	// Wait for disconnect hook to be called
+	time.Sleep(50 * time.Millisecond)
+
+	if atomic.LoadInt32(&called) != 1 {
+		t.Errorf("Expected disconnect hook called once, got %d", atomic.LoadInt32(&called))
+	}
+}
+
+func TestOnDisconnectHookHasUserID(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var capturedUserID string
+	var mu sync.Mutex
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		conn.SetUserID("user123")
+		return nil
+	})
+
+	server.OnDisconnect(func(ctx context.Context, conn *Conn) {
+		mu.Lock()
+		capturedUserID = conn.UserID()
+		mu.Unlock()
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+
+	// Wait for connection to be registered
+	time.Sleep(50 * time.Millisecond)
+
+	// Close the connection
+	ws.Close()
+
+	// Wait for disconnect hook to be called
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if capturedUserID != "user123" {
+		t.Errorf("Expected UserID 'user123', got '%s'", capturedUserID)
+	}
+}
+
+func TestHookContextContainsConnection(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var capturedConnID uint64
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		capturedConnID = conn.ID()
+		// Verify we have access to the connection context
+		if conn.Context() == nil {
+			t.Error("Expected non-nil context")
+		}
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	if capturedConnID == 0 {
+		t.Error("Expected non-zero connection ID")
+	}
+}
+
+func TestConfigSentOnConnect(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry, ServerOptions{
+		ReconnectInterval:    2000,
+		ReconnectMaxInterval: 60000,
+		HeartbeatInterval:    15000,
+		HeartbeatTimeout:     3000,
+	})
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	// Connect without using connectWS to inspect the raw config message
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer ws.Close()
+
+	// Read config message
+	_, data, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var msg ConfigMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if msg.Type != TypeConfig {
+		t.Errorf("Expected config type, got %s", msg.Type)
+	}
+	if msg.ReconnectInterval != 2000 {
+		t.Errorf("Expected ReconnectInterval 2000, got %d", msg.ReconnectInterval)
+	}
+	if msg.ReconnectMaxInterval != 60000 {
+		t.Errorf("Expected ReconnectMaxInterval 60000, got %d", msg.ReconnectMaxInterval)
+	}
+	if msg.HeartbeatInterval != 15000 {
+		t.Errorf("Expected HeartbeatInterval 15000, got %d", msg.HeartbeatInterval)
+	}
+	if msg.HeartbeatTimeout != 3000 {
+		t.Errorf("Expected HeartbeatTimeout 3000, got %d", msg.HeartbeatTimeout)
+	}
+}
+
+func TestServerOptionsDefaults(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	if err := registry.Register(handlers); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	// Connect without using connectWS to inspect the raw config message
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer ws.Close()
+
+	// Read config message
+	_, data, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	var msg ConfigMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	// Check defaults
+	if msg.ReconnectInterval != 1000 {
+		t.Errorf("Expected default ReconnectInterval 1000, got %d", msg.ReconnectInterval)
+	}
+	if msg.ReconnectMaxInterval != 30000 {
+		t.Errorf("Expected default ReconnectMaxInterval 30000, got %d", msg.ReconnectMaxInterval)
+	}
+	if msg.HeartbeatInterval != 30000 {
+		t.Errorf("Expected default HeartbeatInterval 30000, got %d", msg.HeartbeatInterval)
+	}
+	if msg.HeartbeatTimeout != 5000 {
+		t.Errorf("Expected default HeartbeatTimeout 5000, got %d", msg.HeartbeatTimeout)
+	}
 }

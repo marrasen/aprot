@@ -4,14 +4,15 @@ import "fmt"
 
 // Standard error codes.
 const (
-	CodeParseError     = -32700
-	CodeInvalidRequest = -32600
-	CodeMethodNotFound = -32601
-	CodeInvalidParams  = -32602
-	CodeInternalError  = -32603
-	CodeCanceled       = -32800
-	CodeUnauthorized   = -32001
-	CodeForbidden      = -32003
+	CodeParseError          = -32700
+	CodeInvalidRequest      = -32600
+	CodeMethodNotFound      = -32601
+	CodeInvalidParams       = -32602
+	CodeInternalError       = -32603
+	CodeCanceled            = -32800
+	CodeUnauthorized        = -32001
+	CodeConnectionRejected  = -32002
+	CodeForbidden           = -32003
 )
 
 // ProtocolError represents an error that can be sent to the client.
@@ -70,4 +71,9 @@ func ErrUnauthorized(message string) *ProtocolError {
 // ErrForbidden returns a forbidden error.
 func ErrForbidden(message string) *ProtocolError {
 	return NewError(CodeForbidden, message)
+}
+
+// ErrConnectionRejected returns a connection rejected error.
+func ErrConnectionRejected(message string) *ProtocolError {
+	return NewError(CodeConnectionRejected, message)
 }

@@ -26,9 +26,10 @@ type Conn struct {
 	requests map[string]context.CancelFunc
 	mu       sync.Mutex
 	closed   bool
-	userID   string // associated user ID (set by middleware)
-	id       uint64 // unique connection ID
+	userID   string          // associated user ID (set by middleware)
+	id       uint64          // unique connection ID
 	info     ConnInfo
+	ctx      context.Context // Context from HTTP upgrade request
 }
 
 // SetUserID associates this connection with a user ID.
@@ -75,18 +76,25 @@ func (c *Conn) Info() ConnInfo {
 	return c.info
 }
 
+// Context returns the context from the HTTP upgrade request.
+// This is useful for accessing request-scoped values like zerolog loggers.
+func (c *Conn) Context() context.Context {
+	return c.ctx
+}
+
 // RemoteAddr returns the remote address of the connection.
 func (c *Conn) RemoteAddr() string {
 	return c.info.RemoteAddr
 }
 
-func newConn(ws *websocket.Conn, server *Server, id uint64, r *http.Request) *Conn {
+func newConn(ws *websocket.Conn, server *Server, id uint64, r *http.Request, ctx context.Context) *Conn {
 	return &Conn{
 		ws:       ws,
 		server:   server,
 		send:     make(chan []byte, 256),
 		requests: make(map[string]context.CancelFunc),
 		id:       id,
+		ctx:      ctx,
 		info: ConnInfo{
 			RemoteAddr: r.RemoteAddr,
 			Header:     r.Header.Clone(),
@@ -162,6 +170,43 @@ func (c *Conn) sendPong() {
 		Type: TypePong,
 	}
 	c.sendJSON(msg)
+}
+
+// sendConnectionRejected sends an error message directly to the WebSocket
+// before the pumps are started. Used when a connect hook rejects the connection.
+func (c *Conn) sendConnectionRejected(err error) {
+	code := CodeConnectionRejected
+	message := "connection rejected"
+	if perr, ok := err.(*ProtocolError); ok {
+		code = perr.Code
+		message = perr.Message
+	} else if err != nil {
+		message = err.Error()
+	}
+
+	msg := ErrorMessage{
+		Type:    TypeError,
+		ID:      "",
+		Code:    code,
+		Message: message,
+	}
+	data, _ := json.Marshal(msg)
+	c.ws.WriteMessage(websocket.TextMessage, data)
+}
+
+// sendConfig sends the server configuration directly to the WebSocket.
+// Called before the pumps are started.
+func (c *Conn) sendConfig(opts ServerOptions) {
+	msg := ConfigMessage{
+		Type:                 TypeConfig,
+		ReconnectInterval:    opts.ReconnectInterval,
+		ReconnectMaxInterval: opts.ReconnectMaxInterval,
+		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
+		HeartbeatInterval:    opts.HeartbeatInterval,
+		HeartbeatTimeout:     opts.HeartbeatTimeout,
+	}
+	data, _ := json.Marshal(msg)
+	c.ws.WriteMessage(websocket.TextMessage, data)
 }
 
 func (c *Conn) registerRequest(id string, cancel context.CancelFunc) {

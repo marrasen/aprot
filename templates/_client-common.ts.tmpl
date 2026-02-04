@@ -264,6 +264,9 @@ export class ApiClient {
     private handleMessage(data: string): void {
         const msg = JSON.parse(data);
         switch (msg.type) {
+            case 'config':
+                this.applyConfig(msg);
+                break;
             case 'pong':
                 this.heartbeatPending = false;
                 break;
@@ -299,6 +302,35 @@ export class ApiClient {
                 }
                 break;
             }
+        }
+    }
+
+    private applyConfig(config: {
+        reconnectInterval?: number;
+        reconnectMaxInterval?: number;
+        reconnectMaxAttempts?: number;
+        heartbeatInterval?: number;
+        heartbeatTimeout?: number;
+    }): void {
+        if (config.reconnectInterval !== undefined) {
+            this.options.reconnectInterval = config.reconnectInterval;
+        }
+        if (config.reconnectMaxInterval !== undefined) {
+            this.options.reconnectMaxInterval = config.reconnectMaxInterval;
+        }
+        if (config.reconnectMaxAttempts !== undefined) {
+            this.options.reconnectMaxAttempts = config.reconnectMaxAttempts;
+        }
+        if (config.heartbeatInterval !== undefined) {
+            this.options.heartbeatInterval = config.heartbeatInterval;
+            // Restart heartbeat with new interval if already running
+            if (this.heartbeatTimer) {
+                this.stopHeartbeat();
+                this.startHeartbeat();
+            }
+        }
+        if (config.heartbeatTimeout !== undefined) {
+            this.options.heartbeatTimeout = config.heartbeatTimeout;
         }
     }
 

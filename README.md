@@ -14,10 +14,12 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 - **Enum support** - Register Go enums and generate TypeScript const objects with type safety
 - **React hooks** - Optional React integration with query/mutation hooks
 - **Middleware support** - Add cross-cutting concerns like authentication, logging, and rate limiting
+- **Connection lifecycle hooks** - React to client connect/disconnect events, reject connections
 - **User-targeted push** - Send push messages to specific users across multiple connections
 - **Progress reporting** - Built-in support for long-running operations with progress updates
 - **Request cancellation** - Clients can cancel in-flight requests via AbortController
 - **Server push** - Broadcast events to all connected clients
+- **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
 - **JSON-RPC style protocol** - Simple, debuggable wire format
 
 ## Installation
@@ -351,6 +353,53 @@ func LoggingMiddleware() aprot.Middleware {
 }
 ```
 
+### Connection Lifecycle Hooks
+
+React to connection events with `OnConnect` and `OnDisconnect` hooks:
+
+```go
+server := aprot.NewServer(registry)
+
+// Called when a client connects (before message processing starts)
+server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+    log.Printf("Client connected: %d from %s", conn.ID(), conn.RemoteAddr())
+
+    // Reject connection by returning an error
+    if server.ConnectionCount() >= maxConnections {
+        return aprot.ErrConnectionRejected("max connections reached")
+    }
+
+    // Access HTTP request context (useful for zerolog integration)
+    logger := log.Ctx(conn.Context())
+    logger.Info().Msg("new connection")
+
+    return nil
+})
+
+// Called when a client disconnects (UserID still available)
+server.OnDisconnect(func(ctx context.Context, conn *aprot.Conn) {
+    log.Printf("Client disconnected: %d (user: %s)", conn.ID(), conn.UserID())
+})
+```
+
+Multiple hooks can be registered and are called in order. If an `OnConnect` hook returns an error, the connection is rejected and subsequent hooks are not called.
+
+### Server Options
+
+Configure client reconnection and heartbeat behavior:
+
+```go
+server := aprot.NewServer(registry, aprot.ServerOptions{
+    ReconnectInterval:    2000,  // Initial reconnect delay (ms), default: 1000
+    ReconnectMaxInterval: 60000, // Max reconnect delay (ms), default: 30000
+    ReconnectMaxAttempts: 10,    // Max attempts (0=unlimited), default: 0
+    HeartbeatInterval:    15000, // Heartbeat interval (ms), default: 30000
+    HeartbeatTimeout:     3000,  // Heartbeat timeout (ms), default: 5000
+})
+```
+
+The server automatically sends this configuration to clients on connect. TypeScript clients apply it automatically, overriding any client-side defaults.
+
 ### Error Handling
 
 #### Server-side (Go)
@@ -403,6 +452,7 @@ Standard error codes:
 | -32603 | `CodeInternalError` | Internal server error |
 | -32800 | `CodeCanceled` | Request canceled |
 | -32001 | `CodeUnauthorized` | Not authenticated |
+| -32002 | `CodeConnectionRejected` | Connection rejected by hook |
 | -32003 | `CodeForbidden` | Not authorized |
 
 #### Client-side (TypeScript)
@@ -694,6 +744,7 @@ Messages are JSON with a `type` field:
 | server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |
 | client→server | cancel | `{"type":"cancel","id":"1"}` |
 | server→client | push | `{"type":"push","event":"UserCreated","data":{...}}` |
+| server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
 
 ## Examples
 
