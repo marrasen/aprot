@@ -168,6 +168,18 @@ func (h *PublicHandlers) SendNotification(ctx context.Context, req *SystemNotifi
 	return req, nil
 }
 
+// GetTask retrieves a task by ID (demo: returns hardcoded task).
+func (h *PublicHandlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskResponse, error) {
+	if req.ID == "" {
+		return nil, aprot.ErrInvalidParams("id is required")
+	}
+	return &GetTaskResponse{
+		ID:     req.ID,
+		Name:   "Example Task",
+		Status: TaskStatusRunning,
+	}, nil
+}
+
 // Login authenticates a user and returns a token.
 // This is a public method that doesn't require authentication.
 func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {

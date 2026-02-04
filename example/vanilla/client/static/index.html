@@ -54,6 +54,13 @@
         .users-list li { padding: 10px; background: #f8f9fa; margin: 5px 0; border-radius: 4px; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 13px; font-weight: 500; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-running { background: #cce5ff; color: #004085; }
+        .status-completed { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        #taskInfo { margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; }
+        #taskInfo div { margin: 5px 0; }
     </style>
 </head>
 <body>
@@ -77,6 +84,18 @@
             <button onclick="listUsers()">Refresh List</button>
             <ul id="usersList" class="users-list"><li>No users yet</li></ul>
         </div>
+    </div>
+    <div class="card">
+        <h2>Get Task (Enum Demo)</h2>
+        <p style="color: #666; font-size: 14px; margin-bottom: 15px;">
+            Demonstrates using TypeScript enums for type-safe status handling.
+        </p>
+        <div class="form-group">
+            <label>Task ID</label>
+            <input type="text" id="taskId" placeholder="task_123" value="task_1">
+        </div>
+        <button onclick="getTask()">Get Task</button>
+        <div id="taskInfo"></div>
     </div>
     <div class="card">
         <h2>Batch Processing (with Progress & Cancellation)</h2>

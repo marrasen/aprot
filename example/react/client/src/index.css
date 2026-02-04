@@ -92,3 +92,10 @@ button.danger:hover { background: #c82333; }
 @media (max-width: 768px) {
   .grid { grid-template-columns: 1fr; }
 }
+
+/* Status badge styles for enum demo */
+.status-badge { padding: 4px 8px; border-radius: 4px; font-size: 13px; font-weight: 500; }
+.status-pending { background: #fff3cd; color: #856404; }
+.status-running { background: #cce5ff; color: #004085; }
+.status-completed { background: #d4edda; color: #155724; }
+.status-failed { background: #f8d7da; color: #721c24; }

@@ -6,6 +6,9 @@ import "github.com/marrasen/aprot"
 func NewRegistry() *aprot.Registry {
 	registry := aprot.NewRegistry()
 
+	// Register enums
+	registry.RegisterEnum(TaskStatusValues())
+
 	// Register handlers
 	registry.Register(&Handlers{})
 

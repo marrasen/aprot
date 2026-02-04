@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"embed"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,9 +41,10 @@ type GeneratorOptions struct {
 
 // Generator generates TypeScript client code from a registry.
 type Generator struct {
-	registry *Registry
-	options  GeneratorOptions
-	types    map[reflect.Type]string
+	registry       *Registry
+	options        GeneratorOptions
+	types          map[reflect.Type]string
+	collectedEnums map[reflect.Type]*EnumInfo // enums used by current handler
 }
 
 // NewGenerator creates a new TypeScript generator.
@@ -52,7 +54,8 @@ func NewGenerator(registry *Registry) *Generator {
 		options: GeneratorOptions{
 			Mode: OutputVanilla,
 		},
-		types: make(map[reflect.Type]string),
+		types:          make(map[reflect.Type]string),
+		collectedEnums: make(map[reflect.Type]*EnumInfo),
 	}
 }
 
@@ -73,6 +76,18 @@ type templateData struct {
 	Methods          []methodData
 	PushEvents       []pushEventData
 	CustomErrorCodes []errorCodeData
+	Enums            []enumTemplateData
+}
+
+type enumTemplateData struct {
+	Name     string
+	IsString bool
+	Values   []enumValueTemplateData
+}
+
+type enumValueTemplateData struct {
+	Name  string // e.g., "Pending"
+	Value string // e.g., `"pending"` (quoted) or `0`
 }
 
 type interfaceData struct {
@@ -146,7 +161,8 @@ func (g *Generator) Generate() (map[string]string, error) {
 	}
 
 	for _, group := range g.registry.Groups() {
-		g.types = make(map[reflect.Type]string) // Reset types per group
+		g.types = make(map[reflect.Type]string)           // Reset types per group
+		g.collectedEnums = make(map[reflect.Type]*EnumInfo) // Reset enums per group
 
 		// Collect types for this group
 		for _, info := range group.Handlers {
@@ -266,6 +282,27 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		})
 	}
 
+	// Build enums
+	for _, enumInfo := range g.collectedEnums {
+		ed := enumTemplateData{
+			Name:     enumInfo.Name,
+			IsString: enumInfo.IsString,
+		}
+		for _, v := range enumInfo.Values {
+			var val string
+			if enumInfo.IsString {
+				val = fmt.Sprintf(`"%s"`, v.Value)
+			} else {
+				val = fmt.Sprintf("%d", v.Value)
+			}
+			ed.Values = append(ed.Values, enumValueTemplateData{
+				Name:  v.Name,
+				Value: val,
+			})
+		}
+		data.Enums = append(data.Enums, ed)
+	}
+
 	templateName := "client.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		templateName = "client-react.ts.tmpl"
@@ -342,6 +379,27 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 		})
 	}
 
+	// Build enums
+	for _, enumInfo := range g.collectedEnums {
+		ed := enumTemplateData{
+			Name:     enumInfo.Name,
+			IsString: enumInfo.IsString,
+		}
+		for _, v := range enumInfo.Values {
+			var val string
+			if enumInfo.IsString {
+				val = fmt.Sprintf(`"%s"`, v.Value)
+			} else {
+				val = fmt.Sprintf("%d", v.Value)
+			}
+			ed.Values = append(ed.Values, enumValueTemplateData{
+				Name:  v.Name,
+				Value: val,
+			})
+		}
+		data.Enums = append(data.Enums, ed)
+	}
+
 	return data
 }
 
@@ -361,6 +419,12 @@ func (g *Generator) collectType(t reflect.Type) {
 		if ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
 		}
+
+		// Check if field type is a registered enum
+		if enumInfo := g.registry.GetEnum(ft); enumInfo != nil {
+			g.collectedEnums[ft] = enumInfo
+		}
+
 		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" {
 			g.collectType(ft)
 		}
@@ -394,6 +458,11 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 }
 
 func (g *Generator) goTypeToTS(t reflect.Type) string {
+	// Check if this is a registered enum type
+	if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
+		return enumInfo.Name + "Type"
+	}
+
 	switch t.Kind() {
 	case reflect.String:
 		return "string"

@@ -6,6 +6,9 @@ import {
   useProcessBatchMutation,
   useUserCreated,
   useSystemNotification,
+  useGetTaskMutation,
+  TaskStatus,
+  TaskStatusType,
 } from './api/handlers'
 
 // Initialize client
@@ -97,6 +100,99 @@ function UsersList() {
           ))
         )}
       </ul>
+    </div>
+  )
+}
+
+// Helper to get status label using enum - demonstrates type-safe enum usage
+function getStatusLabel(status: TaskStatusType): string {
+  switch (status) {
+    case TaskStatus.Pending:
+      return '⏳ Pending'
+    case TaskStatus.Running:
+      return '🔄 Running'
+    case TaskStatus.Completed:
+      return '✅ Completed'
+    case TaskStatus.Failed:
+      return '❌ Failed'
+    default:
+      return status
+  }
+}
+
+// Helper to get status badge class using enum
+function getStatusClass(status: TaskStatusType): string {
+  switch (status) {
+    case TaskStatus.Pending:
+      return 'status-pending'
+    case TaskStatus.Running:
+      return 'status-running'
+    case TaskStatus.Completed:
+      return 'status-completed'
+    case TaskStatus.Failed:
+      return 'status-failed'
+    default:
+      return ''
+  }
+}
+
+function TaskViewer({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  const [taskId, setTaskId] = useState('task_1')
+  const { mutate, data: task, isLoading, error } = useGetTaskMutation()
+
+  const handleGetTask = async () => {
+    if (!taskId) {
+      onLog('Please enter a task ID', 'error')
+      return
+    }
+    try {
+      const result = await mutate({ id: taskId })
+      onLog(`Got task: ${JSON.stringify(result)}`, 'response')
+
+      // Demonstrate type-safe enum comparison
+      if (result.status === TaskStatus.Running) {
+        onLog(`Task ${result.id} is currently running`, 'progress')
+      } else if (result.status === TaskStatus.Completed) {
+        onLog(`Task ${result.id} has completed`, 'response')
+      } else if (result.status === TaskStatus.Failed) {
+        onLog(`Task ${result.id} has failed`, 'error')
+      }
+    } catch (err) {
+      onLog(`Error: ${(err as Error).message}`, 'error')
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Get Task (Enum Demo)</h2>
+      <p style={{ color: '#666', fontSize: 14, marginBottom: 15 }}>
+        Demonstrates using TypeScript enums for type-safe status handling.
+      </p>
+      <div className="form-group">
+        <label>Task ID</label>
+        <input
+          type="text"
+          value={taskId}
+          onChange={(e) => setTaskId(e.target.value)}
+          placeholder="task_123"
+        />
+      </div>
+      <button onClick={handleGetTask} disabled={isLoading}>
+        {isLoading ? 'Loading...' : 'Get Task'}
+      </button>
+      {error && <p style={{ color: 'red' }}>{error.message}</p>}
+      {task && (
+        <div style={{ marginTop: 15, padding: 10, background: '#f8f9fa', borderRadius: 4 }}>
+          <div><strong>ID:</strong> {task.id}</div>
+          <div><strong>Name:</strong> {task.name}</div>
+          <div>
+            <strong>Status:</strong>{' '}
+            <span className={`status-badge ${getStatusClass(task.status)}`}>
+              {getStatusLabel(task.status)}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -220,6 +316,7 @@ function AppContent() {
         <CreateUserForm onLog={addLog} />
         <UsersList />
       </div>
+      <TaskViewer onLog={addLog} />
       <BatchProcessor onLog={addLog} />
       <EventLog logs={logs} onClear={() => setLogs([])} />
     </>

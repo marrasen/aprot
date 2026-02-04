@@ -8,6 +8,9 @@ import "github.com/marrasen/aprot"
 func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Registry {
 	registry := aprot.NewRegistry()
 
+	// Register enums
+	registry.RegisterEnum(TaskStatusValues())
+
 	// Register public handlers (no middleware)
 	publicHandlers := NewPublicHandlers(state)
 	registry.Register(publicHandlers)

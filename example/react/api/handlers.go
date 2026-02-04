@@ -140,3 +140,15 @@ func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotification
 	}
 	return req, nil
 }
+
+// GetTask retrieves a task by ID (demo: returns hardcoded task).
+func (h *Handlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskResponse, error) {
+	if req.ID == "" {
+		return nil, aprot.ErrInvalidParams("id is required")
+	}
+	return &GetTaskResponse{
+		ID:     req.ID,
+		Name:   "Example Task",
+		Status: TaskStatusRunning,
+	}, nil
+}

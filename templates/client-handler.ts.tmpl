@@ -3,6 +3,15 @@
 
 import { ApiClient, RequestOptions, PushHandler } from './client';
 
+{{range .Enums -}}
+export const {{.Name}} = {
+{{- range .Values}}
+    {{.Name}}: {{.Value}},
+{{- end}}
+} as const;
+export type {{.Name}}Type = typeof {{.Name}}[keyof typeof {{.Name}}];
+
+{{end -}}
 {{range .Interfaces -}}
 export interface {{.Name}} {
 {{- range .Fields}}

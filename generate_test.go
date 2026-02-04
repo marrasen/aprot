@@ -3,6 +3,7 @@ package aprot
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -35,6 +36,59 @@ type UserUpdatedEvent struct {
 	Name string `json:"name"`
 }
 
+// String-based enum for testing
+type TaskStatus string
+
+const (
+	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusCompleted TaskStatus = "completed"
+)
+
+func TaskStatusValues() []TaskStatus {
+	return []TaskStatus{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted}
+}
+
+// Int-based enum for testing (with Stringer interface)
+type Priority int
+
+const (
+	PriorityLow Priority = iota
+	PriorityMedium
+	PriorityHigh
+)
+
+func (p Priority) String() string {
+	switch p {
+	case PriorityLow:
+		return "Low"
+	case PriorityMedium:
+		return "Medium"
+	case PriorityHigh:
+		return "High"
+	default:
+		return fmt.Sprintf("Priority(%d)", p)
+	}
+}
+
+func PriorityValues() []Priority {
+	return []Priority{PriorityLow, PriorityMedium, PriorityHigh}
+}
+
+// Request/Response using enums
+type CreateTaskRequest struct {
+	Name     string     `json:"name"`
+	Status   TaskStatus `json:"status"`
+	Priority Priority   `json:"priority"`
+}
+
+type CreateTaskResponse struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Status   TaskStatus `json:"status"`
+	Priority Priority   `json:"priority"`
+}
+
 // Test handler
 type TestHandlers struct{}
 
@@ -44,6 +98,13 @@ func (h *TestHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (
 
 func (h *TestHandlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
 	return &GetUserResponse{ID: req.ID, Name: "Test User"}, nil
+}
+
+// Handler with enum types
+type TaskHandlers struct{}
+
+func (h *TaskHandlers) CreateTask(ctx context.Context, req *CreateTaskRequest) (*CreateTaskResponse, error) {
+	return &CreateTaskResponse{ID: "task_1", Name: req.Name, Status: req.Status, Priority: req.Priority}, nil
 }
 
 func TestRegistry(t *testing.T) {
@@ -291,4 +352,158 @@ func TestGenerateOutput(t *testing.T) {
 
 	// Print the generated code for manual inspection
 	t.Logf("Generated TypeScript:\n%s", buf.String())
+}
+
+func TestRegisterEnum(t *testing.T) {
+	registry := NewRegistry()
+
+	// Test string-based enum
+	err := registry.RegisterEnum(TaskStatusValues())
+	if err != nil {
+		t.Fatalf("RegisterEnum (string) failed: %v", err)
+	}
+
+	// Test int-based enum with Stringer
+	err = registry.RegisterEnum(PriorityValues())
+	if err != nil {
+		t.Fatalf("RegisterEnum (int) failed: %v", err)
+	}
+
+	enums := registry.Enums()
+	if len(enums) != 2 {
+		t.Errorf("Expected 2 enums, got %d", len(enums))
+	}
+
+	// Verify enum info
+	for _, e := range enums {
+		if e.Name == "TaskStatus" {
+			if !e.IsString {
+				t.Error("TaskStatus should be IsString=true")
+			}
+			if len(e.Values) != 3 {
+				t.Errorf("TaskStatus should have 3 values, got %d", len(e.Values))
+			}
+			// Check value names are capitalized
+			for _, v := range e.Values {
+				if v.Name == "" {
+					t.Error("Enum value name should not be empty")
+				}
+				// First char should be uppercase
+				if v.Name[0] < 'A' || v.Name[0] > 'Z' {
+					t.Errorf("Enum value name should be capitalized, got %s", v.Name)
+				}
+			}
+		}
+		if e.Name == "Priority" {
+			if e.IsString {
+				t.Error("Priority should be IsString=false")
+			}
+			if len(e.Values) != 3 {
+				t.Errorf("Priority should have 3 values, got %d", len(e.Values))
+			}
+			// Check int values use Stringer names
+			expectedNames := []string{"Low", "Medium", "High"}
+			for i, v := range e.Values {
+				if v.Name != expectedNames[i] {
+					t.Errorf("Expected name %s, got %s", expectedNames[i], v.Name)
+				}
+			}
+		}
+	}
+}
+
+func TestRegisterEnumErrors(t *testing.T) {
+	registry := NewRegistry()
+
+	// Test non-slice
+	err := registry.RegisterEnum("not a slice")
+	if err == nil {
+		t.Error("Expected error for non-slice")
+	}
+
+	// Test empty slice
+	err = registry.RegisterEnum([]TaskStatus{})
+	if err == nil {
+		t.Error("Expected error for empty slice")
+	}
+}
+
+func TestGenerateWithEnums(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterEnum(TaskStatusValues())
+	registry.RegisterEnum(PriorityValues())
+	registry.Register(&TaskHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Check for string enum const object
+	if !strings.Contains(output, "export const TaskStatus = {") {
+		t.Error("Missing TaskStatus enum const")
+	}
+	if !strings.Contains(output, `Pending: "pending"`) {
+		t.Error("Missing Pending enum value")
+	}
+	if !strings.Contains(output, "export type TaskStatusType = typeof TaskStatus[keyof typeof TaskStatus]") {
+		t.Error("Missing TaskStatusType type alias")
+	}
+
+	// Check for int enum const object
+	if !strings.Contains(output, "export const Priority = {") {
+		t.Error("Missing Priority enum const")
+	}
+	if !strings.Contains(output, "Low: 0") {
+		t.Error("Missing Low enum value")
+	}
+	if !strings.Contains(output, "export type PriorityType = typeof Priority[keyof typeof Priority]") {
+		t.Error("Missing PriorityType type alias")
+	}
+
+	// Check that struct fields use enum types
+	if !strings.Contains(output, "status: TaskStatusType") {
+		t.Error("Field should use TaskStatusType instead of string")
+	}
+	if !strings.Contains(output, "priority: PriorityType") {
+		t.Error("Field should use PriorityType instead of number")
+	}
+
+	// Print for inspection
+	t.Logf("Generated TypeScript with enums:\n%s", output)
+}
+
+func TestGenerateMultipleFilesWithEnums(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterEnum(TaskStatusValues())
+	registry.RegisterEnum(PriorityValues())
+	registry.Register(&TaskHandlers{})
+
+	gen := NewGenerator(registry)
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// Check handler file has enums
+	handlerContent, ok := files["task-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected task-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	if !strings.Contains(handlerContent, "export const TaskStatus = {") {
+		t.Error("Missing TaskStatus in handler file")
+	}
+	if !strings.Contains(handlerContent, "export const Priority = {") {
+		t.Error("Missing Priority in handler file")
+	}
+	if !strings.Contains(handlerContent, "status: TaskStatusType") {
+		t.Error("Handler file should use TaskStatusType for status field")
+	}
 }

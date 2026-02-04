@@ -1,4 +1,5 @@
 import { ApiClient } from './api/handlers';
+import { TaskStatus, TaskStatusType } from './api/public-handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
@@ -59,6 +60,76 @@ async function listUsers(): Promise<void> {
         }
     } catch (err) {
         log(`Error listing users: ${(err as Error).message}`, 'error');
+    }
+}
+
+// Helper to get a human-readable label for task status using the enum
+function getStatusLabel(status: TaskStatusType): string {
+    switch (status) {
+        case TaskStatus.Pending:
+            return '⏳ Pending';
+        case TaskStatus.Running:
+            return '🔄 Running';
+        case TaskStatus.Completed:
+            return '✅ Completed';
+        case TaskStatus.Failed:
+            return '❌ Failed';
+        default:
+            return status;
+    }
+}
+
+// Helper to get CSS class for status badge
+function getStatusClass(status: TaskStatusType): string {
+    switch (status) {
+        case TaskStatus.Pending:
+            return 'status-pending';
+        case TaskStatus.Running:
+            return 'status-running';
+        case TaskStatus.Completed:
+            return 'status-completed';
+        case TaskStatus.Failed:
+            return 'status-failed';
+        default:
+            return '';
+    }
+}
+
+async function getTask(): Promise<void> {
+    if (!client) return;
+    const taskId = (document.getElementById('taskId') as HTMLInputElement).value.trim();
+    if (!taskId) {
+        log('Please enter a task ID', 'error');
+        return;
+    }
+    try {
+        const task = await client.getTask({ id: taskId });
+
+        // Display task info with enum-based status
+        const taskInfoEl = document.getElementById('taskInfo')!;
+        const statusLabel = getStatusLabel(task.status);
+        const statusClass = getStatusClass(task.status);
+
+        taskInfoEl.innerHTML = `
+            <div><strong>ID:</strong> ${task.id}</div>
+            <div><strong>Name:</strong> ${task.name}</div>
+            <div><strong>Status:</strong> <span class="status-badge ${statusClass}">${statusLabel}</span></div>
+        `;
+
+        // Demonstrate enum comparison
+        if (task.status === TaskStatus.Running) {
+            log(`Task ${task.id} is currently running`, 'progress');
+        } else if (task.status === TaskStatus.Completed) {
+            log(`Task ${task.id} has completed`, 'response');
+        } else if (task.status === TaskStatus.Failed) {
+            log(`Task ${task.id} has failed`, 'error');
+        } else {
+            log(`Task ${task.id} status: ${task.status}`, 'response');
+        }
+
+        log(`Got task: ${JSON.stringify(task)}`, 'response');
+    } catch (err) {
+        log(`Error: ${(err as Error).message}`, 'error');
     }
 }
 
@@ -141,6 +212,7 @@ declare global {
     interface Window {
         createUser: typeof createUser;
         listUsers: typeof listUsers;
+        getTask: typeof getTask;
         processBatch: typeof processBatch;
         cancelBatch: typeof cancelBatch;
         clearLog: typeof clearLog;
@@ -149,6 +221,7 @@ declare global {
 
 window.createUser = createUser;
 window.listUsers = listUsers;
+window.getTask = getTask;
 window.processBatch = processBatch;
 window.cancelBatch = cancelBatch;
 window.clearLog = clearLog;
