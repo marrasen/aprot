@@ -14,8 +14,15 @@ const (
 	TypePush     MessageType = "push"
 	TypePing     MessageType = "ping"
 	TypePong     MessageType = "pong"
-	TypeConfig   MessageType = "config"
+	TypeConfig    MessageType = "config"
+	TypeConnected MessageType = "connected"
 )
+
+// ConnectedMessage is sent as the first SSE event to provide the connection ID.
+type ConnectedMessage struct {
+	Type         MessageType `json:"type"`
+	ConnectionID string      `json:"connectionId"`
+}
 
 // IncomingMessage represents a message from client to server.
 type IncomingMessage struct {

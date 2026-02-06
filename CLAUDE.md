@@ -71,4 +71,9 @@ When adding or changing user-facing features (new types, new API patterns, new o
 
 1. Edit templates in `templates/` directory
 2. Shared code goes in `_client-common.ts.tmpl` as `{{define "block-name"}}`
-3. Run `go generate ./...` in examples to test output
+3. **Always** regenerate and verify TypeScript compiles after template changes:
+   ```bash
+   cd example/vanilla/tools/generate && go run main.go
+   cd example/react/tools/generate && go run main.go
+   cd example/react/client && npx tsc --noEmit
+   ```

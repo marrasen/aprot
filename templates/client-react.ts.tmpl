@@ -12,8 +12,130 @@ import { useState, useEffect, useCallback, useRef, useContext, createContext } f
 
 {{template "get-websocket-url" .}}
 
-export class ApiClient {
+// Internal transport interface
+interface ClientTransport {
+    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void>;
+    send(message: object): void;
+    disconnect(): void;
+    isConnected(): boolean;
+}
+
+class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
+
+    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+        return new Promise((resolve) => {
+            this.ws = new WebSocket(url);
+            this.ws.onopen = () => resolve();
+            this.ws.onerror = () => {};
+            this.ws.onmessage = (e) => onMessage(e.data);
+            this.ws.onclose = () => {
+                this.ws = null;
+                onClose();
+            };
+        });
+    }
+
+    send(message: object): void {
+        this.ws?.send(JSON.stringify(message));
+    }
+
+    disconnect(): void {
+        this.ws?.close();
+        this.ws = null;
+    }
+
+    isConnected(): boolean {
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+    }
+}
+
+class SSETransport implements ClientTransport {
+    private eventSource: EventSource | null = null;
+    private connectionId: string | null = null;
+    private baseUrl: string = '';
+
+    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+        this.baseUrl = url;
+
+        return new Promise((resolve) => {
+            this.eventSource = new EventSource(url);
+
+            this.eventSource.addEventListener('connected', (e: MessageEvent) => {
+                const msg = JSON.parse(e.data);
+                this.connectionId = msg.connectionId;
+                resolve();
+            });
+
+            this.eventSource.addEventListener('config', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('response', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('error', (e: MessageEvent) => {
+                if (e.data) {
+                    onMessage(e.data);
+                } else {
+                    this.eventSource?.close();
+                    this.eventSource = null;
+                    this.connectionId = null;
+                    onClose();
+                }
+            });
+
+            this.eventSource.addEventListener('progress', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('push', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+        });
+    }
+
+    send(message: object): void {
+        if (!this.connectionId) return;
+        const msg = message as any;
+
+        if (msg.type === 'request') {
+            fetch(this.baseUrl + '/rpc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    connectionId: this.connectionId,
+                    id: msg.id,
+                    method: msg.method,
+                    params: msg.params,
+                }),
+            }).catch(() => {});
+        } else if (msg.type === 'cancel') {
+            fetch(this.baseUrl + '/cancel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    connectionId: this.connectionId,
+                    id: msg.id,
+                }),
+            }).catch(() => {});
+        }
+    }
+
+    disconnect(): void {
+        this.eventSource?.close();
+        this.eventSource = null;
+        this.connectionId = null;
+    }
+
+    isConnected(): boolean {
+        return this.eventSource !== null && this.connectionId !== null;
+    }
+}
+
+export class ApiClient {
+    private transport: ClientTransport;
     private url: string;
     private options: Required<ApiClientOptions>;
     private requestId = 0;
@@ -34,6 +156,9 @@ export class ApiClient {
     constructor(url: string, options?: ApiClientOptions) {
         this.url = url;
         this.options = { ...defaultOptions, ...options };
+        this.transport = this.options.transport === 'sse'
+            ? new SSETransport()
+            : new WebSocketTransport();
     }
 
     connect(): Promise<void> {
@@ -45,52 +170,44 @@ export class ApiClient {
     }
 
     private doConnect(): Promise<void> {
-        return new Promise((resolve, reject) => {
-            this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
-            this.ws = new WebSocket(this.url);
+        this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
-            this.ws.onopen = () => {
-                this.reconnectAttempts = 0;
-                this.setState('connected');
+        return this.transport.connect(
+            this.url,
+            (data) => this.handleMessage(data),
+            () => this.handleClose(),
+        ).then(() => {
+            this.reconnectAttempts = 0;
+            this.setState('connected');
+            if (this.options.transport !== 'sse') {
                 this.startHeartbeat();
-                resolve();
-            };
-
-            this.ws.onerror = () => {
-                // Error is followed by close, so we handle reconnect there
-            };
-
-            this.ws.onmessage = (e) => this.handleMessage(e.data);
-
-            this.ws.onclose = () => {
-                this.stopHeartbeat();
-                const wasConnected = this.state === 'connected';
-
-                // Reject all pending requests
-                for (const [, p] of this.pending) {
-                    p.reject(new Error('Connection closed'));
-                }
-                this.pending.clear();
-
-                if (this.manualDisconnect) {
-                    this.setState('disconnected');
-                    return;
-                }
-
-                // Auto-reconnect if enabled
-                if (this.options.reconnect && (
-                    this.options.reconnectMaxAttempts === 0 ||
-                    this.reconnectAttempts < this.options.reconnectMaxAttempts
-                )) {
-                    this.scheduleReconnect();
-                } else {
-                    this.setState('disconnected');
-                    if (!wasConnected) {
-                        reject(new Error('Connection failed'));
-                    }
-                }
-            };
+            }
+        }).catch(() => {
+            this.handleClose();
         });
+    }
+
+    private handleClose(): void {
+        this.stopHeartbeat();
+
+        for (const [, p] of this.pending) {
+            p.reject(new Error('Connection closed'));
+        }
+        this.pending.clear();
+
+        if (this.manualDisconnect) {
+            this.setState('disconnected');
+            return;
+        }
+
+        if (this.options.reconnect && (
+            this.options.reconnectMaxAttempts === 0 ||
+            this.reconnectAttempts < this.options.reconnectMaxAttempts
+        )) {
+            this.scheduleReconnect();
+        } else {
+            this.setState('disconnected');
+        }
     }
 
     private scheduleReconnect(): void {
@@ -105,9 +222,7 @@ export class ApiClient {
 
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
-            this.doConnect().catch(() => {
-                // Error handled in onclose
-            });
+            this.doConnect().catch(() => {});
         }, delay);
     }
 
@@ -118,8 +233,7 @@ export class ApiClient {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
-        this.ws?.close();
-        this.ws = null;
+        this.transport.disconnect();
         this.setState('disconnected');
     }
 
@@ -155,21 +269,19 @@ export class ApiClient {
         if (this.options.heartbeatInterval <= 0) return;
 
         this.heartbeatTimer = setInterval(() => {
-            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+            if (!this.transport.isConnected()) return;
 
             if (this.heartbeatPending) {
-                // Previous ping not answered, connection is dead
-                this.ws.close();
+                this.transport.disconnect();
                 return;
             }
 
             this.heartbeatPending = true;
-            this.ws.send(JSON.stringify({ type: 'ping' }));
+            this.transport.send({ type: 'ping' });
 
-            // Set timeout for pong response
             setTimeout(() => {
-                if (this.heartbeatPending && this.ws) {
-                    this.ws.close();
+                if (this.heartbeatPending && this.transport.isConnected()) {
+                    this.transport.disconnect();
                 }
             }, this.options.heartbeatTimeout);
         }, this.options.heartbeatInterval);
@@ -226,7 +338,7 @@ export class ApiClient {
 
     private request<T>(method: string, params: any, options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
-            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            if (!this.transport.isConnected()) {
                 reject(new Error('Not connected'));
                 return;
             }
@@ -234,12 +346,12 @@ export class ApiClient {
             this.pending.set(id, { resolve, reject, onProgress: options?.onProgress });
             if (options?.signal) {
                 options.signal.addEventListener('abort', () => {
-                    this.ws?.send(JSON.stringify({ type: 'cancel', id }));
+                    this.transport.send({ type: 'cancel', id });
                     this.pending.delete(id);
                     reject(new Error('Request aborted'));
                 });
             }
-            this.ws.send(JSON.stringify({ type: 'request', id, method, params }));
+            this.transport.send({ type: 'request', id, method, params });
         });
     }
 

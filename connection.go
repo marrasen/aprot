@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/go-json-experiment/json"
-	"github.com/gorilla/websocket"
 )
 
 // ConnInfo contains HTTP request information captured at connection time.
@@ -18,18 +17,17 @@ type ConnInfo struct {
 	Host       string
 }
 
-// Conn represents a single WebSocket connection.
+// Conn represents a single client connection.
 type Conn struct {
-	ws       *websocket.Conn
-	server   *Server
-	send     chan []byte
-	requests map[string]context.CancelFunc
-	mu       sync.Mutex
-	closed   bool
-	userID   string          // associated user ID (set by middleware)
-	id       uint64          // unique connection ID
-	info     ConnInfo
-	ctx      context.Context // Context from HTTP upgrade request
+	transport transport
+	server    *Server
+	requests  map[string]context.CancelFunc
+	mu        sync.Mutex
+	closed    bool
+	userID    string          // associated user ID (set by middleware)
+	id        uint64          // unique connection ID
+	info      ConnInfo
+	ctx       context.Context // Context from HTTP request
 }
 
 // SetUserID associates this connection with a user ID.
@@ -76,7 +74,7 @@ func (c *Conn) Info() ConnInfo {
 	return c.info
 }
 
-// Context returns the context from the HTTP upgrade request.
+// Context returns the context from the HTTP request.
 // This is useful for accessing request-scoped values like zerolog loggers.
 func (c *Conn) Context() context.Context {
 	return c.ctx
@@ -87,14 +85,13 @@ func (c *Conn) RemoteAddr() string {
 	return c.info.RemoteAddr
 }
 
-func newConn(ws *websocket.Conn, server *Server, id uint64, r *http.Request, ctx context.Context) *Conn {
+func newConn(t transport, server *Server, id uint64, r *http.Request, ctx context.Context) *Conn {
 	return &Conn{
-		ws:       ws,
-		server:   server,
-		send:     make(chan []byte, 256),
-		requests: make(map[string]context.CancelFunc),
-		id:       id,
-		ctx:      ctx,
+		transport: t,
+		server:    server,
+		requests:  make(map[string]context.CancelFunc),
+		id:        id,
+		ctx:       ctx,
 		info: ConnInfo{
 			RemoteAddr: r.RemoteAddr,
 			Header:     r.Header.Clone(),
@@ -127,12 +124,7 @@ func (c *Conn) sendJSON(v any) error {
 	}
 	c.mu.Unlock()
 
-	select {
-	case c.send <- data:
-		return nil
-	default:
-		return nil // Drop message if buffer full
-	}
+	return c.transport.Send(data)
 }
 
 func (c *Conn) sendResponse(id string, result any) {
@@ -172,43 +164,6 @@ func (c *Conn) sendPong() {
 	c.sendJSON(msg)
 }
 
-// sendConnectionRejected sends an error message directly to the WebSocket
-// before the pumps are started. Used when a connect hook rejects the connection.
-func (c *Conn) sendConnectionRejected(err error) {
-	code := CodeConnectionRejected
-	message := "connection rejected"
-	if perr, ok := err.(*ProtocolError); ok {
-		code = perr.Code
-		message = perr.Message
-	} else if err != nil {
-		message = err.Error()
-	}
-
-	msg := ErrorMessage{
-		Type:    TypeError,
-		ID:      "",
-		Code:    code,
-		Message: message,
-	}
-	data, _ := json.Marshal(msg)
-	c.ws.WriteMessage(websocket.TextMessage, data)
-}
-
-// sendConfig sends the server configuration directly to the WebSocket.
-// Called before the pumps are started.
-func (c *Conn) sendConfig(opts ServerOptions) {
-	msg := ConfigMessage{
-		Type:                 TypeConfig,
-		ReconnectInterval:    opts.ReconnectInterval,
-		ReconnectMaxInterval: opts.ReconnectMaxInterval,
-		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
-		HeartbeatInterval:    opts.HeartbeatInterval,
-		HeartbeatTimeout:     opts.HeartbeatTimeout,
-	}
-	data, _ := json.Marshal(msg)
-	c.ws.WriteMessage(websocket.TextMessage, data)
-}
-
 func (c *Conn) registerRequest(id string, cancel context.CancelFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -230,44 +185,23 @@ func (c *Conn) cancelRequest(id string) {
 	}
 }
 
-func (c *Conn) readPump() {
-	defer func() {
-		c.server.unregister <- c
-		c.ws.Close()
-	}()
-
-	for {
-		_, data, err := c.ws.ReadMessage()
-		if err != nil {
-			return
-		}
-
-		var msg IncomingMessage
-		if err := json.Unmarshal(data, &msg); err != nil {
-			c.sendError("", CodeParseError, "invalid JSON")
-			continue
-		}
-
-		switch msg.Type {
-		case TypeRequest:
-			go c.handleRequest(msg)
-		case TypeCancel:
-			c.cancelRequest(msg.ID)
-		case TypePing:
-			c.sendPong()
-		default:
-			c.sendError(msg.ID, CodeInvalidRequest, "unknown message type")
-		}
+// handleIncomingMessage processes a raw message from any transport.
+func (c *Conn) handleIncomingMessage(data []byte) {
+	var msg IncomingMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		c.sendError("", CodeParseError, "invalid JSON")
+		return
 	}
-}
 
-func (c *Conn) writePump() {
-	defer c.ws.Close()
-
-	for data := range c.send {
-		if err := c.ws.WriteMessage(websocket.TextMessage, data); err != nil {
-			return
-		}
+	switch msg.Type {
+	case TypeRequest:
+		go c.handleRequest(msg)
+	case TypeCancel:
+		c.cancelRequest(msg.ID)
+	case TypePing:
+		c.sendPong()
+	default:
+		c.sendError(msg.ID, CodeInvalidRequest, "unknown message type")
 	}
 }
 
@@ -332,10 +266,10 @@ func (c *Conn) close() {
 		return
 	}
 	c.closed = true
-	close(c.send)
 	// Cancel all pending requests
 	for _, cancel := range c.requests {
 		cancel()
 	}
 	c.mu.Unlock()
+	c.transport.Close()
 }
