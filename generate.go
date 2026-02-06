@@ -107,6 +107,7 @@ type methodData struct {
 	HookName     string
 	RequestType  string
 	ResponseType string
+	IsVoid       bool
 }
 
 type pushEventData struct {
@@ -254,12 +255,18 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	for _, name := range names {
 		info := handlers[name]
+		isVoid := info.ResponseType == voidResponseType
+		respType := info.ResponseType.Name()
+		if isVoid {
+			respType = "void"
+		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
 			RequestType:  info.RequestType.Name(),
-			ResponseType: info.ResponseType.Name(),
+			ResponseType: respType,
+			IsVoid:       isVoid,
 		})
 	}
 
@@ -351,12 +358,18 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 
 	for _, name := range names {
 		info := group.Handlers[name]
+		isVoid := info.ResponseType == voidResponseType
+		respType := info.ResponseType.Name()
+		if isVoid {
+			respType = "void"
+		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
 			RequestType:  info.RequestType.Name(),
-			ResponseType: info.ResponseType.Name(),
+			ResponseType: respType,
+			IsVoid:       isVoid,
 		})
 	}
 
@@ -404,7 +417,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 }
 
 func (g *Generator) collectType(t reflect.Type) {
-	if t == nil {
+	if t == nil || t == voidResponseType {
 		return
 	}
 	if _, ok := g.types[t]; ok {

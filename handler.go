@@ -15,12 +15,17 @@ import (
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
 var errorType = reflect.TypeOf((*error)(nil)).Elem()
 
+type voidResponse struct{}
+
+var voidResponseType = reflect.TypeOf(voidResponse{})
+
 // HandlerInfo contains metadata about a registered handler method.
 type HandlerInfo struct {
 	Name         string
 	RequestType  reflect.Type
 	ResponseType reflect.Type
 	StructName   string
+	IsVoid       bool // true when handler returns only error
 	method       reflect.Value
 	handler      reflect.Value
 }
@@ -97,6 +102,7 @@ func NewRegistry() *Registry {
 // A valid handler method has the signature:
 //
 //	func(ctx context.Context, req *T) (*U, error)
+//	func(ctx context.Context, req *T) error        // void response
 //
 // Example:
 //
@@ -377,7 +383,11 @@ func (r *Registry) Handlers() map[string]*HandlerInfo {
 	return r.handlers
 }
 
-// validateMethod checks if a method matches the handler signature.
+// validateMethod checks if a method matches a handler signature.
+// Accepted signatures:
+//
+//	func(ctx context.Context, req *T) (*U, error)
+//	func(ctx context.Context, req *T) error
 func validateMethod(method reflect.Method, handlerValue reflect.Value, structName string) *HandlerInfo {
 	mt := method.Type
 
@@ -397,29 +407,40 @@ func validateMethod(method reflect.Method, handlerValue reflect.Value, structNam
 		return nil
 	}
 
-	// Must have exactly 2 outputs: *ResponseType, error
-	if mt.NumOut() != 2 {
+	switch mt.NumOut() {
+	case 1:
+		// func(ctx, *Req) error
+		if !mt.Out(0).Implements(errorType) {
+			return nil
+		}
+		return &HandlerInfo{
+			Name:         method.Name,
+			RequestType:  reqType.Elem(),
+			ResponseType: voidResponseType,
+			IsVoid:       true,
+			StructName:   structName,
+			method:       handlerValue.Method(method.Index),
+			handler:      handlerValue,
+		}
+	case 2:
+		// func(ctx, *Req) (*Resp, error)
+		respType := mt.Out(0)
+		if respType.Kind() != reflect.Ptr || respType.Elem().Kind() != reflect.Struct {
+			return nil
+		}
+		if !mt.Out(1).Implements(errorType) {
+			return nil
+		}
+		return &HandlerInfo{
+			Name:         method.Name,
+			RequestType:  reqType.Elem(),
+			ResponseType: respType.Elem(),
+			StructName:   structName,
+			method:       handlerValue.Method(method.Index),
+			handler:      handlerValue,
+		}
+	default:
 		return nil
-	}
-
-	// First output must be a pointer to a struct
-	respType := mt.Out(0)
-	if respType.Kind() != reflect.Ptr || respType.Elem().Kind() != reflect.Struct {
-		return nil
-	}
-
-	// Second output must be error
-	if !mt.Out(1).Implements(errorType) {
-		return nil
-	}
-
-	return &HandlerInfo{
-		Name:         method.Name,
-		RequestType:  reqType.Elem(),
-		ResponseType: respType.Elem(),
-		StructName:   structName,
-		method:       handlerValue.Method(method.Index),
-		handler:      handlerValue,
 	}
 }
 
@@ -442,6 +463,13 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 	})
 
 	// Extract response and error
+	if info.IsVoid {
+		if errVal := results[0].Interface(); errVal != nil {
+			return nil, errVal.(error)
+		}
+		return nil, nil
+	}
+
 	resp := results[0].Interface()
 	errVal := results[1].Interface()
 
