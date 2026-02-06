@@ -9,7 +9,7 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 
 ## Features
 
-- **Type-safe handlers** - Define request/response types as Go structs
+- **Type-safe handlers** - Define request/response types as Go structs, with void handler support
 - **Automatic TypeScript generation** - Generate fully typed client code from your Go types
 - **Enum support** - Register Go enums and generate TypeScript const objects with type safety
 - **React hooks** - Optional React integration with query/mutation hooks
@@ -85,7 +85,17 @@ type UserCreatedEvent struct {
 
 ### 3. Implement handlers (api/handlers.go)
 
-Split handlers by their middleware requirements:
+Split handlers by their middleware requirements. Handlers support two signatures:
+
+```go
+// Standard handler - returns a response
+func(ctx context.Context, req *T) (*U, error)
+
+// Void handler - no response data (generates Promise<void> in TypeScript)
+func(ctx context.Context, req *T) error
+```
+
+Both signatures can be mixed on the same handler struct:
 
 ```go
 package api
@@ -117,12 +127,13 @@ type ProtectedHandlers struct {
     state *SharedState
 }
 
-func (h *ProtectedHandlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) (*DeleteUserResponse, error) {
+// Void handler - no response needed
+func (h *ProtectedHandlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) error {
     // Auth middleware has already validated the user
     conn := aprot.Connection(ctx)
     userID := conn.UserID() // Set by auth middleware
-    // ...
-    return &DeleteUserResponse{}, nil
+    // ... delete user ...
+    return nil
 }
 ```
 

@@ -27,7 +27,7 @@ cd example/react/client && npm run dev
 
 aprot is a Go library that generates type-safe TypeScript WebSocket clients from Go handler structs. The core flow:
 
-1. **Handler Registration** (`handler.go`): Go structs with methods matching `func(ctx, *Req) (*Resp, error)` are registered via `Registry.Register()`. Methods are validated via reflection and stored as `HandlerInfo`.
+1. **Handler Registration** (`handler.go`): Go structs with methods matching `func(ctx, *Req) (*Resp, error)` or `func(ctx, *Req) error` (void) are registered via `Registry.Register()`. Methods are validated via reflection and stored as `HandlerInfo`.
 
 2. **Code Generation** (`generate.go`): `Generator` uses reflection to extract types from registered handlers, converts Go types to TypeScript, and executes embedded templates (`templates/*.tmpl`) to produce client code.
 
@@ -53,6 +53,10 @@ Templates use Go's `text/template` with shared blocks in `_client-common.ts.tmpl
 Go types → `collectType()` extracts struct fields → `goTypeToTS()` maps to TS → Templates render interfaces/methods
 
 Enums: Registered via `RegisterEnum(Values())` → detected in `collectType()` → rendered as `const {...} as const` with companion type
+
+## Important: Always Update README
+
+When adding or changing user-facing features (new types, new API patterns, new options, etc.), **always update `README.md`** to document the change. This is a required step for every feature PR — do not skip it.
 
 ## Common Patterns
 
