@@ -56,10 +56,22 @@ myapp/
 
 ## Quick Start
 
-### 1. Define your types (api/types.go)
+### 1. Define handlers (api/handlers.go)
+
+Handler methods must match one of these signatures:
+
+```go
+func(ctx context.Context, req *T) (*U, error)   // Returns a response
+func(ctx context.Context, req *T) error          // Void (generates Promise<void>)
+```
 
 ```go
 package api
+
+import (
+    "context"
+    "github.com/marrasen/aprot"
+)
 
 type CreateUserRequest struct {
     Name  string `json:"name"`
@@ -71,131 +83,52 @@ type CreateUserResponse struct {
     Name  string `json:"name"`
     Email string `json:"email"`
 }
-```
-
-### 2. Define push events (api/events.go)
-
-```go
-package api
 
 type UserCreatedEvent struct {
     ID   string `json:"id"`
     Name string `json:"name"`
 }
-```
 
-### 3. Implement handlers (api/handlers.go)
-
-Split handlers by their middleware requirements. Handlers support two signatures:
-
-```go
-// Standard handler - returns a response
-func(ctx context.Context, req *T) (*U, error)
-
-// Void handler - no response data (generates Promise<void> in TypeScript)
-func(ctx context.Context, req *T) error
-```
-
-Both signatures can be mixed on the same handler struct:
-
-```go
-package api
-
-import (
-    "context"
-
-    "github.com/marrasen/aprot"
-)
-
-// Shared state between handler groups
-type SharedState struct {
+type Handlers struct {
     Broadcaster aprot.Broadcaster
 }
 
-// PublicHandlers - no authentication required
-type PublicHandlers struct {
-    state *SharedState
-}
-
-func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
-    // Implementation...
-    h.state.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{...})
-    return &CreateUserResponse{...}, nil
-}
-
-// ProtectedHandlers - requires authentication middleware
-type ProtectedHandlers struct {
-    state *SharedState
-}
-
-// Void handler - no response needed
-func (h *ProtectedHandlers) DeleteUser(ctx context.Context, req *DeleteUserRequest) error {
-    // Auth middleware has already validated the user
-    conn := aprot.Connection(ctx)
-    userID := conn.UserID() // Set by auth middleware
-    // ... delete user ...
-    return nil
+func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
+    resp := &CreateUserResponse{ID: "1", Name: req.Name, Email: req.Email}
+    h.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{ID: resp.ID, Name: resp.Name})
+    return resp, nil
 }
 ```
 
-### 4. Create registry (api/registry.go)
-
-```go
-package api
-
-import "github.com/marrasen/aprot"
-
-func NewRegistry(publicHandlers *PublicHandlers, protectedHandlers *ProtectedHandlers, authMiddleware aprot.Middleware) *aprot.Registry {
-    registry := aprot.NewRegistry()
-
-    // Register public handlers (no middleware)
-    registry.Register(publicHandlers)
-
-    // Register protected handlers (with auth middleware)
-    registry.Register(protectedHandlers, authMiddleware)
-
-    registry.RegisterPushEvent(UserCreatedEvent{})
-    return registry
-}
-```
-
-### 5. Server entry point (server/main.go)
+### 2. Server (server/main.go)
 
 ```go
 package main
 
 import (
     "net/http"
-
     "github.com/marrasen/aprot"
     "myapp/api"
 )
 
 func main() {
-    // Create shared state and handlers
-    state := &api.SharedState{}
-    publicHandlers := &api.PublicHandlers{State: state}
-    protectedHandlers := &api.ProtectedHandlers{State: state}
+    handlers := &api.Handlers{}
 
-    // Create registry with per-handler middleware
-    authMiddleware := api.AuthMiddleware()
-    registry := api.NewRegistry(publicHandlers, protectedHandlers, authMiddleware)
+    registry := aprot.NewRegistry()
+    registry.Register(handlers)
+    registry.RegisterPushEvent(api.UserCreatedEvent{})
 
     server := aprot.NewServer(registry)
-    state.Broadcaster = server
+    handlers.Broadcaster = server
 
-    // Server-level middleware (applies to all handlers)
-    server.Use(api.LoggingMiddleware())
-
-    // Transports
-    http.Handle("/ws", server)               // WebSocket
-    http.Handle("/sse", server.HTTPTransport())  // SSE+HTTP
-    http.Handle("/sse/", server.HTTPTransport()) // SSE+HTTP sub-routes
+    http.Handle("/ws", server)                    // WebSocket
+    http.Handle("/sse", server.HTTPTransport())   // SSE+HTTP
+    http.Handle("/sse/", server.HTTPTransport())
     http.ListenAndServe(":8080", nil)
 }
 ```
 
-### 6. Generator (tools/generate/main.go)
+### 3. Generator (tools/generate/main.go)
 
 ```go
 //go:build ignore
@@ -208,13 +141,9 @@ import (
 )
 
 func main() {
-    // Create minimal instances for code generation (no actual state needed)
-    state := &api.SharedState{}
-    registry := api.NewRegistry(
-        &api.PublicHandlers{State: state},
-        &api.ProtectedHandlers{State: state},
-        api.AuthMiddleware(),
-    )
+    registry := aprot.NewRegistry()
+    registry.Register(&api.Handlers{})
+    registry.RegisterPushEvent(api.UserCreatedEvent{})
 
     gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
         OutputDir: "../../client/src/api",
@@ -264,7 +193,7 @@ Middleware executes in the order added, wrapping inward (first middleware is out
 
 ### Per-Handler Middleware
 
-Apply middleware at the handler group level for safety. This ensures you can't accidentally forget to protect an endpoint - if a handler needs authentication, it's registered with the auth middleware.
+Split handlers into separate structs by their middleware requirements. This ensures you can't accidentally forget to protect an endpoint - if a handler needs authentication, it's registered with the auth middleware.
 
 ```go
 // Split handlers by their middleware requirements
@@ -272,6 +201,8 @@ registry.Register(&PublicHandlers{})                    // No middleware
 registry.Register(&UserHandlers{}, authMiddleware)      // With auth
 registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
 ```
+
+Each `Register()` call creates a separate handler group with its own middleware chain and a corresponding TypeScript file (e.g., `public-handlers.ts`, `user-handlers.ts`).
 
 Both server-level and handler-level middleware can be used together:
 - **Server middleware** applies to all handlers (e.g., logging)

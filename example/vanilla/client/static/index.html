@@ -65,7 +65,17 @@
 </head>
 <body>
     <h1>aprot Example</h1>
-    <div id="status" class="status disconnected">Disconnected</div>
+    <div style="display: flex; align-items: center; gap: 20px; margin-bottom: 20px;">
+        <div id="status" class="status disconnected" style="margin-bottom: 0;">Disconnected</div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <label style="margin: 0; font-weight: 500; color: #555;">Transport:</label>
+            <select id="transportSelect" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                <option value="websocket">WebSocket</option>
+                <option value="sse">SSE</option>
+            </select>
+            <button id="reconnectBtn" onclick="reconnect()">Reconnect</button>
+        </div>
+    </div>
     <div class="grid">
         <div class="card">
             <h2>Create User</h2>
