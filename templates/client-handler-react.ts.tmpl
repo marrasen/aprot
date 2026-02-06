@@ -2,11 +2,10 @@
 // Handler: {{.StructName}}
 
 import { useState, useEffect, useCallback } from 'react';
-import {
-    ApiClient,
+import { ApiClient, useApiClient } from './client';
+import type {
     RequestOptions,
     PushHandler,
-    useApiClient,
     UseQueryOptions,
     UseQueryResult,
     UseMutationOptions,

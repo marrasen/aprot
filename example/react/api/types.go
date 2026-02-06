@@ -75,3 +75,19 @@ type ProcessBatchResponse struct {
 	Processed int      `json:"processed"`
 	Results   []string `json:"results"`
 }
+
+// Tag is used in GetDashboardResponse to exercise complex type collection:
+// map values, slice-of-pointer, and map-of-slice scenarios.
+type Tag struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+type GetDashboardRequest struct{}
+
+type GetDashboardResponse struct {
+	UsersByRole   map[string][]User `json:"usersByRole"`
+	FeaturedUsers []*User           `json:"featuredUsers"`
+	TagsByID      map[int]Tag       `json:"tagsById"`
+}

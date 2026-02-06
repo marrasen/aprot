@@ -8,8 +8,8 @@ import {
   useSystemNotification,
   useGetTaskMutation,
   TaskStatus,
-  TaskStatusType,
 } from './api/handlers'
+import type { TaskStatusType } from './api/handlers'
 
 // Initialize client
 const client = new ApiClient(`ws://${window.location.host}/ws`)
