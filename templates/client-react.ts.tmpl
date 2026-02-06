@@ -24,7 +24,7 @@ class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
     connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             this.ws = new WebSocket(url);
             this.ws.onopen = () => resolve();
             this.ws.onerror = () => {};
@@ -54,15 +54,11 @@ class SSETransport implements ClientTransport {
     private eventSource: EventSource | null = null;
     private connectionId: string | null = null;
     private baseUrl: string = '';
-    private onMessageCallback: ((data: string) => void) | null = null;
-    private onCloseCallback: (() => void) | null = null;
 
     connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
         this.baseUrl = url;
-        this.onMessageCallback = onMessage;
-        this.onCloseCallback = onClose;
 
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             this.eventSource = new EventSource(url);
 
             this.eventSource.addEventListener('connected', (e: MessageEvent) => {
@@ -193,7 +189,6 @@ export class ApiClient {
 
     private handleClose(): void {
         this.stopHeartbeat();
-        const wasConnected = this.state === 'connected';
 
         for (const [, p] of this.pending) {
             p.reject(new Error('Connection closed'));
