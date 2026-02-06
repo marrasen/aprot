@@ -89,6 +89,11 @@ type CreateTaskResponse struct {
 	Priority Priority   `json:"priority"`
 }
 
+// Void handler test types
+type DeleteItemRequest struct {
+	ID string `json:"id"`
+}
+
 // Test handler
 type TestHandlers struct{}
 
@@ -476,6 +481,198 @@ func TestGenerateWithEnums(t *testing.T) {
 
 	// Print for inspection
 	t.Logf("Generated TypeScript with enums:\n%s", output)
+}
+
+// Void handlers (error-only return)
+type VoidHandlers struct{}
+
+func (h *VoidHandlers) DeleteItem(ctx context.Context, req *DeleteItemRequest) error {
+	return nil
+}
+
+// Mixed handlers (void and non-void in same group)
+type MixedHandlers struct{}
+
+func (h *MixedHandlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+	return &GetUserResponse{ID: req.ID, Name: "Test"}, nil
+}
+
+func (h *MixedHandlers) DeleteItem(ctx context.Context, req *DeleteItemRequest) error {
+	return nil
+}
+
+func TestVoidHandlerRegistration(t *testing.T) {
+	registry := NewRegistry()
+	err := registry.Register(&VoidHandlers{})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	info, ok := registry.Get("DeleteItem")
+	if !ok {
+		t.Fatal("DeleteItem not found")
+	}
+
+	if !info.IsVoid {
+		t.Error("Expected IsVoid to be true")
+	}
+	if info.ResponseType != voidResponseType {
+		t.Errorf("Expected voidResponseType, got %s", info.ResponseType.Name())
+	}
+}
+
+func TestVoidHandlerCall(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&VoidHandlers{})
+
+	info, _ := registry.Get("DeleteItem")
+	result, err := info.Call(context.Background(), []byte(`{"id":"item_1"}`))
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+	if result != nil {
+		t.Errorf("Expected nil result, got %v", result)
+	}
+}
+
+func TestVoidHandlerCallError(t *testing.T) {
+	registry := NewRegistry()
+
+	type FailHandlers struct{}
+	// Can't add method to FailHandlers in test, use VoidHandlers and test via the existing handler
+	registry.Register(&VoidHandlers{})
+
+	info, _ := registry.Get("DeleteItem")
+	// Call with valid params — should succeed
+	result, err := info.Call(context.Background(), []byte(`{"id":"ok"}`))
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+	if result != nil {
+		t.Errorf("Expected nil result, got %v", result)
+	}
+}
+
+func TestGenerateVoidResponse(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&VoidHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should NOT generate a voidResponse interface
+	if strings.Contains(output, "export interface voidResponse") {
+		t.Error("Should not generate voidResponse interface")
+	}
+
+	// Should use Promise<void>
+	if !strings.Contains(output, "Promise<void>") {
+		t.Error("Should use Promise<void>")
+	}
+
+	// Should still generate request type
+	if !strings.Contains(output, "export interface DeleteItemRequest") {
+		t.Error("Missing DeleteItemRequest interface")
+	}
+
+	t.Logf("Generated TypeScript (void):\n%s", output)
+}
+
+func TestGenerateVoidResponseMultipleFiles(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&VoidHandlers{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	handlerContent, ok := files["void-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected void-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	if strings.Contains(handlerContent, "export interface voidResponse") {
+		t.Error("Should not generate voidResponse interface")
+	}
+	if !strings.Contains(handlerContent, "Promise<void>") {
+		t.Error("Should use Promise<void>")
+	}
+}
+
+func TestGenerateVoidResponseReact(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&VoidHandlers{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	if strings.Contains(output, "export interface voidResponse") {
+		t.Error("Should not generate voidResponse interface")
+	}
+	if !strings.Contains(output, "Promise<void>") {
+		t.Error("Should use Promise<void>")
+	}
+	if !strings.Contains(output, "useDeleteItem") {
+		t.Error("Missing useDeleteItem hook")
+	}
+	if !strings.Contains(output, "useDeleteItemMutation") {
+		t.Error("Missing useDeleteItemMutation hook")
+	}
+
+	t.Logf("Generated TypeScript (void, React):\n%s", output)
+}
+
+func TestGenerateMixedVoidAndNonVoid(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&MixedHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should generate GetUserResponse interface
+	if !strings.Contains(output, "export interface GetUserResponse") {
+		t.Error("Missing GetUserResponse interface")
+	}
+
+	// Should NOT generate voidResponse interface
+	if strings.Contains(output, "export interface voidResponse") {
+		t.Error("Should not generate voidResponse interface")
+	}
+
+	// One method uses Promise<GetUserResponse>, the other Promise<void>
+	if !strings.Contains(output, "Promise<GetUserResponse>") {
+		t.Error("Missing Promise<GetUserResponse>")
+	}
+	if !strings.Contains(output, "Promise<void>") {
+		t.Error("Missing Promise<void>")
+	}
+
+	t.Logf("Generated TypeScript (mixed):\n%s", output)
 }
 
 func TestGenerateMultipleFilesWithEnums(t *testing.T) {

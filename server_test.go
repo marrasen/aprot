@@ -669,6 +669,57 @@ func TestConfigSentOnConnect(t *testing.T) {
 	}
 }
 
+// Void handler for integration testing
+type VoidRequest struct {
+	ID string `json:"id"`
+}
+
+type VoidTestHandlers struct{}
+
+func (h *VoidTestHandlers) DeleteItem(ctx context.Context, req *VoidRequest) error {
+	return nil
+}
+
+func TestServerVoidResponse(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(&VoidTestHandlers{}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "DeleteItem",
+		Params: jsontext.Value(`{"id":"item_1"}`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+	if resp.ID != "1" {
+		t.Errorf("Expected ID 1, got %s", resp.ID)
+	}
+	// Result should be nil for void response
+	if resp.Result != nil {
+		t.Errorf("Expected nil result for void response, got %v", resp.Result)
+	}
+}
+
 func TestServerOptionsDefaults(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
