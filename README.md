@@ -415,6 +415,14 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
 
 The server automatically sends this configuration to clients on connect. TypeScript clients apply it automatically, overriding any client-side defaults.
 
+### Request Buffering
+
+The generated TypeScript client automatically buffers requests made while a connection is being established or re-established. If you call an API method during the `connecting` or `reconnecting` state, the request is queued and sent once the connection succeeds. If the connection ultimately fails (transitions to `disconnected`), all buffered requests are rejected.
+
+This is transparent — no configuration needed. Requests made while fully `disconnected` (no connection attempt in progress) still reject immediately with `"Not connected"`.
+
+Buffered requests support `AbortSignal` cancellation: aborting a signal removes the request from the buffer.
+
 ### Transport
 
 aprot supports two transports that share the same handler dispatch, middleware, connection management, and generated client API:
