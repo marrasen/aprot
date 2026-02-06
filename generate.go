@@ -10,8 +10,11 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+	"time"
 	"unicode"
 )
+
+var timeType = reflect.TypeOf(time.Time{})
 
 //go:embed templates/*.tmpl
 var templateFS embed.FS
@@ -444,7 +447,7 @@ func (g *Generator) collectNestedType(ft reflect.Type) {
 
 	switch ft.Kind() {
 	case reflect.Struct:
-		if ft.PkgPath() != "" {
+		if ft.PkgPath() != "" && ft != timeType {
 			g.collectType(ft)
 		}
 	case reflect.Slice:
@@ -502,10 +505,10 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	case reflect.Ptr:
 		return g.goTypeToTS(t.Elem())
 	case reflect.Struct:
+		if t == timeType {
+			return "string"
+		}
 		if t.PkgPath() == "" {
-			if t.String() == "time.Time" {
-				return "string"
-			}
 			return "any"
 		}
 		return t.Name()

@@ -723,6 +723,24 @@ function getStatusLabel(status: TaskStatusType): string {
 }
 ```
 
+## Type Mapping
+
+Go types are mapped to TypeScript types during code generation:
+
+| Go Type | TypeScript Type | Notes |
+|---------|----------------|-------|
+| `string` | `string` | |
+| `int`, `float64`, etc. | `number` | All numeric types |
+| `bool` | `boolean` | |
+| `[]T` | `T[]` | |
+| `map[K]V` | `Record<K, V>` | |
+| `*T` | `T` (optional) | Pointer fields become optional (`?`) |
+| `time.Time` | `string` | RFC 3339 format (Go's `encoding/json` default) |
+| `struct` | `interface` | Named structs become TypeScript interfaces |
+| Registered enum | Const object + type | See [Enum Support](#enum-support) |
+
+`time.Time` fields (including `*time.Time`) are generated as `string` because Go's `encoding/json` marshals them as RFC 3339 strings. This applies anywhere `time.Time` appears: direct fields, slices (`[]time.Time` → `string[]`), map values, etc.
+
 ## Generated Output
 
 The generator creates split files for better organization:

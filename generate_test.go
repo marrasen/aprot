@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Test types
@@ -737,6 +738,112 @@ func TestGenerateComplexTypes(t *testing.T) {
 	}
 
 	t.Logf("Generated TypeScript (complex types):\n%s", handlerContent)
+}
+
+// Time types for testing time.Time support
+type CreateEventRequest struct {
+	Name    string     `json:"name"`
+	StartAt time.Time  `json:"startAt"`
+	EndAt   *time.Time `json:"endAt,omitempty"`
+}
+
+type CreateEventResponse struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type EventSchedule struct {
+	Events []time.Time `json:"events"`
+}
+
+type GetScheduleRequest struct{}
+
+type GetScheduleResponse struct {
+	Schedule EventSchedule `json:"schedule"`
+}
+
+type TimeHandlers struct{}
+
+func (h *TimeHandlers) CreateEvent(ctx context.Context, req *CreateEventRequest) (*CreateEventResponse, error) {
+	return &CreateEventResponse{ID: "evt_1", CreatedAt: time.Now()}, nil
+}
+
+func (h *TimeHandlers) GetSchedule(ctx context.Context, req *GetScheduleRequest) (*GetScheduleResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateTimeFields(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TimeHandlers{})
+
+	gen := NewGenerator(registry)
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	handlerContent, ok := files["time-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected time-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	// time.Time should generate as string
+	if !strings.Contains(handlerContent, "startAt: string") {
+		t.Error("time.Time field should generate as string")
+	}
+
+	// *time.Time should generate as optional string
+	if !strings.Contains(handlerContent, "endAt?: string") {
+		t.Error("*time.Time field should generate as optional string")
+	}
+
+	// time.Time in response should also be string
+	if !strings.Contains(handlerContent, "createdAt: string") {
+		t.Error("time.Time in response should generate as string")
+	}
+
+	// []time.Time should generate as string[]
+	if !strings.Contains(handlerContent, "events: string[]") {
+		t.Error("[]time.Time should generate as string[]")
+	}
+
+	// Should NOT generate an empty Time interface
+	if strings.Contains(handlerContent, "export interface Time") {
+		t.Error("Should not generate a Time interface for time.Time")
+	}
+
+	// Nested struct should still be collected
+	if !strings.Contains(handlerContent, "export interface EventSchedule") {
+		t.Error("Missing EventSchedule interface")
+	}
+
+	t.Logf("Generated TypeScript (time):\n%s", handlerContent)
+}
+
+func TestGenerateTimeFieldsSingleFile(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TimeHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// time.Time should generate as string
+	if !strings.Contains(output, "startAt: string") {
+		t.Error("time.Time field should generate as string (single file)")
+	}
+
+	// Should NOT generate an empty Time interface
+	if strings.Contains(output, "export interface Time") {
+		t.Error("Should not generate a Time interface for time.Time (single file)")
+	}
 }
 
 func TestGenerateMultipleFilesWithEnums(t *testing.T) {
