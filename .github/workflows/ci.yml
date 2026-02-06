@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  go-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Run Go tests
+        run: go test -race -v ./...
+
+  typescript-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate vanilla client
+        run: cd example/vanilla/tools/generate && go run main.go
+
+      - name: Check vanilla client compiles
+        run: |
+          cd example/vanilla/client/static/api
+          npm init -y > /dev/null 2>&1
+          npm install typescript@^5.7.0 --save-dev > /dev/null 2>&1
+          npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck *.ts
+
+      - name: Generate react client
+        run: cd example/react/tools/generate && go run main.go
+
+      - name: Install react example deps
+        run: cd example/react/client && npm ci
+
+      - name: Check react client compiles
+        run: cd example/react/client && npx tsc --noEmit
+
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: go-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate E2E client
+        run: cd e2e/generate && go run main.go
+
+      - name: Install E2E deps
+        run: cd e2e && npm ci
+
+      - name: Run E2E tests
+        run: cd e2e && npm test

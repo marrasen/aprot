@@ -35,3 +35,5 @@ example/vanilla/client/static/api/
 example/vanilla/client/static/app.js
 example/react/client/src/api/
 example/react/client/dist/
+e2e/api/
+e2e/.test-server-addr

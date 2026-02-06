@@ -874,6 +874,36 @@ npm run dev                             # Start Vite dev server
 cd ../server && go run .
 ```
 
+## Testing
+
+### Go Unit Tests
+
+```bash
+go test ./...
+```
+
+### E2E Integration Tests
+
+The `e2e/` directory contains end-to-end tests that run the generated TypeScript client against a live Go server, covering both WebSocket and SSE transports.
+
+```bash
+# Generate the TypeScript client
+cd e2e/generate && go run main.go
+
+# Install dependencies and run tests
+cd .. && npm install && npm test
+```
+
+Tests cover: request/response, error handling, progress reporting, request cancellation, push events, broadcast, authentication middleware, and enum types.
+
+### CI
+
+GitHub Actions runs three jobs on every push/PR to `master`:
+
+1. **go-tests** - Go unit and integration tests with race detection
+2. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
+3. **e2e-tests** - Runs the full E2E suite against a live server
+
 ## License
 
 MIT
