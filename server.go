@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
 
@@ -210,6 +211,20 @@ func (s *Server) SetCheckOrigin(f func(r *http.Request) bool) {
 	s.upgrader.CheckOrigin = f
 }
 
+// WebSocket returns an http.Handler for WebSocket upgrades.
+func (s *Server) WebSocket() http.Handler {
+	return http.HandlerFunc(s.ServeHTTP)
+}
+
+// HTTPTransport returns an http.Handler for SSE+HTTP transport.
+// Routes:
+//   - GET  / — SSE event stream
+//   - POST /rpc — RPC calls
+//   - POST /cancel — Request cancellation
+func (s *Server) HTTPTransport() http.Handler {
+	return newSSEHandler(s)
+}
+
 // ServeHTTP implements http.Handler for WebSocket upgrades.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws, err := s.upgrader.Upgrade(w, r, nil)
@@ -219,22 +234,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	connID := atomic.AddUint64(&s.nextConnID, 1)
 	ctx := r.Context()
-	conn := newConn(ws, s, connID, r, ctx)
+	wst := newWSTransport(ws)
+	conn := newConn(wst, s, connID, r, ctx)
 
 	// Run connect hooks before starting message processing
 	if err := s.runConnectHooks(ctx, conn); err != nil {
-		conn.sendConnectionRejected(err)
+		// Send rejection directly before pumps start
+		sendConnectionRejectedWS(ws, err)
 		ws.Close()
 		return
 	}
 
-	// Send client configuration (writes directly to ws before pumps start)
-	conn.sendConfig(s.options)
+	// Send config directly before pumps start
+	sendConfigWS(ws, s.options)
 
 	s.register <- conn
 
-	go conn.writePump()
-	conn.readPump()
+	go wst.writePump()
+	wst.readPump(conn)
 }
 
 // Broadcast sends a push message to all connected clients.
@@ -281,4 +298,41 @@ func (s *Server) run() {
 // Registry returns the server's handler registry.
 func (s *Server) Registry() *Registry {
 	return s.registry
+}
+
+// sendConnectionRejectedWS sends an error message directly to a WebSocket connection.
+// Used when a connect hook rejects the connection before pumps are started.
+func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
+	code := CodeConnectionRejected
+	message := "connection rejected"
+	if perr, ok := err.(*ProtocolError); ok {
+		code = perr.Code
+		message = perr.Message
+	} else if err != nil {
+		message = err.Error()
+	}
+
+	msg := ErrorMessage{
+		Type:    TypeError,
+		ID:      "",
+		Code:    code,
+		Message: message,
+	}
+	data, _ := json.Marshal(msg)
+	ws.WriteMessage(websocket.TextMessage, data)
+}
+
+// sendConfigWS sends the server configuration directly to a WebSocket connection.
+// Called before the pumps are started.
+func sendConfigWS(ws *websocket.Conn, opts ServerOptions) {
+	msg := ConfigMessage{
+		Type:                 TypeConfig,
+		ReconnectInterval:    opts.ReconnectInterval,
+		ReconnectMaxInterval: opts.ReconnectMaxInterval,
+		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
+		HeartbeatInterval:    opts.HeartbeatInterval,
+		HeartbeatTimeout:     opts.HeartbeatTimeout,
+	}
+	data, _ := json.Marshal(msg)
+	ws.WriteMessage(websocket.TextMessage, data)
 }

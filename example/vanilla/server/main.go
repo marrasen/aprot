@@ -46,12 +46,15 @@ func main() {
 	}
 
 	// Routes
-	http.Handle("/ws", server)
+	http.Handle("/ws", server)                              // WebSocket transport
+	http.Handle("/sse", server.HTTPTransport())             // SSE+HTTP transport (GET /sse, POST /sse/rpc, POST /sse/cancel)
+	http.Handle("/sse/", server.HTTPTransport())            // SSE+HTTP sub-routes
 	http.Handle("/", http.FileServer(http.Dir(staticDir)))
 
 	addr := ":8080"
 	fmt.Printf("Server starting on http://localhost%s\n", addr)
 	fmt.Printf("WebSocket endpoint: ws://localhost%s/ws\n", addr)
+	fmt.Printf("SSE endpoint:       http://localhost%s/sse\n", addr)
 	fmt.Println("\nOpen http://localhost:8080 in your browser")
 	fmt.Println("\nMiddleware: Logging (all), Authentication (protected handlers)")
 

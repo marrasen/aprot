@@ -2,7 +2,7 @@
 
 **A**PI **P**rotocol for **R**eal-time **O**perations with **T**ypeScript
 
-A Go library for building type-safe WebSocket APIs with automatic TypeScript client generation.
+A Go library for building type-safe real-time APIs with automatic TypeScript client generation. Supports both WebSocket and SSE+HTTP transports.
 
 > **Warning**
 > This library is currently unstable and under active development. Breaking changes will occur between versions until v1.0.0 is released.
@@ -20,6 +20,7 @@ A Go library for building type-safe WebSocket APIs with automatic TypeScript cli
 - **Request cancellation** - Clients can cancel in-flight requests via AbortController
 - **Server push** - Broadcast events to all connected clients
 - **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
+- **Dual transport** - WebSocket and SSE+HTTP transports with identical API
 - **JSON-RPC style protocol** - Simple, debuggable wire format
 
 ## Installation
@@ -186,7 +187,10 @@ func main() {
     // Server-level middleware (applies to all handlers)
     server.Use(api.LoggingMiddleware())
 
-    http.Handle("/ws", server)
+    // Transports
+    http.Handle("/ws", server)               // WebSocket
+    http.Handle("/sse", server.HTTPTransport())  // SSE+HTTP
+    http.Handle("/sse/", server.HTTPTransport()) // SSE+HTTP sub-routes
     http.ListenAndServe(":8080", nil)
 }
 ```
@@ -410,6 +414,66 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
 ```
 
 The server automatically sends this configuration to clients on connect. TypeScript clients apply it automatically, overriding any client-side defaults.
+
+### Transport
+
+aprot supports two transports that share the same handler dispatch, middleware, connection management, and generated client API:
+
+| | WebSocket | SSE+HTTP |
+|---|-----------|----------|
+| **Server→Client** | WebSocket frames | SSE event stream |
+| **Client→Server** | WebSocket frames | HTTP POST |
+| **Heartbeat** | Client ping/server pong | Server-sent SSE comments |
+| **Best for** | Full-duplex, low latency | Environments where WebSocket is blocked |
+
+#### Server Setup
+
+```go
+server := aprot.NewServer(registry)
+
+// WebSocket transport (existing)
+http.Handle("/ws", server)
+
+// SSE+HTTP transport
+// Routes: GET /sse (event stream), POST /sse/rpc (calls), POST /sse/cancel (cancellation)
+http.Handle("/sse", server.HTTPTransport())
+http.Handle("/sse/", server.HTTPTransport())
+```
+
+Both transports can run simultaneously. Connections from both transports are tracked together — `Broadcast()`, `PushToUser()`, and `ConnectionCount()` work across all connections regardless of transport.
+
+#### Client Usage
+
+```typescript
+import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
+
+// WebSocket (default)
+const wsClient = new ApiClient(getWebSocketUrl());
+
+// SSE+HTTP
+const sseClient = new ApiClient(getSSEUrl(), { transport: 'sse' });
+
+// Same API for both
+await sseClient.connect();
+const user = await sseClient.createUser({ name: 'Alice' });
+```
+
+#### SSE Protocol
+
+The SSE stream uses named events (`event:` field) for message routing:
+
+| SSE Event | Data | Description |
+|-----------|------|-------------|
+| `connected` | `{"type":"connected","connectionId":"abc123"}` | First event, provides connection ID |
+| `config` | `{"type":"config",...}` | Server configuration |
+| `response` | `{"type":"response","id":"1","result":{...}}` | RPC response |
+| `error` | `{"type":"error","id":"1","code":...,"message":...}` | RPC error |
+| `progress` | `{"type":"progress","id":"1",...}` | Progress update |
+| `push` | `{"type":"push","event":"...","data":{...}}` | Push event |
+
+HTTP endpoints:
+- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Echo","params":{...}}` → `202 Accepted`
+- `POST /cancel` — `{"connectionId":"...","id":"1"}` → `200 OK`
 
 ### Error Handling
 
@@ -655,12 +719,12 @@ function getStatusLabel(status: TaskStatusType): string {
 
 The generator creates split files for better organization:
 
-- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, shared utilities
+- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`
 - **`{handler-name}.ts`** - Handler-specific interfaces and methods (extends ApiClient via module augmentation)
 
 ```
 api/
-├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl
+├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl
 ├── user-handlers.ts    # UserHandlers interfaces + methods
 └── order-handlers.ts   # OrderHandlers interfaces + methods
 ```
@@ -689,12 +753,14 @@ gen.GenerateTo(os.Stdout)  // Everything in one file
 ### Vanilla TypeScript
 
 ```typescript
-import { ApiClient, getWebSocketUrl } from './api/client';
+import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
 
-// getWebSocketUrl() automatically uses the current page's host
-// - http://localhost:8080 → ws://localhost:8080/ws
-// - https://myapp.com → wss://myapp.com/ws
+// WebSocket (default) — auto-detects protocol from page URL
 const client = new ApiClient(getWebSocketUrl());
+
+// Or use SSE+HTTP transport
+// const client = new ApiClient(getSSEUrl(), { transport: 'sse' });
+
 await client.connect();
 
 const user = await client.createUser({ name: 'Alice', email: 'alice@example.com' });
@@ -756,6 +822,7 @@ Messages are JSON with a `type` field:
 | client→server | cancel | `{"type":"cancel","id":"1"}` |
 | server→client | push | `{"type":"push","event":"UserCreated","data":{...}}` |
 | server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
+| server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |
 
 ## Examples
 
