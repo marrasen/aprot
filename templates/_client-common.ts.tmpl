@@ -143,9 +143,11 @@ class SSETransport implements ClientTransport {
     private eventSource: EventSource | null = null;
     private connectionId: string | null = null;
     private baseUrl: string = '';
+    private onMessage: ((data: string) => void) | null = null;
 
     connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
         this.baseUrl = url;
+        this.onMessage = onMessage;
 
         return new Promise((resolve) => {
             this.eventSource = new EventSource(url);
@@ -200,7 +202,13 @@ class SSETransport implements ClientTransport {
                     method: msg.method,
                     params: msg.params,
                 }),
-            }).catch(() => {});
+            }).then((resp) => {
+                if (resp.status !== 202) {
+                    this.synthesizeError(msg.id, `Server returned unexpected response (status ${resp.status})`);
+                }
+            }).catch(() => {
+                this.synthesizeError(msg.id, 'Network error: failed to send request');
+            });
         } else if (msg.type === 'cancel') {
             fetch(this.baseUrl + '/cancel', {
                 method: 'POST',
@@ -214,10 +222,17 @@ class SSETransport implements ClientTransport {
         // ping is a no-op for SSE (server uses keep-alive comments)
     }
 
+    private synthesizeError(id: string, message: string): void {
+        if (this.onMessage) {
+            this.onMessage(JSON.stringify({ type: 'error', id, code: -32603, message }));
+        }
+    }
+
     disconnect(): void {
         this.eventSource?.close();
         this.eventSource = null;
         this.connectionId = null;
+        this.onMessage = null;
     }
 
     isConnected(): boolean {

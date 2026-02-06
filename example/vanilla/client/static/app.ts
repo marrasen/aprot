@@ -1,4 +1,4 @@
-import { ApiClient } from './api/client';
+import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
 import { TaskStatus, TaskStatusType } from './api/public-handlers';
 import './api/protected-handlers';
 
@@ -181,27 +181,53 @@ function cancelBatch(): void {
     }
 }
 
-async function init(): Promise<void> {
-    client = new ApiClient(`ws://${window.location.host}/ws`);
+function createClient(transport: 'websocket' | 'sse'): ApiClient {
+    const url = transport === 'sse' ? getSSEUrl() : getWebSocketUrl();
+    const opts = transport === 'sse' ? { transport: 'sse' as const } : undefined;
+    const c = new ApiClient(url, opts);
 
-    client.onUserCreated((data) => {
+    c.onStateChange((state) => {
+        updateStatus(state === 'connected');
+    });
+
+    c.onUserCreated((data) => {
         log(`User created: ${data.name} (${data.id})`, 'push');
         listUsers();
     });
 
-    client.onUserUpdated((data) => {
+    c.onUserUpdated((data) => {
         log(`User updated: ${data.name} (${data.id})`, 'push');
         listUsers();
     });
 
-    client.onSystemNotification((data) => {
+    c.onSystemNotification((data) => {
         log(`Notification [${data.level}]: ${data.message}`, 'push');
     });
 
+    return c;
+}
+
+async function reconnect(): Promise<void> {
+    if (client) {
+        client.disconnect();
+    }
+    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
+    client = createClient(transport);
     try {
         await client.connect();
-        updateStatus(true);
-        log('Connected to server', 'response');
+        log(`Connected via ${transport}`, 'response');
+        listUsers();
+    } catch (err) {
+        log(`Connection failed: ${(err as Error).message}`, 'error');
+    }
+}
+
+async function init(): Promise<void> {
+    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
+    client = createClient(transport);
+    try {
+        await client.connect();
+        log(`Connected via ${transport}`, 'response');
         listUsers();
     } catch (err) {
         log(`Connection failed: ${(err as Error).message}`, 'error');
@@ -217,6 +243,7 @@ declare global {
         processBatch: typeof processBatch;
         cancelBatch: typeof cancelBatch;
         clearLog: typeof clearLog;
+        reconnect: typeof reconnect;
     }
 }
 
@@ -226,5 +253,6 @@ window.getTask = getTask;
 window.processBatch = processBatch;
 window.cancelBatch = cancelBatch;
 window.clearLog = clearLog;
+window.reconnect = reconnect;
 
 init();
