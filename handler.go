@@ -451,7 +451,7 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 
 	// Unmarshal params if provided
 	if len(params) > 0 {
-		if err := json.Unmarshal(params, reqPtr.Interface()); err != nil {
+		if err := json.Unmarshal(params, reqPtr.Interface(), json.MatchCaseInsensitiveNames(true)); err != nil {
 			return nil, ErrInvalidParams(err.Error())
 		}
 	}
