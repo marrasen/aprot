@@ -427,23 +427,30 @@ func (g *Generator) collectType(t reflect.Type) {
 
 	// Recursively collect field types
 	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		ft := field.Type
-		if ft.Kind() == reflect.Ptr {
-			ft = ft.Elem()
-		}
+		g.collectNestedType(t.Field(i).Type)
+	}
+}
 
-		// Check if field type is a registered enum
-		if enumInfo := g.registry.GetEnum(ft); enumInfo != nil {
-			g.collectedEnums[ft] = enumInfo
-		}
+// collectNestedType recursively collects named types (structs, enums) from
+// arbitrarily nested type expressions like []*Struct, map[string][]Struct, etc.
+func (g *Generator) collectNestedType(ft reflect.Type) {
+	if ft.Kind() == reflect.Ptr {
+		ft = ft.Elem()
+	}
 
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" {
+	if enumInfo := g.registry.GetEnum(ft); enumInfo != nil {
+		g.collectedEnums[ft] = enumInfo
+	}
+
+	switch ft.Kind() {
+	case reflect.Struct:
+		if ft.PkgPath() != "" {
 			g.collectType(ft)
 		}
-		if ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.Struct {
-			g.collectType(ft.Elem())
-		}
+	case reflect.Slice:
+		g.collectNestedType(ft.Elem())
+	case reflect.Map:
+		g.collectNestedType(ft.Elem())
 	}
 }
 

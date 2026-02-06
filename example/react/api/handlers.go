@@ -152,3 +152,21 @@ func (h *Handlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskRe
 		Status: TaskStatusRunning,
 	}, nil
 }
+
+// GetDashboard returns a dashboard summary.
+// Exercises complex type generation: map-of-struct, slice-of-pointer, map-of-slice.
+func (h *Handlers) GetDashboard(ctx context.Context, req *GetDashboardRequest) (*GetDashboardResponse, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	users := make([]User, 0, len(h.users))
+	for _, u := range h.users {
+		users = append(users, *u)
+	}
+
+	return &GetDashboardResponse{
+		UsersByRole:   map[string][]User{"admin": users},
+		FeaturedUsers: make([]*User, 0),
+		TagsByID:      map[int]Tag{1: {ID: "1", Name: "important", Color: "#ff0000"}},
+	}, nil
+}

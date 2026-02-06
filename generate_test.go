@@ -675,6 +675,70 @@ func TestGenerateMixedVoidAndNonVoid(t *testing.T) {
 	t.Logf("Generated TypeScript (mixed):\n%s", output)
 }
 
+// Complex nested types for testing type collection
+type Tag struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+type GetDashboardRequest struct{}
+
+type GetDashboardResponse struct {
+	UsersByRole   map[string][]GetUserResponse `json:"usersByRole"`
+	FeaturedUsers []*GetUserResponse           `json:"featuredUsers"`
+	TagsByID      map[int]Tag                  `json:"tagsById"`
+}
+
+type DashboardHandlers struct{}
+
+func (h *DashboardHandlers) GetDashboard(ctx context.Context, req *GetDashboardRequest) (*GetDashboardResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateComplexTypes(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&DashboardHandlers{})
+
+	gen := NewGenerator(registry)
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	handlerContent, ok := files["dashboard-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected dashboard-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	// map[int]Tag → Tag must be collected as an interface
+	if !strings.Contains(handlerContent, "export interface Tag") {
+		t.Error("Missing Tag interface (map value struct not collected)")
+	}
+
+	// []*GetUserResponse → GetUserResponse must be collected
+	if !strings.Contains(handlerContent, "export interface GetUserResponse") {
+		t.Error("Missing GetUserResponse interface (slice-of-pointer struct not collected)")
+	}
+
+	// map[string][]GetUserResponse → GetUserResponse already checked above,
+	// verify the type renders correctly
+	if !strings.Contains(handlerContent, "Record<string, GetUserResponse[]>") {
+		t.Error("Missing Record<string, GetUserResponse[]> for map-of-slice field")
+	}
+
+	if !strings.Contains(handlerContent, "Record<number, Tag>") {
+		t.Error("Missing Record<number, Tag> for map-of-struct field")
+	}
+
+	if !strings.Contains(handlerContent, "GetUserResponse[]") {
+		t.Error("Missing GetUserResponse[] for slice-of-pointer field")
+	}
+
+	t.Logf("Generated TypeScript (complex types):\n%s", handlerContent)
+}
+
 func TestGenerateMultipleFilesWithEnums(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterEnum(TaskStatusValues())
