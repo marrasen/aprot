@@ -1,5 +1,6 @@
-import { ApiClient } from './api/handlers';
+import { ApiClient } from './api/client';
 import { TaskStatus, TaskStatusType } from './api/public-handlers';
+import './api/protected-handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
