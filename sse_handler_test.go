@@ -60,9 +60,7 @@ func (r *sseReader) readEvent() (*sseEvent, error) {
 func setupSSETestServer(t *testing.T) (*httptest.Server, *Server, *sseHandler) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server

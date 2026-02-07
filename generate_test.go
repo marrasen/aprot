@@ -115,10 +115,7 @@ func (h *TaskHandlers) CreateTask(ctx context.Context, req *CreateTaskRequest) (
 
 func TestRegistry(t *testing.T) {
 	registry := NewRegistry()
-	err := registry.Register(&TestHandlers{})
-	if err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(&TestHandlers{})
 
 	methods := registry.Methods()
 	if len(methods) != 2 {
@@ -364,16 +361,10 @@ func TestRegisterEnum(t *testing.T) {
 	registry := NewRegistry()
 
 	// Test string-based enum
-	err := registry.RegisterEnum(TaskStatusValues())
-	if err != nil {
-		t.Fatalf("RegisterEnum (string) failed: %v", err)
-	}
+	registry.RegisterEnum(TaskStatusValues())
 
 	// Test int-based enum with Stringer
-	err = registry.RegisterEnum(PriorityValues())
-	if err != nil {
-		t.Fatalf("RegisterEnum (int) failed: %v", err)
-	}
+	registry.RegisterEnum(PriorityValues())
 
 	enums := registry.Enums()
 	if len(enums) != 2 {
@@ -421,17 +412,25 @@ func TestRegisterEnum(t *testing.T) {
 func TestRegisterEnumErrors(t *testing.T) {
 	registry := NewRegistry()
 
-	// Test non-slice
-	err := registry.RegisterEnum("not a slice")
-	if err == nil {
-		t.Error("Expected error for non-slice")
-	}
+	// Test non-slice panics
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Expected panic for non-slice")
+			}
+		}()
+		registry.RegisterEnum("not a slice")
+	}()
 
-	// Test empty slice
-	err = registry.RegisterEnum([]TaskStatus{})
-	if err == nil {
-		t.Error("Expected error for empty slice")
-	}
+	// Test empty slice panics
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Expected panic for empty slice")
+			}
+		}()
+		registry.RegisterEnum([]TaskStatus{})
+	}()
 }
 
 func TestGenerateWithEnums(t *testing.T) {
@@ -504,10 +503,7 @@ func (h *MixedHandlers) DeleteItem(ctx context.Context, req *DeleteItemRequest) 
 
 func TestVoidHandlerRegistration(t *testing.T) {
 	registry := NewRegistry()
-	err := registry.Register(&VoidHandlers{})
-	if err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(&VoidHandlers{})
 
 	info, ok := registry.Get("DeleteItem")
 	if !ok {

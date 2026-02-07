@@ -109,12 +109,12 @@ func NewRegistry() *Registry {
 //	registry.Register(&PublicHandlers{})                    // No middleware
 //	registry.Register(&UserHandlers{}, authMiddleware)      // With auth
 //	registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
-func (r *Registry) Register(handler any, middleware ...Middleware) error {
+func (r *Registry) Register(handler any, middleware ...Middleware) {
 	v := reflect.ValueOf(handler)
 	t := v.Type()
 
 	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
-		return fmt.Errorf("handler must be a pointer to a struct")
+		panic("aprot: Register requires a pointer to a struct")
 	}
 
 	structName := t.Elem().Name()
@@ -133,7 +133,6 @@ func (r *Registry) Register(handler any, middleware ...Middleware) error {
 	}
 
 	r.groups[structName] = group
-	return nil
 }
 
 // RegisterPushEvent registers a push event type for code generation.
@@ -257,13 +256,13 @@ func (r *Registry) ErrorCodes() []ErrorCodeInfo {
 //
 //	registry.RegisterEnum(StrStateValues())   // string-based
 //	registry.RegisterEnum(IntStatusValues())  // int-based with Stringer
-func (r *Registry) RegisterEnum(values any) error {
+func (r *Registry) RegisterEnum(values any) {
 	v := reflect.ValueOf(values)
 	if v.Kind() != reflect.Slice {
-		return fmt.Errorf("RegisterEnum: expected slice, got %v", v.Kind())
+		panic(fmt.Sprintf("aprot: RegisterEnum requires a slice, got %v", v.Kind()))
 	}
 	if v.Len() == 0 {
-		return fmt.Errorf("RegisterEnum: empty slice")
+		panic("aprot: RegisterEnum requires a non-empty slice")
 	}
 
 	elemType := v.Type().Elem()
@@ -315,8 +314,6 @@ func (r *Registry) RegisterEnum(values any) error {
 
 	r.enums = append(r.enums, enumInfo)
 	r.enumTypes[elemType] = &r.enums[len(r.enums)-1]
-
-	return nil
 }
 
 // GetEnum returns the EnumInfo for a registered enum type, or nil if not registered.
