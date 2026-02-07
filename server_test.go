@@ -82,9 +82,7 @@ func (h *IntegrationHandlers) TriggerPush(ctx context.Context, req *BroadcastReq
 func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandlers) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -363,9 +361,7 @@ func TestServerBroadcast(t *testing.T) {
 func TestOnConnectHookCalled(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -392,9 +388,7 @@ func TestOnConnectHookCalled(t *testing.T) {
 func TestOnConnectHookRejectsConnection(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -444,9 +438,7 @@ func TestOnConnectHookRejectsConnection(t *testing.T) {
 func TestOnConnectMultipleHooks(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -504,9 +496,7 @@ func TestOnConnectMultipleHooks(t *testing.T) {
 func TestOnDisconnectHookCalled(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -538,9 +528,7 @@ func TestOnDisconnectHookCalled(t *testing.T) {
 func TestOnDisconnectHookHasUserID(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -584,9 +572,7 @@ func TestOnDisconnectHookHasUserID(t *testing.T) {
 func TestHookContextContainsConnection(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -618,9 +604,7 @@ func TestHookContextContainsConnection(t *testing.T) {
 func TestConfigSentOnConnect(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry, ServerOptions{
 		ReconnectInterval:    2000,
@@ -682,9 +666,7 @@ func (h *VoidTestHandlers) DeleteItem(ctx context.Context, req *VoidRequest) err
 
 func TestServerVoidResponse(t *testing.T) {
 	registry := NewRegistry()
-	if err := registry.Register(&VoidTestHandlers{}); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(&VoidTestHandlers{})
 
 	server := NewServer(registry)
 	ts := httptest.NewServer(server)
@@ -723,9 +705,7 @@ func TestServerVoidResponse(t *testing.T) {
 func TestServerOptionsDefaults(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
-	if err := registry.Register(handlers); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
+	registry.Register(handlers)
 
 	server := NewServer(registry)
 	handlers.server = server
