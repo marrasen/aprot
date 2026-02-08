@@ -86,10 +86,6 @@ type LoginResponse struct {
 	Username string `json:"username"`
 }
 
-type GetProfileRequest struct {
-	// Auth token is validated by middleware
-}
-
 type GetProfileResponse struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`

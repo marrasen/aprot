@@ -228,7 +228,7 @@ func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginRe
 
 // GetProfile returns the authenticated user's profile.
 // This method requires authentication (middleware applied via registry).
-func (h *ProtectedHandlers) GetProfile(ctx context.Context, req *GetProfileRequest) (*GetProfileResponse, error) {
+func (h *ProtectedHandlers) GetProfile(ctx context.Context) (*GetProfileResponse, error) {
 	user := AuthUserFromContext(ctx)
 	if user == nil {
 		return nil, aprot.ErrUnauthorized("not authenticated")
