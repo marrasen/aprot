@@ -95,7 +95,7 @@ type Handlers struct {
 
 func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
     resp := &CreateUserResponse{ID: "1", Name: req.Name, Email: req.Email}
-    h.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{ID: resp.ID, Name: resp.Name})
+    h.Broadcaster.Broadcast(&UserCreatedEvent{ID: resp.ID, Name: resp.Name})
     return resp, nil
 }
 ```
@@ -245,7 +245,7 @@ if conn != nil {
 }
 
 // Later, send push to specific user (e.g., from a background job):
-server.PushToUser("user_123", "Notification", &NotificationEvent{
+server.PushToUser("user_123", &NotificationEvent{
     Message: "You have a new message",
 })
 ```
@@ -722,7 +722,7 @@ await client.connect();
 
 const user = await client.createUser({ name: 'Alice', email: 'alice@example.com' });
 
-client.onUserCreated((event) => {
+client.onUserCreatedEvent((event) => {
     console.log('User created:', event);
 });
 ```
@@ -777,7 +777,7 @@ Messages are JSON with a `type` field:
 | server→client | error | `{"type":"error","id":"1","code":404,"message":"Not found"}` |
 | server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |
 | client→server | cancel | `{"type":"cancel","id":"1"}` |
-| server→client | push | `{"type":"push","event":"UserCreated","data":{...}}` |
+| server→client | push | `{"type":"push","event":"UserCreatedEvent","data":{...}}` |
 | server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
 | server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |
 

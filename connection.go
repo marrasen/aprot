@@ -103,7 +103,15 @@ func newConn(t transport, server *Server, id uint64, r *http.Request, ctx contex
 }
 
 // Push sends a push message to this connection.
-func (c *Conn) Push(event string, data any) error {
+// The event name is derived from the Go type of data, which must have been
+// registered via RegisterPushEvent or RegisterPushEventFor.
+func (c *Conn) Push(data any) error {
+	event := c.server.registry.eventName(data)
+	return c.push(event, data)
+}
+
+// push sends a push message with an explicit event name (internal use).
+func (c *Conn) push(event string, data any) error {
 	msg := PushMessage{
 		Type:  TypePush,
 		Event: event,

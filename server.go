@@ -11,8 +11,10 @@ import (
 )
 
 // Broadcaster is an interface for broadcasting push events to all clients.
+// The event name is derived from the Go type of data, which must have been
+// registered via RegisterPushEvent or RegisterPushEventFor.
 type Broadcaster interface {
-	Broadcast(event string, data any)
+	Broadcast(data any)
 }
 
 // ConnectHook is called when a new connection is established.
@@ -169,13 +171,16 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 }
 
 // PushToUser sends a push message to all connections for a specific user.
-func (s *Server) PushToUser(userID string, event string, data any) {
+// The event name is derived from the Go type of data, which must have been
+// registered via RegisterPushEvent or RegisterPushEventFor.
+func (s *Server) PushToUser(userID string, data any) {
+	event := s.registry.eventName(data)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if conns, ok := s.userConns[userID]; ok {
 		for conn := range conns {
-			conn.Push(event, data)
+			conn.push(event, data)
 		}
 	}
 }
@@ -255,12 +260,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // Broadcast sends a push message to all connected clients.
-func (s *Server) Broadcast(event string, data any) {
+// The event name is derived from the Go type of data, which must have been
+// registered via RegisterPushEvent or RegisterPushEventFor.
+func (s *Server) Broadcast(data any) {
+	event := s.registry.eventName(data)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	for conn := range s.conns {
-		conn.Push(event, data)
+		conn.push(event, data)
 	}
 }
 

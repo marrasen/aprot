@@ -67,14 +67,14 @@ func (h *IntegrationHandlers) Slow(ctx context.Context, req *SlowRequest) (*Slow
 }
 
 func (h *IntegrationHandlers) TriggerBroadcast(ctx context.Context, req *BroadcastRequest) (*BroadcastResponse, error) {
-	h.server.Broadcast("Notification", &NotificationEvent{Message: req.Message})
+	h.server.Broadcast(&NotificationEvent{Message: req.Message})
 	return &BroadcastResponse{Sent: true}, nil
 }
 
 func (h *IntegrationHandlers) TriggerPush(ctx context.Context, req *BroadcastRequest) (*BroadcastResponse, error) {
 	conn := Connection(ctx)
 	if conn != nil {
-		conn.Push("Notification", &NotificationEvent{Message: req.Message})
+		conn.Push(&NotificationEvent{Message: req.Message})
 	}
 	return &BroadcastResponse{Sent: true}, nil
 }
@@ -83,6 +83,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandl
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
+	registry.RegisterPushEvent(NotificationEvent{})
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -296,8 +297,8 @@ func TestServerPush(t *testing.T) {
 
 		if msg["type"] == string(TypePush) {
 			gotPush = true
-			if msg["event"] != "Notification" {
-				t.Errorf("Expected Notification event, got %v", msg["event"])
+			if msg["event"] != "NotificationEvent" {
+				t.Errorf("Expected NotificationEvent event, got %v", msg["event"])
 			}
 		} else if msg["type"] == string(TypeResponse) {
 			gotResponse = true
@@ -327,7 +328,7 @@ func TestServerBroadcast(t *testing.T) {
 	}
 
 	// Broadcast from server
-	server.Broadcast("Notification", &NotificationEvent{Message: "broadcast"})
+	server.Broadcast(&NotificationEvent{Message: "broadcast"})
 
 	// Both should receive
 	var wg sync.WaitGroup
@@ -347,8 +348,8 @@ func TestServerBroadcast(t *testing.T) {
 		if msg.Type != TypePush {
 			t.Errorf("Expected push type, got %s", msg.Type)
 		}
-		if msg.Event != "Notification" {
-			t.Errorf("Expected Notification event, got %s", msg.Event)
+		if msg.Event != "NotificationEvent" {
+			t.Errorf("Expected NotificationEvent event, got %s", msg.Event)
 		}
 	}
 

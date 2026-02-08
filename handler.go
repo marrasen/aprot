@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"unicode"
 
 	"github.com/go-json-experiment/json"
@@ -73,27 +72,29 @@ type HandlerGroup struct {
 
 // Registry holds registered handlers and their methods.
 type Registry struct {
-	handlers      map[string]*HandlerInfo
-	groups        map[string]*HandlerGroup
-	pushEvents    []PushEventInfo
-	errorCodes    []ErrorCodeInfo      // custom error codes for generation
-	errorMappings []errorMapping       // error -> code mappings
-	nextErrorCode int                  // auto-incrementing error code
-	enums         []EnumInfo           // registered enum types
-	enumTypes     map[reflect.Type]*EnumInfo // for lookup in goTypeToTS
+	handlers       map[string]*HandlerInfo
+	groups         map[string]*HandlerGroup
+	pushEvents     []PushEventInfo
+	pushEventTypes map[reflect.Type]string      // type → event name for type-safe push
+	errorCodes     []ErrorCodeInfo               // custom error codes for generation
+	errorMappings  []errorMapping                // error -> code mappings
+	nextErrorCode  int                           // auto-incrementing error code
+	enums          []EnumInfo                    // registered enum types
+	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
 }
 
 // NewRegistry creates a new handler registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		handlers:      make(map[string]*HandlerInfo),
-		groups:        make(map[string]*HandlerGroup),
-		pushEvents:    []PushEventInfo{},
-		errorCodes:    []ErrorCodeInfo{},
-		errorMappings: []errorMapping{},
-		nextErrorCode: 1000, // Start custom codes at 1000
-		enums:         []EnumInfo{},
-		enumTypes:     make(map[reflect.Type]*EnumInfo),
+		handlers:       make(map[string]*HandlerInfo),
+		groups:         make(map[string]*HandlerGroup),
+		pushEvents:     []PushEventInfo{},
+		pushEventTypes: make(map[reflect.Type]string),
+		errorCodes:     []ErrorCodeInfo{},
+		errorMappings:  []errorMapping{},
+		nextErrorCode:  1000, // Start custom codes at 1000
+		enums:          []EnumInfo{},
+		enumTypes:      make(map[reflect.Type]*EnumInfo),
 	}
 }
 
@@ -135,9 +136,10 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 	r.groups[structName] = group
 }
 
-// RegisterPushEvent registers a push event type for code generation.
-// The event name is derived from the type name (e.g., UserCreatedEvent → "UserCreated").
+// RegisterPushEvent registers a push event type for code generation and type-safe broadcasting.
+// The event name is the Go type name (e.g., UserCreatedEvent → "UserCreatedEvent").
 // The event will be associated with the most recently registered handler struct.
+// Broadcasting an unregistered push type will panic.
 //
 // Example:
 //
@@ -148,8 +150,7 @@ func (r *Registry) RegisterPushEvent(dataType any) {
 		t = t.Elem()
 	}
 
-	// Derive event name from type name, stripping "Event" suffix
-	eventName := strings.TrimSuffix(t.Name(), "Event")
+	eventName := t.Name()
 
 	// Find the last registered group to associate with
 	var structName string
@@ -163,6 +164,7 @@ func (r *Registry) RegisterPushEvent(dataType any) {
 		StructName: structName,
 	}
 	r.pushEvents = append(r.pushEvents, event)
+	r.pushEventTypes[t] = eventName
 
 	// Also add to the group
 	if group, ok := r.groups[structName]; ok {
@@ -171,7 +173,8 @@ func (r *Registry) RegisterPushEvent(dataType any) {
 }
 
 // RegisterPushEventFor registers a push event associated with a specific handler.
-// The event name is derived from the type name (e.g., UserCreatedEvent → "UserCreated").
+// The event name is the Go type name (e.g., UserCreatedEvent → "UserCreatedEvent").
+// Broadcasting an unregistered push type will panic.
 //
 // Example:
 //
@@ -189,7 +192,7 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 	if dt.Kind() == reflect.Ptr {
 		dt = dt.Elem()
 	}
-	eventName := strings.TrimSuffix(dt.Name(), "Event")
+	eventName := dt.Name()
 
 	event := PushEventInfo{
 		Name:       eventName,
@@ -197,6 +200,7 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 		StructName: structName,
 	}
 	r.pushEvents = append(r.pushEvents, event)
+	r.pushEventTypes[dt] = eventName
 
 	if group, ok := r.groups[structName]; ok {
 		group.PushEvents = append(group.PushEvents, event)
@@ -211,6 +215,20 @@ func (r *Registry) Groups() map[string]*HandlerGroup {
 // PushEvents returns all registered push events.
 func (r *Registry) PushEvents() []PushEventInfo {
 	return r.pushEvents
+}
+
+// eventName returns the registered event name for the given push data type.
+// Panics if the type was not registered via RegisterPushEvent or RegisterPushEventFor.
+func (r *Registry) eventName(data any) string {
+	t := reflect.TypeOf(data)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name, ok := r.pushEventTypes[t]
+	if !ok {
+		panic("aprot: push type not registered: " + t.Name())
+	}
+	return name
 }
 
 // RegisterError registers a Go error with a name for code generation.

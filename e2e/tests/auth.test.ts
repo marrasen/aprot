@@ -65,7 +65,7 @@ describe('Auth Flow (WebSocket)', () => {
             const recipientLogin = await client2.login({ username: 'recipient', password: 'pass' });
 
             const received = new Promise<{ from_user_id: string; from_user: string; message: string }>((resolve) => {
-                client2.onDirectMessage((data) => {
+                client2.onDirectMessageEvent((data) => {
                     resolve(data);
                 });
             });

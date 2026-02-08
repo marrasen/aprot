@@ -28,10 +28,14 @@ type ProcessItemsResponse struct {
 	Processed int `json:"processed"`
 }
 
-// Push event type
+// Push event types
 type UserUpdatedEvent struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type ProcessingCompleteEvent struct {
+	Count int `json:"count"`
 }
 
 // Handlers struct
@@ -55,7 +59,7 @@ func (h *MyHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*C
 	// Push notification to the requesting client
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push("UserUpdated", &UserUpdatedEvent{ID: "123", Name: req.Name})
+		conn.Push(&UserUpdatedEvent{ID: "123", Name: req.Name})
 	}
 
 	return &CreateUserResponse{ID: "123", Name: req.Name}, nil
@@ -79,7 +83,7 @@ func (h *MyHandlers) ProcessItems(ctx context.Context, req *ProcessItemsRequest)
 	}
 
 	// Broadcast to all clients
-	h.server.Broadcast("ProcessingComplete", map[string]int{"count": total})
+	h.server.Broadcast(&ProcessingCompleteEvent{Count: total})
 
 	return &ProcessItemsResponse{Processed: total}, nil
 }
@@ -89,6 +93,8 @@ func Example() {
 	registry := aprot.NewRegistry()
 	handlers := &MyHandlers{}
 	registry.Register(handlers)
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEvent(ProcessingCompleteEvent{})
 
 	// Create server
 	server := aprot.NewServer(registry)
