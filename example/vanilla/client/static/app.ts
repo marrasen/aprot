@@ -190,17 +190,17 @@ function createClient(transport: 'websocket' | 'sse'): ApiClient {
         updateStatus(state === 'connected');
     });
 
-    c.onUserCreated((data) => {
+    c.onUserCreatedEvent((data) => {
         log(`User created: ${data.name} (${data.id})`, 'push');
         listUsers();
     });
 
-    c.onUserUpdated((data) => {
+    c.onUserUpdatedEvent((data) => {
         log(`User updated: ${data.name} (${data.id})`, 'push');
         listUsers();
     });
 
-    c.onSystemNotification((data) => {
+    c.onSystemNotificationEvent((data) => {
         log(`Notification [${data.level}]: ${data.message}`, 'push');
     });
 

@@ -13,7 +13,7 @@ import (
 
 // UserPusher interface for sending push messages to specific users.
 type UserPusher interface {
-	PushToUser(userID string, event string, data any)
+	PushToUser(userID string, data any)
 }
 
 // SharedState holds state shared between handler groups.
@@ -79,7 +79,7 @@ func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest)
 
 	// Broadcast to all clients that a user was created
 	if h.state.Broadcaster != nil {
-		h.state.Broadcaster.Broadcast("UserCreated", &UserCreatedEvent{
+		h.state.Broadcaster.Broadcast(&UserCreatedEvent{
 			ID:    user.ID,
 			Name:  user.Name,
 			Email: user.Email,
@@ -163,7 +163,7 @@ func (h *PublicHandlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequ
 func (h *PublicHandlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push("SystemNotification", req)
+		conn.Push(req)
 	}
 	return req, nil
 }
@@ -257,7 +257,7 @@ func (h *ProtectedHandlers) SendMessage(ctx context.Context, req *SendMessageReq
 
 	// Send push to the recipient
 	if h.state.UserPusher != nil {
-		h.state.UserPusher.PushToUser(req.ToUserID, "DirectMessage", &DirectMessageEvent{
+		h.state.UserPusher.PushToUser(req.ToUserID, &DirectMessageEvent{
 			FromUserID: sender.ID,
 			FromUser:   sender.Username,
 			Message:    req.Message,

@@ -407,9 +407,15 @@ func TestServerAndHandlerMiddlewareCombined(t *testing.T) {
 	}
 }
 
+// NotificationData is a push event type for middleware tests.
+type NotificationData struct {
+	Message string `json:"message"`
+}
+
 func TestUserTargetedPush(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&MiddlewareTestHandler{})
+	registry.RegisterPushEvent(NotificationData{})
 
 	server := NewServer(registry)
 
@@ -471,22 +477,19 @@ func TestUserTargetedPush(t *testing.T) {
 	ws2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 
 	// Send push to user1
-	type NotificationData struct {
-		Message string `json:"message"`
-	}
-	server.PushToUser("user1", "Notification", &NotificationData{Message: "hello user1"})
+	server.PushToUser("user1", &NotificationData{Message: "hello user1"})
 
 	// user1's connections should receive the push
 	var push1a, push1b map[string]any
 	if err := ws1a.ReadJSON(&push1a); err != nil {
 		t.Errorf("user1a should receive push: %v", err)
-	} else if push1a["type"] != "push" || push1a["event"] != "Notification" {
+	} else if push1a["type"] != "push" || push1a["event"] != "NotificationData" {
 		t.Errorf("unexpected push to user1a: %v", push1a)
 	}
 
 	if err := ws1b.ReadJSON(&push1b); err != nil {
 		t.Errorf("user1b should receive push: %v", err)
-	} else if push1b["type"] != "push" || push1b["event"] != "Notification" {
+	} else if push1b["type"] != "push" || push1b["event"] != "NotificationData" {
 		t.Errorf("unexpected push to user1b: %v", push1b)
 	}
 

@@ -225,8 +225,8 @@ func TestGenerate(t *testing.T) {
 	}
 
 	// Check for push handler
-	if !strings.Contains(output, "onUserUpdated(handler: PushHandler<UserUpdatedEvent>)") {
-		t.Error("Missing onUserUpdated handler")
+	if !strings.Contains(output, "onUserUpdatedEvent(handler: PushHandler<UserUpdatedEvent>)") {
+		t.Error("Missing onUserUpdatedEvent handler")
 	}
 
 	// Check for optional fields
@@ -330,8 +330,8 @@ func TestGenerateReact(t *testing.T) {
 	}
 
 	// Check for push event hooks
-	if !strings.Contains(output, "export function useUserUpdated") {
-		t.Error("Missing useUserUpdated hook")
+	if !strings.Contains(output, "export function useUserUpdatedEvent") {
+		t.Error("Missing useUserUpdatedEvent hook")
 	}
 
 	// Check for context

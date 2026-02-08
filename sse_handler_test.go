@@ -61,6 +61,7 @@ func setupSSETestServer(t *testing.T) (*httptest.Server, *Server, *sseHandler) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
+	registry.RegisterPushEvent(NotificationEvent{})
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -297,8 +298,8 @@ func TestSSEPush(t *testing.T) {
 			gotPush = true
 			var pushMsg PushMessage
 			json.Unmarshal([]byte(ev.Data), &pushMsg)
-			if pushMsg.Event != "Notification" {
-				t.Errorf("Expected Notification event, got %s", pushMsg.Event)
+			if pushMsg.Event != "NotificationEvent" {
+				t.Errorf("Expected NotificationEvent event, got %s", pushMsg.Event)
 			}
 		} else if ev.Event == "response" {
 			gotResponse = true
@@ -322,7 +323,7 @@ func TestSSEBroadcast(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	server.Broadcast("Notification", &NotificationEvent{Message: "broadcast"})
+	server.Broadcast(&NotificationEvent{Message: "broadcast"})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -577,7 +578,7 @@ func TestMixedBroadcast(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Broadcast
-	server.Broadcast("Notification", &NotificationEvent{Message: "both"})
+	server.Broadcast(&NotificationEvent{Message: "both"})
 
 	// Check WS receives
 	var wg sync.WaitGroup
@@ -592,8 +593,8 @@ func TestMixedBroadcast(t *testing.T) {
 		}
 		var msg PushMessage
 		json.Unmarshal(data, &msg)
-		if msg.Event != "Notification" {
-			t.Errorf("WS: Expected Notification, got %s", msg.Event)
+		if msg.Event != "NotificationEvent" {
+			t.Errorf("WS: Expected NotificationEvent, got %s", msg.Event)
 		}
 	}()
 
@@ -633,6 +634,7 @@ func TestMixedPushToUser(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
+	registry.RegisterPushEvent(NotificationEvent{})
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -661,7 +663,7 @@ func TestMixedPushToUser(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Push to user
-	server.PushToUser("user1", "DirectMessage", &NotificationEvent{Message: "dm"})
+	server.PushToUser("user1", &NotificationEvent{Message: "dm"})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -675,8 +677,8 @@ func TestMixedPushToUser(t *testing.T) {
 		}
 		var msg PushMessage
 		json.Unmarshal(data, &msg)
-		if msg.Event != "DirectMessage" {
-			t.Errorf("WS: Expected DirectMessage, got %s", msg.Event)
+		if msg.Event != "NotificationEvent" {
+			t.Errorf("WS: Expected NotificationEvent, got %s", msg.Event)
 		}
 	}()
 

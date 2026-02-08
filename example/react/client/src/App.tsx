@@ -4,8 +4,8 @@ import {
   useListUsers,
   useCreateUserMutation,
   useProcessBatchMutation,
-  useUserCreated,
-  useSystemNotification,
+  useUserCreatedEvent,
+  useSystemNotificationEvent,
   useGetTaskMutation,
   TaskStatus,
 } from './api/handlers'
@@ -77,7 +77,7 @@ function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void
 
 function UsersList() {
   const { data, isLoading, refetch } = useListUsers({ params: {} })
-  const { lastEvent } = useUserCreated()
+  const { lastEvent } = useUserCreatedEvent()
 
   useEffect(() => {
     if (lastEvent) refetch()
@@ -264,7 +264,7 @@ function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void
 }
 
 function EventLog({ logs, onClear }: { logs: { message: string; type: string; time: string }[]; onClear: () => void }) {
-  const { lastEvent: notification } = useSystemNotification()
+  const { lastEvent: notification } = useSystemNotificationEvent()
   const logRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -294,7 +294,7 @@ function EventLog({ logs, onClear }: { logs: { message: string; type: string; ti
 function AppContent() {
   const [logs, setLogs] = useState<{ message: string; type: string; time: string }[]>([])
   const { isConnected } = useConnection()
-  const { lastEvent: userCreated } = useUserCreated()
+  const { lastEvent: userCreated } = useUserCreatedEvent()
 
   useEffect(() => {
     if (isConnected) addLog('Connected to server', 'response')

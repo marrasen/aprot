@@ -52,7 +52,7 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 
 	// Broadcast to all clients that a user was created
 	if h.broadcaster != nil {
-		h.broadcaster.Broadcast("UserCreated", &UserCreatedEvent{
+		h.broadcaster.Broadcast(&UserCreatedEvent{
 			ID:    user.ID,
 			Name:  user.Name,
 			Email: user.Email,
@@ -136,7 +136,7 @@ func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (
 func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push("SystemNotification", req)
+		conn.Push(req)
 	}
 	return req, nil
 }

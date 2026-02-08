@@ -76,7 +76,7 @@ describe('SSE Transport', () => {
 
     test('sendNotification triggers push event to same client', async () => {
         const received = new Promise<{ message: string; level: string }>((resolve) => {
-            client.onSystemNotification((data) => {
+            client.onSystemNotificationEvent((data) => {
                 resolve(data);
             });
         });
@@ -94,7 +94,7 @@ describe('SSE Transport', () => {
 
         try {
             const received = new Promise<{ id: string; name: string; email: string }>((resolve) => {
-                client2.onUserCreated((data) => {
+                client2.onUserCreatedEvent((data) => {
                     resolve(data);
                 });
             });
