@@ -703,6 +703,115 @@ func TestServerVoidResponse(t *testing.T) {
 	}
 }
 
+// No-request handler for integration testing
+
+type NoRequestTestHandlers struct{}
+
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
+func (h *NoRequestTestHandlers) GetStatus(ctx context.Context) (*StatusResponse, error) {
+	return &StatusResponse{Status: "ok"}, nil
+}
+
+func (h *NoRequestTestHandlers) Ping(ctx context.Context) error {
+	return nil
+}
+
+func TestServerNoRequestHandler(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestTestHandlers{})
+
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Test no-request handler with response
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "GetStatus",
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+	if resp.ID != "1" {
+		t.Errorf("Expected ID 1, got %s", resp.ID)
+	}
+
+	result, _ := json.Marshal(resp.Result)
+	if !strings.Contains(string(result), "ok") {
+		t.Errorf("Expected 'ok' in result, got %s", string(result))
+	}
+
+	// Test no-request void handler
+	req2 := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "2",
+		Method: "Ping",
+	}
+	if err := ws.WriteJSON(req2); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp2 ResponseMessage
+	if err := ws.ReadJSON(&resp2); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp2.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp2.Type)
+	}
+	if resp2.Result != nil {
+		t.Errorf("Expected nil result for void response, got %v", resp2.Result)
+	}
+}
+
+func TestServerNoRequestHandlerWithParams(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestTestHandlers{})
+
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Sending params to a no-request handler should still work (params are ignored)
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "GetStatus",
+		Params: jsontext.Value(`{"foo":"bar"}`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+}
+
 func TestServerOptionsDefaults(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}

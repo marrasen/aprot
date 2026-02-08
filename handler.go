@@ -18,6 +18,10 @@ type voidResponse struct{}
 
 var voidResponseType = reflect.TypeOf(voidResponse{})
 
+type noRequest struct{}
+
+var noRequestType = reflect.TypeOf(noRequest{})
+
 // HandlerInfo contains metadata about a registered handler method.
 type HandlerInfo struct {
 	Name         string
@@ -25,6 +29,7 @@ type HandlerInfo struct {
 	ResponseType reflect.Type
 	StructName   string
 	IsVoid       bool // true when handler returns only error
+	NoRequest    bool // true when handler takes no request parameter
 	method       reflect.Value
 	handler      reflect.Value
 }
@@ -104,6 +109,8 @@ func NewRegistry() *Registry {
 //
 //	func(ctx context.Context, req *T) (*U, error)
 //	func(ctx context.Context, req *T) error        // void response
+//	func(ctx context.Context) (*U, error)           // no request parameter
+//	func(ctx context.Context) error                 // no request, void response
 //
 // Example:
 //
@@ -403,42 +410,54 @@ func (r *Registry) Handlers() map[string]*HandlerInfo {
 //
 //	func(ctx context.Context, req *T) (*U, error)
 //	func(ctx context.Context, req *T) error
+//	func(ctx context.Context) (*U, error)
+//	func(ctx context.Context) error
 func validateMethod(method reflect.Method, handlerValue reflect.Value, structName string) *HandlerInfo {
 	mt := method.Type
 
-	// Must have exactly 3 inputs: receiver, context.Context, *RequestType
-	if mt.NumIn() != 3 {
+	switch mt.NumIn() {
+	case 2:
+		// No request parameter: receiver + context.Context
+		if !mt.In(1).Implements(contextType) {
+			return nil
+		}
+		return validateOutputs(method, handlerValue, structName, noRequestType, true)
+	case 3:
+		// With request parameter: receiver + context.Context + *RequestType
+		if !mt.In(1).Implements(contextType) {
+			return nil
+		}
+		reqType := mt.In(2)
+		if reqType.Kind() != reflect.Ptr || reqType.Elem().Kind() != reflect.Struct {
+			return nil
+		}
+		return validateOutputs(method, handlerValue, structName, reqType.Elem(), false)
+	default:
 		return nil
 	}
+}
 
-	// First param (after receiver) must be context.Context
-	if !mt.In(1).Implements(contextType) {
-		return nil
-	}
-
-	// Second param must be a pointer to a struct
-	reqType := mt.In(2)
-	if reqType.Kind() != reflect.Ptr || reqType.Elem().Kind() != reflect.Struct {
-		return nil
-	}
-
+// validateOutputs checks the return values of a handler method and builds a HandlerInfo.
+func validateOutputs(method reflect.Method, handlerValue reflect.Value, structName string, reqType reflect.Type, noRequest bool) *HandlerInfo {
+	mt := method.Type
 	switch mt.NumOut() {
 	case 1:
-		// func(ctx, *Req) error
+		// func(...) error
 		if !mt.Out(0).Implements(errorType) {
 			return nil
 		}
 		return &HandlerInfo{
 			Name:         method.Name,
-			RequestType:  reqType.Elem(),
+			RequestType:  reqType,
 			ResponseType: voidResponseType,
 			IsVoid:       true,
+			NoRequest:    noRequest,
 			StructName:   structName,
 			method:       handlerValue.Method(method.Index),
 			handler:      handlerValue,
 		}
 	case 2:
-		// func(ctx, *Req) (*Resp, error)
+		// func(...) (*Resp, error)
 		respType := mt.Out(0)
 		if respType.Kind() != reflect.Ptr || respType.Elem().Kind() != reflect.Struct {
 			return nil
@@ -448,8 +467,9 @@ func validateMethod(method reflect.Method, handlerValue reflect.Value, structNam
 		}
 		return &HandlerInfo{
 			Name:         method.Name,
-			RequestType:  reqType.Elem(),
+			RequestType:  reqType,
 			ResponseType: respType.Elem(),
+			NoRequest:    noRequest,
 			StructName:   structName,
 			method:       handlerValue.Method(method.Index),
 			handler:      handlerValue,
@@ -461,21 +481,30 @@ func validateMethod(method reflect.Method, handlerValue reflect.Value, structNam
 
 // Call invokes the handler with the given context and JSON params.
 func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, error) {
-	// Create new request instance
-	reqPtr := reflect.New(info.RequestType)
+	var results []reflect.Value
 
-	// Unmarshal params if provided
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, reqPtr.Interface(), json.MatchCaseInsensitiveNames(true)); err != nil {
-			return nil, ErrInvalidParams(err.Error())
+	if info.NoRequest {
+		// No request parameter — call with just context
+		results = info.method.Call([]reflect.Value{
+			reflect.ValueOf(ctx),
+		})
+	} else {
+		// Create new request instance
+		reqPtr := reflect.New(info.RequestType)
+
+		// Unmarshal params if provided
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, reqPtr.Interface(), json.MatchCaseInsensitiveNames(true)); err != nil {
+				return nil, ErrInvalidParams(err.Error())
+			}
 		}
-	}
 
-	// Call the method
-	results := info.method.Call([]reflect.Value{
-		reflect.ValueOf(ctx),
-		reqPtr,
-	})
+		// Call the method
+		results = info.method.Call([]reflect.Value{
+			reflect.ValueOf(ctx),
+			reqPtr,
+		})
+	}
 
 	// Extract response and error
 	if info.IsVoid {

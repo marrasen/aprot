@@ -24,28 +24,18 @@ describe('Auth Flow (WebSocket)', () => {
         expect(res.user_id).toBeDefined();
     });
 
-    test('getProfile with valid token returns profile', async () => {
+    test('getProfile after login returns profile', async () => {
         const loginRes = await client.login({ username: 'profileuser', password: 'pass' });
 
-        // auth_token is extracted by middleware from raw params, not part of the typed struct
-        const profile = await client.getProfile({ auth_token: loginRes.token } as any);
+        // After login, the connection is authenticated — no token needed in params
+        const profile = await client.getProfile();
         expect(profile.username).toBe('profileuser');
         expect(profile.user_id).toBe(loginRes.user_id);
     });
 
-    test('getProfile without token throws Unauthorized', async () => {
+    test('getProfile without login throws Unauthorized', async () => {
         try {
-            await client.getProfile({});
-            expect.fail('Should have thrown');
-        } catch (err) {
-            expect(err).toBeInstanceOf(ApiError);
-            expect((err as ApiError).isUnauthorized()).toBe(true);
-        }
-    });
-
-    test('getProfile with invalid token throws Unauthorized', async () => {
-        try {
-            await client.getProfile({ auth_token: 'invalid-token' } as any);
+            await client.getProfile();
             expect.fail('Should have thrown');
         } catch (err) {
             expect(err).toBeInstanceOf(ApiError);
@@ -70,12 +60,11 @@ describe('Auth Flow (WebSocket)', () => {
                 });
             });
 
-            // auth_token is extracted by middleware from raw params
+            // After login, connection is authenticated — send message directly
             await client.sendMessage({
-                auth_token: senderLogin.token,
                 to_user_id: recipientLogin.user_id,
                 message: 'Hello from sender',
-            } as any);
+            });
 
             const event = await received;
             expect(event.from_user).toBe('sender');

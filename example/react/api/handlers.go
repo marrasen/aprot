@@ -87,8 +87,8 @@ func (h *Handlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserRe
 	}, nil
 }
 
-// ListUsers returns all users.
-func (h *Handlers) ListUsers(ctx context.Context, req *ListUsersRequest) (*ListUsersResponse, error) {
+// ListUsers returns all users (no request parameter needed).
+func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -153,9 +153,9 @@ func (h *Handlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskRe
 	}, nil
 }
 
-// GetDashboard returns a dashboard summary.
+// GetDashboard returns a dashboard summary (no request parameter needed).
 // Exercises complex type generation: map-of-struct, slice-of-pointer, map-of-slice.
-func (h *Handlers) GetDashboard(ctx context.Context, req *GetDashboardRequest) (*GetDashboardResponse, error) {
+func (h *Handlers) GetDashboard(ctx context.Context) (*GetDashboardResponse, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

@@ -33,7 +33,7 @@ describe('WebSocket Transport', () => {
 
     test('listUsers returns array', async () => {
         await client.createUser({ name: 'Carol', email: 'carol@test.com' });
-        const res = await client.listUsers({});
+        const res = await client.listUsers();
         expect(Array.isArray(res.users)).toBe(true);
         expect(res.users.length).toBeGreaterThanOrEqual(1);
     });

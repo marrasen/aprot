@@ -5,7 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/marrasen/aprot"
 )
 
@@ -23,26 +22,34 @@ func AuthUserFromContext(ctx context.Context) *AuthUser {
 	return nil
 }
 
-// TokenStore manages authentication tokens.
+// TokenStore manages authentication tokens and user lookup.
 type TokenStore struct {
 	tokens map[string]*AuthUser // token -> user
+	users  map[string]*AuthUser // userID -> user
 }
 
 // NewTokenStore creates a new token store.
 func NewTokenStore() *TokenStore {
 	return &TokenStore{
 		tokens: make(map[string]*AuthUser),
+		users:  make(map[string]*AuthUser),
 	}
 }
 
 // Store stores a token for a user.
 func (ts *TokenStore) Store(token string, user *AuthUser) {
 	ts.tokens[token] = user
+	ts.users[user.ID] = user
 }
 
 // Validate returns the user for a token, or nil if invalid.
 func (ts *TokenStore) Validate(token string) *AuthUser {
 	return ts.tokens[token]
+}
+
+// UserByID returns the user for a given ID, or nil if not found.
+func (ts *TokenStore) UserByID(id string) *AuthUser {
+	return ts.users[id]
 }
 
 // LoggingMiddleware logs all requests with timing information.
@@ -73,37 +80,23 @@ func LoggingMiddleware() aprot.Middleware {
 	}
 }
 
-// AuthMiddleware validates tokens and sets up user context.
-// It also associates the user with the connection for targeted push.
+// AuthMiddleware checks that the connection is authenticated (via Login)
+// and sets up the user context. Login calls conn.SetUserID(), so this
+// middleware simply looks up the user by the connection's user ID.
 // Apply this middleware only to handlers that require authentication.
 func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
-			// Extract token from params
-			var params struct {
-				AuthToken string `json:"auth_token"`
-			}
-			if err := json.Unmarshal(req.Params, &params); err != nil {
-				return nil, aprot.ErrUnauthorized("invalid request format")
-			}
-
-			if params.AuthToken == "" {
+			conn := aprot.Connection(ctx)
+			if conn == nil || conn.UserID() == "" {
 				return nil, aprot.ErrUnauthorized("authentication required")
 			}
 
-			// Validate token
-			user := tokenStore.Validate(params.AuthToken)
+			user := tokenStore.UserByID(conn.UserID())
 			if user == nil {
-				return nil, aprot.ErrUnauthorized("invalid or expired token")
+				return nil, aprot.ErrUnauthorized("invalid session")
 			}
 
-			// Associate user with connection for targeted push
-			conn := aprot.Connection(ctx)
-			if conn != nil {
-				conn.SetUserID(user.ID)
-			}
-
-			// Add user to context
 			ctx = context.WithValue(ctx, authUserKey, user)
 			return next(ctx, req)
 		}

@@ -76,7 +76,7 @@ function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void
 }
 
 function UsersList() {
-  const { data, isLoading, refetch } = useListUsers({ params: {} })
+  const { data, isLoading, refetch } = useListUsers()
   const { lastEvent } = useUserCreatedEvent()
 
   useEffect(() => {

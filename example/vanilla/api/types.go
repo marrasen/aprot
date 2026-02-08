@@ -43,9 +43,6 @@ type GetUserResponse struct {
 	Email string `json:"email"`
 }
 
-type ListUsersRequest struct {
-}
-
 type ListUsersResponse struct {
 	Users []User `json:"users"`
 }
@@ -87,10 +84,6 @@ type LoginResponse struct {
 	Token    string `json:"token"`
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
-}
-
-type GetProfileRequest struct {
-	// Auth token is validated by middleware
 }
 
 type GetProfileResponse struct {

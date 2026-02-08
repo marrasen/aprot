@@ -871,3 +871,190 @@ func TestGenerateMultipleFilesWithEnums(t *testing.T) {
 		t.Error("Handler file should use TaskStatusType for status field")
 	}
 }
+
+// No-request handler test types
+
+type ListItemsResponse struct {
+	Items []string `json:"items"`
+}
+
+type NoRequestHandlers struct{}
+
+func (h *NoRequestHandlers) ListItems(ctx context.Context) (*ListItemsResponse, error) {
+	return &ListItemsResponse{Items: []string{"a", "b"}}, nil
+}
+
+func (h *NoRequestHandlers) Cleanup(ctx context.Context) error {
+	return nil
+}
+
+func TestNoRequestHandlerRegistration(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	methods := registry.Methods()
+	if len(methods) != 2 {
+		t.Errorf("Expected 2 methods, got %d", len(methods))
+	}
+
+	info, ok := registry.Get("ListItems")
+	if !ok {
+		t.Fatal("ListItems not found")
+	}
+	if !info.NoRequest {
+		t.Error("Expected NoRequest to be true for ListItems")
+	}
+	if info.IsVoid {
+		t.Error("Expected IsVoid to be false for ListItems")
+	}
+	if info.ResponseType.Name() != "ListItemsResponse" {
+		t.Errorf("Expected ListItemsResponse, got %s", info.ResponseType.Name())
+	}
+
+	info2, ok := registry.Get("Cleanup")
+	if !ok {
+		t.Fatal("Cleanup not found")
+	}
+	if !info2.NoRequest {
+		t.Error("Expected NoRequest to be true for Cleanup")
+	}
+	if !info2.IsVoid {
+		t.Error("Expected IsVoid to be true for Cleanup")
+	}
+}
+
+func TestNoRequestHandlerCall(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	info, _ := registry.Get("ListItems")
+	result, err := info.Call(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+
+	resp, ok := result.(*ListItemsResponse)
+	if !ok {
+		t.Fatal("Result is not *ListItemsResponse")
+	}
+
+	if len(resp.Items) != 2 || resp.Items[0] != "a" {
+		t.Errorf("Unexpected result: %v", resp.Items)
+	}
+}
+
+func TestNoRequestVoidHandlerCall(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	info, _ := registry.Get("Cleanup")
+	result, err := info.Call(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+	if result != nil {
+		t.Errorf("Expected nil result, got %v", result)
+	}
+}
+
+func TestGenerateNoRequest(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should NOT generate a noRequest interface
+	if strings.Contains(output, "export interface noRequest") {
+		t.Error("Should not generate noRequest interface")
+	}
+
+	// ListItems should have no request param
+	if !strings.Contains(output, "listItems(options?: RequestOptions): Promise<ListItemsResponse>") {
+		t.Error("Missing parameter-less listItems method")
+	}
+
+	// Cleanup should have no request param and return void
+	if !strings.Contains(output, "cleanup(options?: RequestOptions): Promise<void>") {
+		t.Error("Missing parameter-less cleanup method")
+	}
+
+	// Should still generate response type
+	if !strings.Contains(output, "export interface ListItemsResponse") {
+		t.Error("Missing ListItemsResponse interface")
+	}
+
+	t.Logf("Generated TypeScript (no-request):\n%s", output)
+}
+
+func TestGenerateNoRequestReact(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should have hooks
+	if !strings.Contains(output, "export function useListItems") {
+		t.Error("Missing useListItems hook")
+	}
+	if !strings.Contains(output, "export function useCleanup") {
+		t.Error("Missing useCleanup hook")
+	}
+
+	// Query hook should not require params
+	if strings.Contains(output, "UseQueryOptions<ListItemsResponse>") {
+		t.Error("No-request query hook should not use UseQueryOptions with request type")
+	}
+
+	// Mutation hook should use void for request type
+	if !strings.Contains(output, "UseMutationResult<void, ListItemsResponse>") {
+		t.Error("Missing UseMutationResult<void, ListItemsResponse>")
+	}
+
+	t.Logf("Generated TypeScript (no-request, React):\n%s", output)
+}
+
+func TestGenerateNoRequestMultipleFiles(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NoRequestHandlers{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	handlerContent, ok := files["no-request-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected no-request-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	if strings.Contains(handlerContent, "export interface noRequest") {
+		t.Error("Should not generate noRequest interface")
+	}
+	if !strings.Contains(handlerContent, "listItems(options?: RequestOptions): Promise<ListItemsResponse>") {
+		t.Error("Missing parameter-less listItems method in handler file")
+	}
+	if !strings.Contains(handlerContent, "cleanup(options?: RequestOptions): Promise<void>") {
+		t.Error("Missing parameter-less cleanup method in handler file")
+	}
+
+	t.Logf("Generated TypeScript (no-request, multi-file):\n%s", handlerContent)
+}
