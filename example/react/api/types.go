@@ -43,9 +43,6 @@ type GetUserResponse struct {
 	Email string `json:"email"`
 }
 
-type ListUsersRequest struct {
-}
-
 type ListUsersResponse struct {
 	Users []User `json:"users"`
 }
@@ -83,8 +80,6 @@ type Tag struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
 }
-
-type GetDashboardRequest struct{}
 
 type GetDashboardResponse struct {
 	UsersByRole   map[string][]User `json:"usersByRole"`

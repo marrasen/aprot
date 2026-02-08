@@ -9,7 +9,7 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 
 ## Features
 
-- **Type-safe handlers** - Define request/response types as Go structs, with void handler support
+- **Type-safe handlers** - Define request/response types as Go structs, with void handler and no-request parameter support
 - **Automatic TypeScript generation** - Generate fully typed client code from your Go types
 - **Enum support** - Register Go enums and generate TypeScript const objects with type safety
 - **React hooks** - Optional React integration with query/mutation hooks
@@ -63,6 +63,15 @@ Handler methods must match one of these signatures:
 ```go
 func(ctx context.Context, req *T) (*U, error)   // Returns a response
 func(ctx context.Context, req *T) error          // Void (generates Promise<void>)
+func(ctx context.Context) (*U, error)            // No request parameter
+func(ctx context.Context) error                  // No request, void response
+```
+
+Methods without a request parameter generate TypeScript client methods with no `req` argument:
+
+```typescript
+// Go: func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error)
+await client.listUsers();              // No request parameter needed
 ```
 
 ```go
@@ -745,7 +754,7 @@ function App() {
 
 function UsersList() {
     const api = useApiClient();
-    const { data, isLoading, error, mutate } = useListUsers({ params: {} });
+    const { data, isLoading, error, mutate } = useListUsers();
 
     const addUser = useCallback((name: string) => {
         // mutate() runs the async action, shows loading state, then refetches

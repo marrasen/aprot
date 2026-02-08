@@ -114,8 +114,8 @@ func (h *PublicHandlers) GetUser(ctx context.Context, req *GetUserRequest) (*Get
 	}, nil
 }
 
-// ListUsers returns all users.
-func (h *PublicHandlers) ListUsers(ctx context.Context, req *ListUsersRequest) (*ListUsersResponse, error) {
+// ListUsers returns all users (no request parameter needed).
+func (h *PublicHandlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
 	h.state.Mu.RLock()
 	defer h.state.Mu.RUnlock()
 
@@ -226,9 +226,9 @@ func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginRe
 	}, nil
 }
 
-// GetProfile returns the authenticated user's profile.
+// GetProfile returns the authenticated user's profile (no request parameter needed).
 // This method requires authentication (middleware applied via registry).
-func (h *ProtectedHandlers) GetProfile(ctx context.Context, req *GetProfileRequest) (*GetProfileResponse, error) {
+func (h *ProtectedHandlers) GetProfile(ctx context.Context) (*GetProfileResponse, error) {
 	user := AuthUserFromContext(ctx)
 	if user == nil {
 		return nil, aprot.ErrUnauthorized("not authenticated")

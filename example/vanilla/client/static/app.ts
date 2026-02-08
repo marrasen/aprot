@@ -50,7 +50,7 @@ async function createUser(): Promise<void> {
 async function listUsers(): Promise<void> {
     if (!client) return;
     try {
-        const result = await client.listUsers({});
+        const result = await client.listUsers();
         const listEl = document.getElementById('usersList')!;
         if (result.users.length === 0) {
             listEl.innerHTML = '<li>No users yet</li>';

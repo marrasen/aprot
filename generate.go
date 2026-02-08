@@ -111,6 +111,7 @@ type methodData struct {
 	RequestType  string
 	ResponseType string
 	IsVoid       bool
+	NoRequest    bool
 }
 
 type pushEventData struct {
@@ -170,7 +171,9 @@ func (g *Generator) Generate() (map[string]string, error) {
 
 		// Collect types for this group
 		for _, info := range group.Handlers {
-			g.collectType(info.RequestType)
+			if !info.NoRequest {
+				g.collectType(info.RequestType)
+			}
 			g.collectType(info.ResponseType)
 		}
 		for _, event := range group.PushEvents {
@@ -209,7 +212,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
-			g.collectType(info.RequestType)
+			if !info.NoRequest {
+				g.collectType(info.RequestType)
+			}
 			g.collectType(info.ResponseType)
 		}
 		for _, event := range group.PushEvents {
@@ -263,13 +268,18 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		if isVoid {
 			respType = "void"
 		}
+		reqType := ""
+		if !info.NoRequest {
+			reqType = info.RequestType.Name()
+		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
-			RequestType:  info.RequestType.Name(),
+			RequestType:  reqType,
 			ResponseType: respType,
 			IsVoid:       isVoid,
+			NoRequest:    info.NoRequest,
 		})
 	}
 
@@ -366,13 +376,18 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 		if isVoid {
 			respType = "void"
 		}
+		reqType := ""
+		if !info.NoRequest {
+			reqType = info.RequestType.Name()
+		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
-			RequestType:  info.RequestType.Name(),
+			RequestType:  reqType,
 			ResponseType: respType,
 			IsVoid:       isVoid,
+			NoRequest:    info.NoRequest,
 		})
 	}
 
@@ -420,7 +435,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 }
 
 func (g *Generator) collectType(t reflect.Type) {
-	if t == nil || t == voidResponseType {
+	if t == nil || t == voidResponseType || t == noRequestType {
 		return
 	}
 	if _, ok := g.types[t]; ok {

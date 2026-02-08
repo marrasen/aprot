@@ -34,7 +34,11 @@ export interface {{.Name}} {
 declare module './client' {
     interface ApiClient {
 {{- range .Methods}}
+{{- if .NoRequest}}
+        {{.MethodName}}(options?: RequestOptions): Promise<{{.ResponseType}}>;
+{{- else}}
         {{.MethodName}}(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}>;
+{{- end}}
 {{- end}}
 {{- range .PushEvents}}
         {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void;
@@ -43,9 +47,15 @@ declare module './client' {
 }
 
 {{range .Methods -}}
+{{- if .NoRequest}}
+ApiClient.prototype.{{.MethodName}} = function(options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return this.request<{{.ResponseType}}>('{{.Name}}', {}, options);
+};
+{{- else}}
 ApiClient.prototype.{{.MethodName}} = function(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
     return this.request<{{.ResponseType}}>('{{.Name}}', req, options);
 };
+{{- end}}
 
 {{end -}}
 {{range .PushEvents -}}
@@ -56,6 +66,92 @@ ApiClient.prototype.{{.HandlerName}} = function(handler: PushHandler<{{.DataType
 {{end -}}
 // React Hooks for {{.StructName}}
 {{range .Methods}}
+{{- if .NoRequest}}
+// Query hook for {{.Name}}
+export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: number }): UseQueryResult<{{.ResponseType}}> {
+    const client = useApiClient();
+    const [data, setData] = useState<{{.ResponseType}} | null>(null);
+    const [error, setError] = useState<Error | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const fetch = useCallback(async () => {
+        if (options?.enabled === false) return;
+        setIsLoading(true);
+        setError(null);
+        try {
+            const result = await client.{{.MethodName}}();
+            setData(result);
+        } catch (err) {
+            setError(err as Error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [client, options?.enabled]);
+
+    useEffect(() => {
+        fetch();
+    }, [fetch]);
+
+    useEffect(() => {
+        if (options?.refetchInterval && options.refetchInterval > 0) {
+            const interval = setInterval(fetch, options.refetchInterval);
+            return () => clearInterval(interval);
+        }
+    }, [fetch, options?.refetchInterval]);
+
+    const refetch = useCallback(() => {
+        fetch();
+    }, [fetch]);
+
+    const mutate = useCallback(async (action: Promise<any> | (() => Promise<any>)) => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            await (typeof action === 'function' ? action() : action);
+            await fetch();
+        } catch (err) {
+            setError(err as Error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [fetch]);
+
+    return { data, error, isLoading, refetch, mutate };
+}
+
+// Mutation hook for {{.Name}}
+export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<void, {{.ResponseType}}> {
+    const client = useApiClient();
+    const [data, setData] = useState<{{.ResponseType}} | null>(null);
+    const [error, setError] = useState<Error | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const mutate = useCallback(async (): Promise<{{.ResponseType}}> => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const result = await client.{{.MethodName}}({
+                onProgress: options?.onProgress,
+            });
+            setData(result);
+            return result;
+        } catch (err) {
+            setError(err as Error);
+            throw err;
+        } finally {
+            setIsLoading(false);
+        }
+    }, [client, options?.onProgress]);
+
+    const reset = useCallback(() => {
+        setData(null);
+        setError(null);
+        setIsLoading(false);
+    }, []);
+
+    return { mutate, data, error, isLoading, reset };
+}
+{{- else}}
 // Query hook for {{.Name}}
 export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQueryResult<{{.ResponseType}}> {
     const client = useApiClient();
@@ -143,6 +239,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
 
     return { mutate, data, error, isLoading, reset };
 }
+{{- end}}
 {{end}}
 {{- range .PushEvents}}
 // Push event hook for {{.Name}}
