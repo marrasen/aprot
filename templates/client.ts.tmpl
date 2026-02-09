@@ -346,7 +346,7 @@ export class ApiClient {
         }
     }
 
-    private request<T>(method: string, params: any, options?: RequestOptions): Promise<T> {
+    request<T>(method: string, params: any, options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
             if (this.transport.isConnected()) {
                 this.sendRequest(method, params, options, resolve, reject);
@@ -413,20 +413,23 @@ export class ApiClient {
             entry.reject(error);
         }
     }
-{{range .Methods}}
-    {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
-        return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
-    }
-{{end}}
-{{- range .PushEvents}}
-    {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void {
-        if (!this.pushHandlers.has('{{.Name}}')) {
-            this.pushHandlers.set('{{.Name}}', new Set());
+    onPush<T>(event: string, handler: PushHandler<T>): () => void {
+        if (!this.pushHandlers.has(event)) {
+            this.pushHandlers.set(event, new Set());
         }
-        this.pushHandlers.get('{{.Name}}')!.add(handler);
+        this.pushHandlers.get(event)!.add(handler);
         return () => {
-            this.pushHandlers.get('{{.Name}}')?.delete(handler);
+            this.pushHandlers.get(event)?.delete(handler);
         };
     }
-{{end -}}
 }
+{{range .Methods}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+{{end}}
+{{- range .PushEvents}}
+export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
+    return client.onPush<{{.DataType}}>('{{.Name}}', handler);
+}
+{{end -}}

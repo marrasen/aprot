@@ -118,7 +118,7 @@ func TestServerEcho(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "Echo",
+		Method: "IntegrationHandlers.Echo",
 		Params: jsontext.Value(`[{"message":"hello"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -183,7 +183,7 @@ func TestServerProgress(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "Slow",
+		Method: "IntegrationHandlers.Slow",
 		Params: jsontext.Value(`[{"steps":3}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -225,7 +225,7 @@ func TestServerCancel(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "Slow",
+		Method: "IntegrationHandlers.Slow",
 		Params: jsontext.Value(`[{"steps":100}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -277,7 +277,7 @@ func TestServerPush(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "TriggerPush",
+		Method: "IntegrationHandlers.TriggerPush",
 		Params: jsontext.Value(`[{"message":"pushed"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -680,7 +680,7 @@ func TestServerVoidResponse(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "DeleteItem",
+		Method: "VoidTestHandlers.DeleteItem",
 		Params: jsontext.Value(`[{"id":"item_1"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -735,7 +735,7 @@ func TestServerNoRequestHandler(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "GetStatus",
+		Method: "NoRequestTestHandlers.GetStatus",
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -762,7 +762,7 @@ func TestServerNoRequestHandler(t *testing.T) {
 	req2 := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "2",
-		Method: "Ping",
+		Method: "NoRequestTestHandlers.Ping",
 	}
 	if err := ws.WriteJSON(req2); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -796,7 +796,7 @@ func TestServerNoRequestHandlerWithParams(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "GetStatus",
+		Method: "NoRequestTestHandlers.GetStatus",
 		Params: jsontext.Value(`["bar"]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -873,7 +873,7 @@ func TestStopGraceful(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "Block",
+		Method: "BlockingHandlers.Block",
 		Params: jsontext.Value(`[{"token":"test"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
@@ -933,7 +933,7 @@ func TestStopTimeout(t *testing.T) {
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
-		Method: "Stubborn",
+		Method: "StubbornHandlers.Stubborn",
 		Params: jsontext.Value(`[{"token":"test"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {

@@ -106,7 +106,7 @@ func TestMiddlewareChainExecutionOrder(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -163,7 +163,7 @@ func TestMiddlewareContextModification(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -206,7 +206,7 @@ func TestMiddlewareRequestRejection(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -272,7 +272,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 	echoReq := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "PublicTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(echoReq); err != nil {
@@ -292,7 +292,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 	secretReq := map[string]any{
 		"type":   "request",
 		"id":     "2",
-		"method": "GetSecret",
+		"method": "ProtectedTestHandler.GetSecret",
 		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(secretReq); err != nil {
@@ -324,14 +324,14 @@ func TestGetMiddleware(t *testing.T) {
 	registry.Register(&ProtectedTestHandler{}, testMiddleware) // With middleware
 
 	// Check middleware retrieval
-	publicMW := registry.GetMiddleware("Echo")
+	publicMW := registry.GetMiddleware("PublicTestHandler.Echo")
 	if len(publicMW) != 0 {
-		t.Errorf("expected no middleware for Echo, got %d", len(publicMW))
+		t.Errorf("expected no middleware for PublicTestHandler.Echo, got %d", len(publicMW))
 	}
 
-	protectedMW := registry.GetMiddleware("GetSecret")
+	protectedMW := registry.GetMiddleware("ProtectedTestHandler.GetSecret")
 	if len(protectedMW) != 1 {
-		t.Errorf("expected 1 middleware for GetSecret, got %d", len(protectedMW))
+		t.Errorf("expected 1 middleware for ProtectedTestHandler.GetSecret, got %d", len(protectedMW))
 	}
 }
 
@@ -380,7 +380,7 @@ func TestServerAndHandlerMiddlewareCombined(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "GetSecret",
+		"method": "ProtectedTestHandler.GetSecret",
 		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -459,7 +459,7 @@ func TestUserTargetedPush(t *testing.T) {
 		msg := map[string]any{
 			"type":   "request",
 			"id":     reqID,
-			"method": "Echo",
+			"method": "MiddlewareTestHandler.Echo",
 			"params": []any{map[string]string{"message": "identify", "user_id": userID}},
 		}
 		ws.WriteJSON(msg)
@@ -525,7 +525,7 @@ func TestRequestFromContext(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "test-123",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -543,8 +543,8 @@ func TestRequestFromContext(t *testing.T) {
 	if capturedReq.ID != "test-123" {
 		t.Errorf("expected ID=test-123, got %s", capturedReq.ID)
 	}
-	if capturedReq.Method != "Echo" {
-		t.Errorf("expected Method=Echo, got %s", capturedReq.Method)
+	if capturedReq.Method != "MiddlewareTestHandler.Echo" {
+		t.Errorf("expected Method=MiddlewareTestHandler.Echo, got %s", capturedReq.Method)
 	}
 }
 
@@ -582,7 +582,7 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 	msg1 := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hi", "user_id": "user1"}},
 	}
 	ws.WriteJSON(msg1)
@@ -601,7 +601,7 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 	msg2 := map[string]any{
 		"type":   "request",
 		"id":     "2",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hi", "user_id": "user2"}},
 	}
 	ws.WriteJSON(msg2)
@@ -755,7 +755,7 @@ func TestRegisteredErrorSentToClient(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "TriggerNotFound",
+		"method": "ErrorTestHandler.TriggerNotFound",
 		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
@@ -778,7 +778,7 @@ func TestRegisteredErrorSentToClient(t *testing.T) {
 	reqMsg2 := map[string]any{
 		"type":   "request",
 		"id":     "2",
-		"method": "TriggerWrapped",
+		"method": "ErrorTestHandler.TriggerWrapped",
 		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg2); err != nil {
@@ -814,7 +814,7 @@ func TestMiddlewareWithNoMiddleware(t *testing.T) {
 	reqMsg := map[string]any{
 		"type":   "request",
 		"id":     "1",
-		"method": "Echo",
+		"method": "MiddlewareTestHandler.Echo",
 		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {

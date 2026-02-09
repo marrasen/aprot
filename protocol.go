@@ -25,6 +25,7 @@ type ConnectedMessage struct {
 }
 
 // IncomingMessage represents a message from client to server.
+// Method uses qualified "Group.Method" format (e.g., "PublicHandlers.CreateUser").
 type IncomingMessage struct {
 	Type   MessageType    `json:"type"`
 	ID     string         `json:"id,omitempty"`

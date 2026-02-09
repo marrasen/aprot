@@ -164,7 +164,7 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 	handler := final
 
 	// Apply handler-specific middleware (inner layer)
-	handlerMW := s.registry.GetMiddleware(info.Name)
+	handlerMW := s.registry.GetMiddleware(info.StructName + "." + info.Name)
 	for i := len(handlerMW) - 1; i >= 0; i-- {
 		handler = handlerMW[i](handler)
 	}

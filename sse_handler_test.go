@@ -144,7 +144,7 @@ func TestSSEEcho(t *testing.T) {
 	// Wait for registration
 	time.Sleep(50 * time.Millisecond)
 
-	rpcResp := postRPC(t, ts, connID, "1", "Echo", `[{"message":"hello"}]`)
+	rpcResp := postRPC(t, ts, connID, "1", "IntegrationHandlers.Echo", `[{"message":"hello"}]`)
 	if rpcResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("Expected 202, got %d", rpcResp.StatusCode)
 	}
@@ -209,7 +209,7 @@ func TestSSEProgress(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	rpcResp := postRPC(t, ts, connID, "1", "Slow", `[{"steps":3}]`)
+	rpcResp := postRPC(t, ts, connID, "1", "IntegrationHandlers.Slow", `[{"steps":3}]`)
 	rpcResp.Body.Close()
 
 	progressCount := 0
@@ -242,7 +242,7 @@ func TestSSECancel(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	rpcResp := postRPC(t, ts, connID, "1", "Slow", `[{"steps":100}]`)
+	rpcResp := postRPC(t, ts, connID, "1", "IntegrationHandlers.Slow", `[{"steps":100}]`)
 	rpcResp.Body.Close()
 
 	time.Sleep(50 * time.Millisecond)
@@ -282,7 +282,7 @@ func TestSSEPush(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	rpcResp := postRPC(t, ts, connID, "1", "TriggerPush", `[{"message":"pushed"}]`)
+	rpcResp := postRPC(t, ts, connID, "1", "IntegrationHandlers.TriggerPush", `[{"message":"pushed"}]`)
 	rpcResp.Body.Close()
 
 	gotPush := false
@@ -521,7 +521,7 @@ func TestSSEInvalidConnectionID(t *testing.T) {
 	defer ts.Close()
 
 	// POST /rpc with invalid connection ID
-	body := `{"connectionId":"invalid","id":"1","method":"Echo","params":[{"message":"hello"}]}`
+	body := `{"connectionId":"invalid","id":"1","method":"IntegrationHandlers.Echo","params":[{"message":"hello"}]}`
 	resp, err := http.Post(ts.URL+"/sse/rpc", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("POST failed: %v", err)

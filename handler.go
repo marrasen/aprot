@@ -147,10 +147,18 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 		middleware: middleware,
 	}
 
+	if _, exists := r.groups[structName]; exists {
+		panic("aprot: handler already registered: " + structName)
+	}
+
 	for i := 0; i < t.NumMethod(); i++ {
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
-			r.handlers[info.Name] = info
+			wireMethod := structName + "." + info.Name
+			if existing, exists := r.handlers[wireMethod]; exists {
+				panic(fmt.Sprintf("aprot: duplicate method %s (registered by %s and %s)", wireMethod, existing.StructName, structName))
+			}
+			r.handlers[wireMethod] = info
 			group.Handlers[info.Name] = info
 
 			// Extract source directory from the first valid method

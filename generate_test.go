@@ -122,9 +122,9 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("Expected 2 methods, got %d", len(methods))
 	}
 
-	info, ok := registry.Get("CreateUser")
+	info, ok := registry.Get("TestHandlers.CreateUser")
 	if !ok {
-		t.Fatal("CreateUser not found")
+		t.Fatal("TestHandlers.CreateUser not found")
 	}
 
 	if len(info.Params) != 1 {
@@ -172,7 +172,7 @@ func TestHandlerCall(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
 
-	info, _ := registry.Get("CreateUser")
+	info, _ := registry.Get("TestHandlers.CreateUser")
 	result, err := info.Call(context.Background(), []byte(`[{"name":"John","email":"john@example.com"}]`))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
@@ -219,16 +219,16 @@ func TestGenerate(t *testing.T) {
 		t.Error("Missing ApiClient class")
 	}
 
-	// Check for methods
-	if !strings.Contains(output, "createUser(req: CreateUserRequest") {
-		t.Error("Missing createUser method")
+	// Check for standalone functions
+	if !strings.Contains(output, "createUser(client: ApiClient, req: CreateUserRequest") {
+		t.Error("Missing createUser function")
 	}
-	if !strings.Contains(output, "getUser(req: GetUserRequest") {
-		t.Error("Missing getUser method")
+	if !strings.Contains(output, "getUser(client: ApiClient, req: GetUserRequest") {
+		t.Error("Missing getUser function")
 	}
 
 	// Check for push handler
-	if !strings.Contains(output, "onUserUpdatedEvent(handler: PushHandler<UserUpdatedEvent>)") {
+	if !strings.Contains(output, "onUserUpdatedEvent(client: ApiClient, handler: PushHandler<UserUpdatedEvent>)") {
 		t.Error("Missing onUserUpdatedEvent handler")
 	}
 
@@ -284,8 +284,8 @@ func TestGenerateMultipleFiles(t *testing.T) {
 	if !strings.Contains(handlerContent, "export interface CreateUserRequest") {
 		t.Error("Missing CreateUserRequest in handler file")
 	}
-	if !strings.Contains(handlerContent, "ApiClient.prototype.createUser") {
-		t.Error("Missing createUser method extension in handler file")
+	if !strings.Contains(handlerContent, "export function createUser(client: ApiClient") {
+		t.Error("Missing createUser standalone function in handler file")
 	}
 }
 
@@ -508,7 +508,7 @@ func TestVoidHandlerRegistration(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&VoidHandlers{})
 
-	info, ok := registry.Get("DeleteItem")
+	info, ok := registry.Get("VoidHandlers.DeleteItem")
 	if !ok {
 		t.Fatal("DeleteItem not found")
 	}
@@ -525,7 +525,7 @@ func TestVoidHandlerCall(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&VoidHandlers{})
 
-	info, _ := registry.Get("DeleteItem")
+	info, _ := registry.Get("VoidHandlers.DeleteItem")
 	result, err := info.Call(context.Background(), []byte(`[{"id":"item_1"}]`))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
@@ -542,7 +542,7 @@ func TestVoidHandlerCallError(t *testing.T) {
 	// Can't add method to FailHandlers in test, use VoidHandlers and test via the existing handler
 	registry.Register(&VoidHandlers{})
 
-	info, _ := registry.Get("DeleteItem")
+	info, _ := registry.Get("VoidHandlers.DeleteItem")
 	// Call with valid params — should succeed
 	result, err := info.Call(context.Background(), []byte(`[{"id":"ok"}]`))
 	if err != nil {
@@ -900,7 +900,7 @@ func TestNoRequestHandlerRegistration(t *testing.T) {
 		t.Errorf("Expected 2 methods, got %d", len(methods))
 	}
 
-	info, ok := registry.Get("ListItems")
+	info, ok := registry.Get("NoRequestHandlers.ListItems")
 	if !ok {
 		t.Fatal("ListItems not found")
 	}
@@ -914,7 +914,7 @@ func TestNoRequestHandlerRegistration(t *testing.T) {
 		t.Errorf("Expected ListItemsResponse, got %s", info.ResponseType.Name())
 	}
 
-	info2, ok := registry.Get("Cleanup")
+	info2, ok := registry.Get("NoRequestHandlers.Cleanup")
 	if !ok {
 		t.Fatal("Cleanup not found")
 	}
@@ -930,7 +930,7 @@ func TestNoRequestHandlerCall(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&NoRequestHandlers{})
 
-	info, _ := registry.Get("ListItems")
+	info, _ := registry.Get("NoRequestHandlers.ListItems")
 	result, err := info.Call(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
@@ -950,7 +950,7 @@ func TestNoRequestVoidHandlerCall(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&NoRequestHandlers{})
 
-	info, _ := registry.Get("Cleanup")
+	info, _ := registry.Get("NoRequestHandlers.Cleanup")
 	result, err := info.Call(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
@@ -980,12 +980,12 @@ func TestGenerateNoRequest(t *testing.T) {
 	}
 
 	// ListItems should have no request param
-	if !strings.Contains(output, "listItems(options?: RequestOptions): Promise<ListItemsResponse>") {
+	if !strings.Contains(output, "listItems(client: ApiClient, options?: RequestOptions): Promise<ListItemsResponse>") {
 		t.Error("Missing parameter-less listItems method")
 	}
 
 	// Cleanup should have no request param and return void
-	if !strings.Contains(output, "cleanup(options?: RequestOptions): Promise<void>") {
+	if !strings.Contains(output, "cleanup(client: ApiClient, options?: RequestOptions): Promise<void>") {
 		t.Error("Missing parameter-less cleanup method")
 	}
 
@@ -1052,10 +1052,10 @@ func TestGenerateNoRequestMultipleFiles(t *testing.T) {
 	if strings.Contains(handlerContent, "export interface noRequest") {
 		t.Error("Should not generate noRequest interface")
 	}
-	if !strings.Contains(handlerContent, "listItems(options?: RequestOptions): Promise<ListItemsResponse>") {
+	if !strings.Contains(handlerContent, "listItems(client: ApiClient, options?: RequestOptions): Promise<ListItemsResponse>") {
 		t.Error("Missing parameter-less listItems method in handler file")
 	}
-	if !strings.Contains(handlerContent, "cleanup(options?: RequestOptions): Promise<void>") {
+	if !strings.Contains(handlerContent, "cleanup(client: ApiClient, options?: RequestOptions): Promise<void>") {
 		t.Error("Missing parameter-less cleanup method in handler file")
 	}
 
