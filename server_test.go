@@ -119,7 +119,7 @@ func TestServerEcho(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Echo",
-		Params: jsontext.Value(`{"message":"hello"}`),
+		Params: jsontext.Value(`[{"message":"hello"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -184,7 +184,7 @@ func TestServerProgress(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Slow",
-		Params: jsontext.Value(`{"steps":3}`),
+		Params: jsontext.Value(`[{"steps":3}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -226,7 +226,7 @@ func TestServerCancel(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Slow",
-		Params: jsontext.Value(`{"steps":100}`),
+		Params: jsontext.Value(`[{"steps":100}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -278,7 +278,7 @@ func TestServerPush(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "TriggerPush",
-		Params: jsontext.Value(`{"message":"pushed"}`),
+		Params: jsontext.Value(`[{"message":"pushed"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -681,7 +681,7 @@ func TestServerVoidResponse(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "DeleteItem",
-		Params: jsontext.Value(`{"id":"item_1"}`),
+		Params: jsontext.Value(`[{"id":"item_1"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -792,12 +792,12 @@ func TestServerNoRequestHandlerWithParams(t *testing.T) {
 	ws := connectWS(t, ts)
 	defer ws.Close()
 
-	// Sending params to a no-request handler should still work (params are ignored)
+	// Sending params to a no-params handler should still work (params are ignored)
 	req := IncomingMessage{
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "GetStatus",
-		Params: jsontext.Value(`{"foo":"bar"}`),
+		Params: jsontext.Value(`["bar"]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -874,7 +874,7 @@ func TestStopGraceful(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Block",
-		Params: jsontext.Value(`{"token":"test"}`),
+		Params: jsontext.Value(`[{"token":"test"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)
@@ -934,7 +934,7 @@ func TestStopTimeout(t *testing.T) {
 		Type:   TypeRequest,
 		ID:     "1",
 		Method: "Stubborn",
-		Params: jsontext.Value(`{"token":"test"}`),
+		Params: jsontext.Value(`[{"token":"test"}]`),
 	}
 	if err := ws.WriteJSON(req); err != nil {
 		t.Fatalf("Write failed: %v", err)

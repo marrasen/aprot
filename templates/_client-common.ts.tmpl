@@ -651,8 +651,8 @@ export interface UseMutationOptions {
 }
 
 // Mutation hook result
-export interface UseMutationResult<TReq, TRes> {
-    mutate: (params: TReq) => Promise<TRes>;
+export interface UseMutationResult<TParams extends any[], TRes> {
+    mutate: (...params: TParams) => Promise<TRes>;
     data: TRes | null;
     error: Error | null;
     isLoading: boolean;

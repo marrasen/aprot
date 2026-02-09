@@ -426,15 +426,9 @@ export class ApiClient {
         };
     }
 {{range .Methods}}
-{{- if .NoRequest}}
-    {{.MethodName}}(options?: RequestOptions): Promise<{{.ResponseType}}> {
-        return this.request<{{.ResponseType}}>('{{.Name}}', {}, options);
+    {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
+        return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
     }
-{{- else}}
-    {{.MethodName}}(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
-        return this.request<{{.ResponseType}}>('{{.Name}}', req, options);
-    }
-{{- end}}
 {{end}}
 {{- range .PushEvents}}
     {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void {
@@ -447,8 +441,8 @@ export class ApiClient {
 
 {{template "react-hook-types" .}}
 {{range .Methods}}
-{{- if .NoRequest}}
-// Hook for {{.Name}}
+{{- if not (hasParams .Params)}}
+// Query hook for {{.Name}}
 export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: number }): UseQueryResult<{{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
@@ -501,7 +495,7 @@ export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: n
 }
 
 // Mutation hook for {{.Name}}
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<void, {{.ResponseType}}> {
+export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
@@ -533,28 +527,29 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
     return { mutate, data, error, isLoading, reset };
 }
 {{- else}}
-// Hook for {{.Name}}
-export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQueryResult<{{.ResponseType}}> {
+// Query hook for {{.Name}}
+export function {{.HookName}}(options: UseQueryOptions<[{{paramDecl .Params}}]>): UseQueryResult<{{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const paramsRef = useRef(options.params);
-    paramsRef.current = options.params;
+
+    // Serialize params to detect changes
+    const paramsKey = JSON.stringify(options.params);
 
     const fetch = useCallback(async () => {
         if (options.enabled === false) return;
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}(paramsRef.current);
+            const result = await client.{{.MethodName}}(...options.params);
             setData(result);
         } catch (err) {
             setError(err as Error);
         } finally {
             setIsLoading(false);
         }
-    }, [client, options.enabled]);
+    }, [client, options.enabled, paramsKey]);
 
     useEffect(() => {
         fetch();
@@ -588,17 +583,17 @@ export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQu
 }
 
 // Mutation hook for {{.Name}}
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<{{.RequestType}}, {{.ResponseType}}> {
+export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    const mutate = useCallback(async (params: {{.RequestType}}): Promise<{{.ResponseType}}> => {
+    const mutate = useCallback(async ({{paramDecl .Params}}): Promise<{{.ResponseType}}> => {
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}(params, {
+            const result = await client.{{.MethodName}}({{paramNames .Params}}, {
                 onProgress: options?.onProgress,
             });
             setData(result);

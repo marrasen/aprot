@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"unicode"
 
 	"github.com/go-json-experiment/json"
@@ -18,18 +20,19 @@ type voidResponse struct{}
 
 var voidResponseType = reflect.TypeOf(voidResponse{})
 
-type noRequest struct{}
-
-var noRequestType = reflect.TypeOf(noRequest{})
+// ParamInfo describes a single handler parameter (after context.Context).
+type ParamInfo struct {
+	Type     reflect.Type // the actual parameter type (e.g., string, *CreateUserRequest)
+	Variadic bool         // true for the last param if the method is variadic
+}
 
 // HandlerInfo contains metadata about a registered handler method.
 type HandlerInfo struct {
 	Name         string
-	RequestType  reflect.Type
+	Params       []ParamInfo   // handler parameters (after ctx), empty for no-params handlers
 	ResponseType reflect.Type
 	StructName   string
 	IsVoid       bool // true when handler returns only error
-	NoRequest    bool // true when handler takes no request parameter
 	method       reflect.Value
 	handler      reflect.Value
 }
@@ -73,6 +76,13 @@ type HandlerGroup struct {
 	Handlers   map[string]*HandlerInfo
 	PushEvents []PushEventInfo
 	middleware []Middleware
+	sourceDir  string // directory containing handler source files (auto-detected)
+}
+
+// SourceDir returns the directory containing the handler's Go source files.
+// Discovered automatically via runtime.FuncForPC during Register().
+func (g *HandlerGroup) SourceDir() string {
+	return g.sourceDir
 }
 
 // Registry holds registered handlers and their methods.
@@ -105,12 +115,17 @@ func NewRegistry() *Registry {
 
 // Register registers all valid handler methods from the given struct.
 // Optional middleware will be applied to all methods in this handler.
-// A valid handler method has the signature:
+// A valid handler method must accept context.Context as its first parameter
+// (after the receiver), followed by any number of additional parameters of any type.
+// It must return either error or (*T, error).
 //
-//	func(ctx context.Context, req *T) (*U, error)
-//	func(ctx context.Context, req *T) error        // void response
-//	func(ctx context.Context) (*U, error)           // no request parameter
-//	func(ctx context.Context) error                 // no request, void response
+// Example signatures:
+//
+//	func(ctx context.Context) error
+//	func(ctx context.Context) (*Resp, error)
+//	func(ctx context.Context, req *T) (*Resp, error)
+//	func(ctx context.Context, name string, age int) (*Resp, error)
+//	func(ctx context.Context, items ...string) error
 //
 // Example:
 //
@@ -137,6 +152,16 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 		if info := validateMethod(method, v, structName); info != nil {
 			r.handlers[info.Name] = info
 			group.Handlers[info.Name] = info
+
+			// Extract source directory from the first valid method
+			if group.sourceDir == "" {
+				pc := method.Func.Pointer()
+				fn := runtime.FuncForPC(pc)
+				if fn != nil {
+					file, _ := fn.FileLine(pc)
+					group.sourceDir = filepath.Dir(file)
+				}
+			}
 		}
 	}
 
@@ -406,39 +431,51 @@ func (r *Registry) Handlers() map[string]*HandlerInfo {
 }
 
 // validateMethod checks if a method matches a handler signature.
-// Accepted signatures:
+// Accepted signatures (any number of params after ctx):
 //
-//	func(ctx context.Context, req *T) (*U, error)
-//	func(ctx context.Context, req *T) error
-//	func(ctx context.Context) (*U, error)
 //	func(ctx context.Context) error
+//	func(ctx context.Context) (*U, error)
+//	func(ctx context.Context, p1 T1, p2 T2, ...) error
+//	func(ctx context.Context, p1 T1, p2 T2, ...) (*U, error)
+//	func(ctx context.Context, items ...T) error          // variadic
+//	func(ctx context.Context, items ...T) (*U, error)    // variadic
 func validateMethod(method reflect.Method, handlerValue reflect.Value, structName string) *HandlerInfo {
 	mt := method.Type
 
-	switch mt.NumIn() {
-	case 2:
-		// No request parameter: receiver + context.Context
-		if !mt.In(1).Implements(contextType) {
-			return nil
-		}
-		return validateOutputs(method, handlerValue, structName, noRequestType, true)
-	case 3:
-		// With request parameter: receiver + context.Context + *RequestType
-		if !mt.In(1).Implements(contextType) {
-			return nil
-		}
-		reqType := mt.In(2)
-		if reqType.Kind() != reflect.Ptr || reqType.Elem().Kind() != reflect.Struct {
-			return nil
-		}
-		return validateOutputs(method, handlerValue, structName, reqType.Elem(), false)
-	default:
+	// Need at least 2 inputs: receiver + context.Context
+	if mt.NumIn() < 2 {
 		return nil
 	}
+
+	// First param after receiver must be context.Context
+	if !mt.In(1).Implements(contextType) {
+		return nil
+	}
+
+	// Collect params (after receiver and ctx)
+	var params []ParamInfo
+	isVariadic := mt.IsVariadic()
+	for i := 2; i < mt.NumIn(); i++ {
+		paramType := mt.In(i)
+		if isVariadic && i == mt.NumIn()-1 {
+			// Variadic param: mt.In(i) is []T, store the element type
+			params = append(params, ParamInfo{
+				Type:     paramType.Elem(),
+				Variadic: true,
+			})
+		} else {
+			params = append(params, ParamInfo{
+				Type:     paramType,
+				Variadic: false,
+			})
+		}
+	}
+
+	return validateOutputs(method, handlerValue, structName, params)
 }
 
 // validateOutputs checks the return values of a handler method and builds a HandlerInfo.
-func validateOutputs(method reflect.Method, handlerValue reflect.Value, structName string, reqType reflect.Type, noRequest bool) *HandlerInfo {
+func validateOutputs(method reflect.Method, handlerValue reflect.Value, structName string, params []ParamInfo) *HandlerInfo {
 	mt := method.Type
 	switch mt.NumOut() {
 	case 1:
@@ -448,10 +485,9 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 		}
 		return &HandlerInfo{
 			Name:         method.Name,
-			RequestType:  reqType,
+			Params:       params,
 			ResponseType: voidResponseType,
 			IsVoid:       true,
-			NoRequest:    noRequest,
 			StructName:   structName,
 			method:       handlerValue.Method(method.Index),
 			handler:      handlerValue,
@@ -467,9 +503,8 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 		}
 		return &HandlerInfo{
 			Name:         method.Name,
-			RequestType:  reqType,
+			Params:       params,
 			ResponseType: respType.Elem(),
-			NoRequest:    noRequest,
 			StructName:   structName,
 			method:       handlerValue.Method(method.Index),
 			handler:      handlerValue,
@@ -480,31 +515,60 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 }
 
 // Call invokes the handler with the given context and JSON params.
+// Params must be a JSON array (positional arguments) or empty/nil for no-params handlers.
 func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, error) {
-	var results []reflect.Value
+	args := []reflect.Value{reflect.ValueOf(ctx)}
 
-	if info.NoRequest {
-		// No request parameter — call with just context
-		results = info.method.Call([]reflect.Value{
-			reflect.ValueOf(ctx),
-		})
-	} else {
-		// Create new request instance
-		reqPtr := reflect.New(info.RequestType)
-
-		// Unmarshal params if provided
+	if len(info.Params) > 0 {
+		// Parse params as JSON array
+		var jsonArray []jsontext.Value
 		if len(params) > 0 {
-			if err := json.Unmarshal(params, reqPtr.Interface(), json.MatchCaseInsensitiveNames(true)); err != nil {
+			if err := json.Unmarshal(params, &jsonArray); err != nil {
 				return nil, ErrInvalidParams(err.Error())
 			}
 		}
 
-		// Call the method
-		results = info.method.Call([]reflect.Value{
-			reflect.ValueOf(ctx),
-			reqPtr,
-		})
+		// Count fixed (non-variadic) params
+		fixedCount := len(info.Params)
+		hasVariadic := len(info.Params) > 0 && info.Params[len(info.Params)-1].Variadic
+		if hasVariadic {
+			fixedCount--
+		}
+
+		// Validate param count
+		if hasVariadic {
+			if len(jsonArray) < fixedCount {
+				return nil, ErrInvalidParams(fmt.Sprintf("expected at least %d params, got %d", fixedCount, len(jsonArray)))
+			}
+		} else {
+			if len(jsonArray) != len(info.Params) {
+				return nil, ErrInvalidParams(fmt.Sprintf("expected %d params, got %d", len(info.Params), len(jsonArray)))
+			}
+		}
+
+		// Unmarshal fixed params
+		for i := 0; i < fixedCount; i++ {
+			val, err := unmarshalParam(info.Params[i].Type, jsonArray[i])
+			if err != nil {
+				return nil, ErrInvalidParams(err.Error())
+			}
+			args = append(args, val)
+		}
+
+		// Unmarshal variadic params (passed as individual args to Call)
+		if hasVariadic {
+			variadicType := info.Params[len(info.Params)-1].Type
+			for i := fixedCount; i < len(jsonArray); i++ {
+				val, err := unmarshalParam(variadicType, jsonArray[i])
+				if err != nil {
+					return nil, ErrInvalidParams(err.Error())
+				}
+				args = append(args, val)
+			}
+		}
 	}
+
+	results := info.method.Call(args)
 
 	// Extract response and error
 	if info.IsVoid {
@@ -522,4 +586,22 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 	}
 
 	return resp, nil
+}
+
+// unmarshalParam unmarshals a JSON value into the appropriate reflect.Value for a parameter type.
+func unmarshalParam(t reflect.Type, data jsontext.Value) (reflect.Value, error) {
+	if t.Kind() == reflect.Ptr {
+		// Pointer param: create *T, unmarshal into it, return the pointer
+		ptr := reflect.New(t.Elem())
+		if err := json.Unmarshal(data, ptr.Interface()); err != nil {
+			return reflect.Value{}, err
+		}
+		return ptr, nil
+	}
+	// Value param: create *T, unmarshal, return the dereferenced value
+	ptr := reflect.New(t)
+	if err := json.Unmarshal(data, ptr.Interface()); err != nil {
+		return reflect.Value{}, err
+	}
+	return ptr.Elem(), nil
 }

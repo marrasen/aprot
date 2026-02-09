@@ -107,7 +107,7 @@ func TestMiddlewareChainExecutionOrder(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -164,7 +164,7 @@ func TestMiddlewareContextModification(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -207,7 +207,7 @@ func TestMiddlewareRequestRejection(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -273,7 +273,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(echoReq); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -293,7 +293,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 		"type":   "request",
 		"id":     "2",
 		"method": "GetSecret",
-		"params": map[string]any{},
+		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(secretReq); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -381,7 +381,7 @@ func TestServerAndHandlerMiddlewareCombined(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "GetSecret",
-		"params": map[string]any{},
+		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -436,18 +436,18 @@ func TestUserTargetedPush(t *testing.T) {
 	// Wait for connections to be registered
 	time.Sleep(50 * time.Millisecond)
 
-	// Middleware that sets user ID
+	// Middleware that sets user ID (params are a JSON array in the new wire format)
 	server.Use(func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) (any, error) {
-			// Parse user ID from params
-			var params struct {
+			// Parse user ID from first element of params array
+			var arr []struct {
 				UserID string `json:"user_id"`
 			}
-			json.Unmarshal(req.Params, &params)
-			if params.UserID != "" {
+			json.Unmarshal(req.Params, &arr)
+			if len(arr) > 0 && arr[0].UserID != "" {
 				conn := Connection(ctx)
 				if conn != nil {
-					conn.SetUserID(params.UserID)
+					conn.SetUserID(arr[0].UserID)
 				}
 			}
 			return next(ctx, req)
@@ -460,7 +460,7 @@ func TestUserTargetedPush(t *testing.T) {
 			"type":   "request",
 			"id":     reqID,
 			"method": "Echo",
-			"params": map[string]string{"message": "identify", "user_id": userID},
+			"params": []any{map[string]string{"message": "identify", "user_id": userID}},
 		}
 		ws.WriteJSON(msg)
 		var resp map[string]any
@@ -526,7 +526,7 @@ func TestRequestFromContext(t *testing.T) {
 		"type":   "request",
 		"id":     "test-123",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -561,17 +561,17 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Middleware that sets user ID from params
+	// Middleware that sets user ID from params (JSON array wire format)
 	server.Use(func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) (any, error) {
-			var params struct {
+			var arr []struct {
 				UserID string `json:"user_id"`
 			}
-			json.Unmarshal(req.Params, &params)
-			if params.UserID != "" {
+			json.Unmarshal(req.Params, &arr)
+			if len(arr) > 0 && arr[0].UserID != "" {
 				conn := Connection(ctx)
 				if conn != nil {
-					conn.SetUserID(params.UserID)
+					conn.SetUserID(arr[0].UserID)
 				}
 			}
 			return next(ctx, req)
@@ -583,7 +583,7 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hi", "user_id": "user1"},
+		"params": []any{map[string]string{"message": "hi", "user_id": "user1"}},
 	}
 	ws.WriteJSON(msg1)
 	var resp1 map[string]any
@@ -602,7 +602,7 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 		"type":   "request",
 		"id":     "2",
 		"method": "Echo",
-		"params": map[string]string{"message": "hi", "user_id": "user2"},
+		"params": []any{map[string]string{"message": "hi", "user_id": "user2"}},
 	}
 	ws.WriteJSON(msg2)
 	var resp2 map[string]any
@@ -756,7 +756,7 @@ func TestRegisteredErrorSentToClient(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "TriggerNotFound",
-		"params": map[string]any{},
+		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -779,7 +779,7 @@ func TestRegisteredErrorSentToClient(t *testing.T) {
 		"type":   "request",
 		"id":     "2",
 		"method": "TriggerWrapped",
-		"params": map[string]any{},
+		"params": []any{map[string]any{}},
 	}
 	if err := ws.WriteJSON(reqMsg2); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -815,7 +815,7 @@ func TestMiddlewareWithNoMiddleware(t *testing.T) {
 		"type":   "request",
 		"id":     "1",
 		"method": "Echo",
-		"params": map[string]string{"message": "hello"},
+		"params": []any{map[string]string{"message": "hello"}},
 	}
 	if err := ws.WriteJSON(reqMsg); err != nil {
 		t.Fatalf("write error: %v", err)

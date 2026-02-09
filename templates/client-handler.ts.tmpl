@@ -25,11 +25,7 @@ export interface {{.Name}} {
 declare module './client' {
     interface ApiClient {
 {{- range .Methods}}
-{{- if .NoRequest}}
-        {{.MethodName}}(options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- else}}
-        {{.MethodName}}(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- end}}
+        {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}>;
 {{- end}}
 {{- range .PushEvents}}
         {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void;
@@ -38,15 +34,9 @@ declare module './client' {
 }
 
 {{range .Methods -}}
-{{- if .NoRequest}}
-ApiClient.prototype.{{.MethodName}} = function(options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', {}, options);
+ApiClient.prototype.{{.MethodName}} = function({{paramNames .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
 };
-{{- else}}
-ApiClient.prototype.{{.MethodName}} = function(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', req, options);
-};
-{{- end}}
 
 {{end -}}
 {{range .PushEvents -}}
