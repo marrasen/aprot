@@ -53,6 +53,10 @@ func (t *sseTransport) Close() error {
 	return nil
 }
 
+func (t *sseTransport) CloseGracefully() error {
+	return t.Close()
+}
+
 // sendEvent sends a named SSE event with JSON data directly (not through the transport interface).
 func (t *sseTransport) sendEvent(event string, data []byte) {
 	t.mu.Lock()

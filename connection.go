@@ -203,6 +203,7 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 
 	switch msg.Type {
 	case TypeRequest:
+		c.server.requestsWg.Add(1)
 		go c.handleRequest(msg)
 	case TypeCancel:
 		c.cancelRequest(msg.ID)
@@ -214,6 +215,8 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 }
 
 func (c *Conn) handleRequest(msg IncomingMessage) {
+	defer c.server.requestsWg.Done()
+
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
 		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
@@ -280,4 +283,18 @@ func (c *Conn) close() {
 	}
 	c.mu.Unlock()
 	c.transport.Close()
+}
+
+func (c *Conn) closeGracefully() {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	for _, cancel := range c.requests {
+		cancel()
+	}
+	c.mu.Unlock()
+	c.transport.CloseGracefully()
 }

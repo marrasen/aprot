@@ -339,6 +339,20 @@ server.OnDisconnect(func(ctx context.Context, conn *aprot.Conn) {
 
 Multiple hooks can be registered and are called in order. If an `OnConnect` hook returns an error, the connection is rejected and subsequent hooks are not called.
 
+### Graceful Shutdown
+
+Stop the server gracefully with `Server.Stop()`. It rejects new connections (503), sends WebSocket close frames, waits for in-flight requests to complete, and runs all disconnect hooks before returning.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+if err := server.Stop(ctx); err != nil {
+    log.Printf("shutdown timed out: %v", err)
+}
+```
+
+`Stop` is safe to call multiple times. If the context deadline is exceeded, it returns `ctx.Err()` and in-flight requests that haven't finished may still be running.
+
 ### Server Options
 
 Configure client reconnection and heartbeat behavior:

@@ -1,6 +1,8 @@
 package aprot
 
 import (
+	"time"
+
 	"github.com/gorilla/websocket"
 )
 
@@ -27,6 +29,17 @@ func (t *wsTransport) Send(data []byte) error {
 }
 
 func (t *wsTransport) Close() error {
+	close(t.send)
+	return nil
+}
+
+func (t *wsTransport) CloseGracefully() error {
+	// Send a WebSocket close frame to notify the client
+	t.ws.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
+		time.Now().Add(5*time.Second),
+	)
 	close(t.send)
 	return nil
 }
