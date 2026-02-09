@@ -414,15 +414,9 @@ export class ApiClient {
         }
     }
 {{range .Methods}}
-{{- if .NoRequest}}
-    {{.MethodName}}(options?: RequestOptions): Promise<{{.ResponseType}}> {
-        return this.request<{{.ResponseType}}>('{{.Name}}', {}, options);
+    {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
+        return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
     }
-{{- else}}
-    {{.MethodName}}(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
-        return this.request<{{.ResponseType}}>('{{.Name}}', req, options);
-    }
-{{- end}}
 {{end}}
 {{- range .PushEvents}}
     {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void {

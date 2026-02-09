@@ -127,8 +127,11 @@ func TestRegistry(t *testing.T) {
 		t.Fatal("CreateUser not found")
 	}
 
-	if info.RequestType.Name() != "CreateUserRequest" {
-		t.Errorf("Expected CreateUserRequest, got %s", info.RequestType.Name())
+	if len(info.Params) != 1 {
+		t.Fatalf("Expected 1 param, got %d", len(info.Params))
+	}
+	if info.Params[0].Type.Elem().Name() != "CreateUserRequest" {
+		t.Errorf("Expected *CreateUserRequest param, got %s", info.Params[0].Type)
 	}
 
 	if info.ResponseType.Name() != "CreateUserResponse" {
@@ -170,7 +173,7 @@ func TestHandlerCall(t *testing.T) {
 	registry.Register(&TestHandlers{})
 
 	info, _ := registry.Get("CreateUser")
-	result, err := info.Call(context.Background(), []byte(`{"name":"John","email":"john@example.com"}`))
+	result, err := info.Call(context.Background(), []byte(`[{"name":"John","email":"john@example.com"}]`))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -523,7 +526,7 @@ func TestVoidHandlerCall(t *testing.T) {
 	registry.Register(&VoidHandlers{})
 
 	info, _ := registry.Get("DeleteItem")
-	result, err := info.Call(context.Background(), []byte(`{"id":"item_1"}`))
+	result, err := info.Call(context.Background(), []byte(`[{"id":"item_1"}]`))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -541,7 +544,7 @@ func TestVoidHandlerCallError(t *testing.T) {
 
 	info, _ := registry.Get("DeleteItem")
 	// Call with valid params — should succeed
-	result, err := info.Call(context.Background(), []byte(`{"id":"ok"}`))
+	result, err := info.Call(context.Background(), []byte(`[{"id":"ok"}]`))
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
@@ -901,8 +904,8 @@ func TestNoRequestHandlerRegistration(t *testing.T) {
 	if !ok {
 		t.Fatal("ListItems not found")
 	}
-	if !info.NoRequest {
-		t.Error("Expected NoRequest to be true for ListItems")
+	if len(info.Params) != 0 {
+		t.Errorf("Expected 0 params for ListItems, got %d", len(info.Params))
 	}
 	if info.IsVoid {
 		t.Error("Expected IsVoid to be false for ListItems")
@@ -915,8 +918,8 @@ func TestNoRequestHandlerRegistration(t *testing.T) {
 	if !ok {
 		t.Fatal("Cleanup not found")
 	}
-	if !info2.NoRequest {
-		t.Error("Expected NoRequest to be true for Cleanup")
+	if len(info2.Params) != 0 {
+		t.Errorf("Expected 0 params for Cleanup, got %d", len(info2.Params))
 	}
 	if !info2.IsVoid {
 		t.Error("Expected IsVoid to be true for Cleanup")
@@ -1024,8 +1027,8 @@ func TestGenerateNoRequestReact(t *testing.T) {
 	}
 
 	// Mutation hook should use void for request type
-	if !strings.Contains(output, "UseMutationResult<void, ListItemsResponse>") {
-		t.Error("Missing UseMutationResult<void, ListItemsResponse>")
+	if !strings.Contains(output, "UseMutationResult<[], ListItemsResponse>") {
+		t.Error("Missing UseMutationResult<[], ListItemsResponse>")
 	}
 
 	t.Logf("Generated TypeScript (no-request, React):\n%s", output)

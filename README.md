@@ -9,7 +9,7 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 
 ## Features
 
-- **Type-safe handlers** - Define request/response types as Go structs, with void handler and no-request parameter support
+- **Type-safe handlers** - Define handlers with any number of parameters of any type, with automatic TypeScript client generation
 - **Automatic TypeScript generation** - Generate fully typed client code from your Go types
 - **Enum support** - Register Go enums and generate TypeScript const objects with type safety
 - **React hooks** - Optional React integration with query/mutation hooks
@@ -58,21 +58,30 @@ myapp/
 
 ### 1. Define handlers (api/handlers.go)
 
-Handler methods must match one of these signatures:
+Handler methods must accept `context.Context` as the first parameter (after receiver), followed by any number of additional parameters. They must return either `error` or `(*T, error)`:
 
 ```go
-func(ctx context.Context, req *T) (*U, error)   // Returns a response
-func(ctx context.Context, req *T) error          // Void (generates Promise<void>)
-func(ctx context.Context) (*U, error)            // No request parameter
-func(ctx context.Context) error                  // No request, void response
+func(ctx context.Context) (*U, error)                           // No parameters
+func(ctx context.Context) error                                 // No parameters, void
+func(ctx context.Context, req *T) (*U, error)                   // Single struct parameter
+func(ctx context.Context, name string, age int) (*U, error)     // Multiple primitives
+func(ctx context.Context, items ...string) error                // Variadic
 ```
 
-Methods without a request parameter generate TypeScript client methods with no `req` argument:
+Parameters are positional — each Go parameter becomes a separate argument in the TypeScript client:
 
 ```typescript
 // Go: func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error)
-await client.listUsers();              // No request parameter needed
+await client.listUsers();
+
+// Go: func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error)
+await client.createUser({ name: 'Alice', email: 'alice@example.com' });
+
+// Go: func (h *Handlers) Add(ctx context.Context, a int, b int) (*SumResult, error)
+await client.add(5, 3);
 ```
+
+Parameter names in the generated TypeScript are extracted from your Go source code via AST parsing — the names you choose in Go are the names your TypeScript client uses.
 
 ```go
 package api
@@ -434,7 +443,7 @@ The SSE stream uses named events (`event:` field) for message routing:
 | `push` | `{"type":"push","event":"...","data":{...}}` | Push event |
 
 HTTP endpoints:
-- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Echo","params":{...}}` → `202 Accepted`
+- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Echo","params":[...]}` → `202 Accepted`
 - `POST /cancel` — `{"connectionId":"...","id":"1"}` → `200 OK`
 
 ### Error Handling
@@ -795,7 +804,7 @@ Messages are JSON with a `type` field:
 
 | Direction | Type | Example |
 |-----------|------|---------|
-| client→server | request | `{"type":"request","id":"1","method":"CreateUser","params":{...}}` |
+| client→server | request | `{"type":"request","id":"1","method":"CreateUser","params":[{...}]}` |
 | server→client | response | `{"type":"response","id":"1","result":{...}}` |
 | server→client | error | `{"type":"error","id":"1","code":404,"message":"Not found"}` |
 | server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |

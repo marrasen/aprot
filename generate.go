@@ -3,6 +3,9 @@ package aprot
 import (
 	"embed"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,6 +25,34 @@ var templateFS embed.FS
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"toLowerCamel": toLowerCamel,
 	"toKebab":      toKebab,
+	"hasParams": func(params []paramData) bool {
+		return len(params) > 0
+	},
+	"paramDecl": func(params []paramData) string {
+		var parts []string
+		for _, p := range params {
+			parts = append(parts, p.Name+": "+p.Type)
+		}
+		return strings.Join(parts, ", ")
+	},
+	"paramNames": func(params []paramData) string {
+		var parts []string
+		for _, p := range params {
+			parts = append(parts, p.Name)
+		}
+		return strings.Join(parts, ", ")
+	},
+	"paramArray": func(params []paramData) string {
+		var parts []string
+		for _, p := range params {
+			if p.Variadic {
+				parts = append(parts, "..."+p.Name)
+			} else {
+				parts = append(parts, p.Name)
+			}
+		}
+		return strings.Join(parts, ", ")
+	},
 }).ParseFS(templateFS, "templates/*.tmpl"))
 
 // OutputMode specifies the type of client code to generate.
@@ -104,14 +135,19 @@ type fieldData struct {
 	Optional bool
 }
 
+type paramData struct {
+	Name     string // parameter name (from AST or "arg0")
+	Type     string // TypeScript type string
+	Variadic bool
+}
+
 type methodData struct {
 	Name         string
 	MethodName   string
 	HookName     string
-	RequestType  string
 	ResponseType string
 	IsVoid       bool
-	NoRequest    bool
+	Params       []paramData
 }
 
 type pushEventData struct {
@@ -165,14 +201,17 @@ func (g *Generator) Generate() (map[string]string, error) {
 		handlerTemplateName = "client-handler-react.ts.tmpl"
 	}
 
+	// Extract param names from AST
+	paramNames := g.extractAllParamNames()
+
 	for _, group := range g.registry.Groups() {
 		g.types = make(map[reflect.Type]string)           // Reset types per group
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo) // Reset enums per group
 
 		// Collect types for this group
 		for _, info := range group.Handlers {
-			if !info.NoRequest {
-				g.collectType(info.RequestType)
+			for _, param := range info.Params {
+				g.collectNestedType(param.Type)
 			}
 			g.collectType(info.ResponseType)
 		}
@@ -180,7 +219,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 			g.collectType(event.DataType)
 		}
 
-		data := g.buildTemplateData(group)
+		data := g.buildTemplateData(group, paramNames)
 
 		var buf strings.Builder
 		if err := templates.ExecuteTemplate(&buf, handlerTemplateName, data); err != nil {
@@ -212,8 +251,8 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
-			if !info.NoRequest {
-				g.collectType(info.RequestType)
+			for _, param := range info.Params {
+				g.collectNestedType(param.Type)
 			}
 			g.collectType(info.ResponseType)
 		}
@@ -221,6 +260,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			g.collectType(event.DataType)
 		}
 	}
+
+	// Extract param names from AST
+	paramNames := g.extractAllParamNames()
 
 	// Build combined template data
 	data := templateData{
@@ -268,18 +310,13 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		if isVoid {
 			respType = "void"
 		}
-		reqType := ""
-		if !info.NoRequest {
-			reqType = info.RequestType.Name()
-		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
-			RequestType:  reqType,
 			ResponseType: respType,
 			IsVoid:       isVoid,
-			NoRequest:    info.NoRequest,
+			Params:       g.buildParamData(info, paramNames),
 		})
 	}
 
@@ -331,7 +368,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	return templates.ExecuteTemplate(w, templateName, data)
 }
 
-func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
+func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string]map[string][]string) templateData {
 	data := templateData{
 		StructName: group.Name,
 		FileName:   toKebab(group.Name) + ".ts",
@@ -376,18 +413,13 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 		if isVoid {
 			respType = "void"
 		}
-		reqType := ""
-		if !info.NoRequest {
-			reqType = info.RequestType.Name()
-		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
-			RequestType:  reqType,
 			ResponseType: respType,
 			IsVoid:       isVoid,
-			NoRequest:    info.NoRequest,
+			Params:       g.buildParamData(info, paramNames),
 		})
 	}
 
@@ -435,7 +467,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup) templateData {
 }
 
 func (g *Generator) collectType(t reflect.Type) {
-	if t == nil || t == voidResponseType || t == noRequestType {
+	if t == nil || t == voidResponseType {
 		return
 	}
 	if _, ok := g.types[t]; ok {
@@ -556,4 +588,111 @@ func toKebab(s string) string {
 		}
 	}
 	return result.String()
+}
+
+// buildParamData converts HandlerInfo params to template paramData using AST names.
+func (g *Generator) buildParamData(info *HandlerInfo, paramNames map[string]map[string][]string) []paramData {
+	if len(info.Params) == 0 {
+		return nil
+	}
+
+	// Look up AST names
+	var astNames []string
+	if methods, ok := paramNames[info.StructName]; ok {
+		astNames = methods[info.Name]
+	}
+
+	params := make([]paramData, len(info.Params))
+	for i, p := range info.Params {
+		name := fmt.Sprintf("arg%d", i)
+		if i < len(astNames) {
+			name = astNames[i]
+		}
+		tsType := g.goTypeToTS(p.Type)
+		if p.Variadic {
+			tsType = tsType + "[]"
+		}
+		params[i] = paramData{
+			Name:     name,
+			Type:     tsType,
+			Variadic: p.Variadic,
+		}
+	}
+	return params
+}
+
+// extractAllParamNames extracts parameter names from source files for all handler groups.
+// Returns structName → methodName → []paramName.
+func (g *Generator) extractAllParamNames() map[string]map[string][]string {
+	// Collect unique source directories from all groups
+	dirs := make(map[string]bool)
+	for _, group := range g.registry.Groups() {
+		if dir := group.SourceDir(); dir != "" {
+			dirs[dir] = true
+		}
+	}
+
+	return extractParamNames(dirs)
+}
+
+// extractParamNames parses Go source files and extracts parameter names for handler methods.
+// Returns structName → methodName → []paramName (excluding the first context.Context param).
+func extractParamNames(dirs map[string]bool) map[string]map[string][]string {
+	result := make(map[string]map[string][]string)
+
+	for dir := range dirs {
+		fset := token.NewFileSet()
+		pkgs, err := parser.ParseDir(fset, dir, nil, 0)
+		if err != nil {
+			continue
+		}
+		for _, pkg := range pkgs {
+			for _, file := range pkg.Files {
+				for _, decl := range file.Decls {
+					fn, ok := decl.(*ast.FuncDecl)
+					if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
+						continue
+					}
+
+					// Get struct name from receiver
+					recvType := fn.Recv.List[0].Type
+					if star, ok := recvType.(*ast.StarExpr); ok {
+						recvType = star.X
+					}
+					ident, ok := recvType.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					structName := ident.Name
+					methodName := fn.Name.Name
+
+					// Extract parameter names, skipping the first (context.Context) param
+					var names []string
+					if fn.Type.Params != nil {
+						first := true
+						for _, field := range fn.Type.Params.List {
+							if first {
+								first = false
+								continue
+							}
+							if len(field.Names) == 0 {
+								names = append(names, "arg")
+							} else {
+								for _, n := range field.Names {
+									names = append(names, n.Name)
+								}
+							}
+						}
+					}
+
+					if result[structName] == nil {
+						result[structName] = make(map[string][]string)
+					}
+					result[structName][methodName] = names
+				}
+			}
+		}
+	}
+
+	return result
 }

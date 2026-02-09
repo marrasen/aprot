@@ -34,11 +34,7 @@ export interface {{.Name}} {
 declare module './client' {
     interface ApiClient {
 {{- range .Methods}}
-{{- if .NoRequest}}
-        {{.MethodName}}(options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- else}}
-        {{.MethodName}}(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- end}}
+        {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}>;
 {{- end}}
 {{- range .PushEvents}}
         {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void;
@@ -47,15 +43,9 @@ declare module './client' {
 }
 
 {{range .Methods -}}
-{{- if .NoRequest}}
-ApiClient.prototype.{{.MethodName}} = function(options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', {}, options);
+ApiClient.prototype.{{.MethodName}} = function({{paramNames .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
 };
-{{- else}}
-ApiClient.prototype.{{.MethodName}} = function(req: {{.RequestType}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', req, options);
-};
-{{- end}}
 
 {{end -}}
 {{range .PushEvents -}}
@@ -66,7 +56,7 @@ ApiClient.prototype.{{.HandlerName}} = function(handler: PushHandler<{{.DataType
 {{end -}}
 // React Hooks for {{.StructName}}
 {{range .Methods}}
-{{- if .NoRequest}}
+{{- if not (hasParams .Params)}}
 // Query hook for {{.Name}}
 export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: number }): UseQueryResult<{{.ResponseType}}> {
     const client = useApiClient();
@@ -120,7 +110,7 @@ export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: n
 }
 
 // Mutation hook for {{.Name}}
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<void, {{.ResponseType}}> {
+export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
@@ -153,7 +143,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
 }
 {{- else}}
 // Query hook for {{.Name}}
-export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQueryResult<{{.ResponseType}}> {
+export function {{.HookName}}(options: UseQueryOptions<[{{paramDecl .Params}}]>): UseQueryResult<{{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
@@ -167,7 +157,7 @@ export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQu
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}(options.params);
+            const result = await client.{{.MethodName}}(...options.params);
             setData(result);
         } catch (err) {
             setError(err as Error);
@@ -208,17 +198,17 @@ export function {{.HookName}}(options: UseQueryOptions<{{.RequestType}}>): UseQu
 }
 
 // Mutation hook for {{.Name}}
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<{{.RequestType}}, {{.ResponseType}}> {
+export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {
     const client = useApiClient();
     const [data, setData] = useState<{{.ResponseType}} | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    const mutate = useCallback(async (params: {{.RequestType}}): Promise<{{.ResponseType}}> => {
+    const mutate = useCallback(async ({{paramDecl .Params}}): Promise<{{.ResponseType}}> => {
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}(params, {
+            const result = await client.{{.MethodName}}({{paramNames .Params}}, {
                 onProgress: options?.onProgress,
             });
             setData(result);
