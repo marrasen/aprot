@@ -1,8 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { sseUrl } from './helpers';
 import { ApiClient, ApiError } from '../api/client';
-import { TaskStatus } from '../api/public-handlers';
-import '../api/protected-handlers';
+import { TaskStatus, createUser, getUser, listUsers, getTask, processBatch, sendNotification, onUserCreatedEvent, onSystemNotificationEvent } from '../api/public-handlers';
 
 describe('SSE Transport', () => {
     let client: ApiClient;
@@ -17,29 +16,29 @@ describe('SSE Transport', () => {
     });
 
     test('createUser returns id, name, email', async () => {
-        const res = await client.createUser({ name: 'Alice', email: 'alice@test.com' });
+        const res = await createUser(client, { name: 'Alice', email: 'alice@test.com' });
         expect(res.id).toBeDefined();
         expect(res.name).toBe('Alice');
         expect(res.email).toBe('alice@test.com');
     });
 
     test('getUser returns created user', async () => {
-        const created = await client.createUser({ name: 'Bob', email: 'bob@test.com' });
-        const user = await client.getUser({ id: created.id });
+        const created = await createUser(client, { name: 'Bob', email: 'bob@test.com' });
+        const user = await getUser(client, { id: created.id });
         expect(user.id).toBe(created.id);
         expect(user.name).toBe('Bob');
         expect(user.email).toBe('bob@test.com');
     });
 
     test('listUsers returns array', async () => {
-        await client.createUser({ name: 'Carol', email: 'carol@test.com' });
-        const res = await client.listUsers();
+        await createUser(client, { name: 'Carol', email: 'carol@test.com' });
+        const res = await listUsers(client);
         expect(Array.isArray(res.users)).toBe(true);
         expect(res.users.length).toBeGreaterThanOrEqual(1);
     });
 
     test('getTask returns enum status field', async () => {
-        const task = await client.getTask({ id: 'task-1' });
+        const task = await getTask(client, { id: 'task-1' });
         expect(task.id).toBe('task-1');
         expect(task.name).toBe('Example Task');
         expect(task.status).toBe(TaskStatus.Running);
@@ -47,7 +46,8 @@ describe('SSE Transport', () => {
 
     test('processBatch reports progress callbacks', async () => {
         const progressUpdates: { current: number; total: number; message: string }[] = [];
-        const res = await client.processBatch(
+        const res = await processBatch(
+            client,
             { items: ['a', 'b', 'c'], delay: 50 },
             {
                 onProgress: (current, total, message) => {
@@ -64,7 +64,8 @@ describe('SSE Transport', () => {
 
     test('processBatch abort cancels request', async () => {
         const controller = new AbortController();
-        const promise = client.processBatch(
+        const promise = processBatch(
+            client,
             { items: ['a', 'b', 'c', 'd', 'e'], delay: 200 },
             { signal: controller.signal },
         );
@@ -76,12 +77,12 @@ describe('SSE Transport', () => {
 
     test('sendNotification triggers push event to same client', async () => {
         const received = new Promise<{ message: string; level: string }>((resolve) => {
-            client.onSystemNotificationEvent((data) => {
+            onSystemNotificationEvent(client, (data) => {
                 resolve(data);
             });
         });
 
-        await client.sendNotification({ message: 'hello', level: 'info' });
+        await sendNotification(client, { message: 'hello', level: 'info' });
 
         const event = await received;
         expect(event.message).toBe('hello');
@@ -94,12 +95,12 @@ describe('SSE Transport', () => {
 
         try {
             const received = new Promise<{ id: string; name: string; email: string }>((resolve) => {
-                client2.onUserCreatedEvent((data) => {
+                onUserCreatedEvent(client2, (data) => {
                     resolve(data);
                 });
             });
 
-            const created = await client.createUser({ name: 'Dave', email: 'dave@test.com' });
+            const created = await createUser(client, { name: 'Dave', email: 'dave@test.com' });
 
             const event = await received;
             expect(event.id).toBe(created.id);
@@ -112,7 +113,7 @@ describe('SSE Transport', () => {
 
     test('createUser with empty name throws ApiError with isInvalidParams', async () => {
         try {
-            await client.createUser({ name: '', email: 'bad@test.com' });
+            await createUser(client, { name: '', email: 'bad@test.com' });
             expect.fail('Should have thrown');
         } catch (err) {
             expect(err).toBeInstanceOf(ApiError);

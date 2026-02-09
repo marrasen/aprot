@@ -71,14 +71,16 @@ func(ctx context.Context, items ...string) error                // Variadic
 Parameters are positional — each Go parameter becomes a separate argument in the TypeScript client:
 
 ```typescript
+import { listUsers, createUser, add } from './api/handlers';
+
 // Go: func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error)
-await client.listUsers();
+await listUsers(client);
 
 // Go: func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error)
-await client.createUser({ name: 'Alice', email: 'alice@example.com' });
+await createUser(client, { name: 'Alice', email: 'alice@example.com' });
 
 // Go: func (h *Handlers) Add(ctx context.Context, a int, b int) (*SumResult, error)
-await client.add(5, 3);
+await add(client, 5, 3);
 ```
 
 Parameter names in the generated TypeScript are extracted from your Go source code via AST parsing — the names you choose in Go are the names your TypeScript client uses.
@@ -417,6 +419,7 @@ Both transports can run simultaneously. Connections from both transports are tra
 
 ```typescript
 import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
+import { createUser } from './api/public-handlers';
 
 // WebSocket (default)
 const wsClient = new ApiClient(getWebSocketUrl());
@@ -426,7 +429,7 @@ const sseClient = new ApiClient(getSSEUrl(), { transport: 'sse' });
 
 // Same API for both
 await sseClient.connect();
-const user = await sseClient.createUser({ name: 'Alice' });
+const user = await createUser(sseClient, { name: 'Alice' });
 ```
 
 #### SSE Protocol
@@ -443,7 +446,7 @@ The SSE stream uses named events (`event:` field) for message routing:
 | `push` | `{"type":"push","event":"...","data":{...}}` | Push event |
 
 HTTP endpoints:
-- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Echo","params":[...]}` → `202 Accepted`
+- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Handlers.Echo","params":[...]}` → `202 Accepted`
 - `POST /cancel` — `{"connectionId":"...","id":"1"}` → `200 OK`
 
 ### Error Handling
@@ -664,7 +667,7 @@ export interface Task {
 #### Using Enums (TypeScript)
 
 ```typescript
-import { TaskStatus, TaskStatusType } from './api/handlers';
+import { TaskStatus, TaskStatusType } from './api/public-handlers';
 
 // Type-safe comparison
 if (task.status === TaskStatus.Running) {
@@ -709,29 +712,40 @@ Go types are mapped to TypeScript types during code generation:
 The generator creates split files for better organization:
 
 - **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`
-- **`{handler-name}.ts`** - Handler-specific interfaces and methods (extends ApiClient via module augmentation)
+- **`{handler-name}.ts`** - Handler-specific interfaces and standalone exported functions
 
 ```
 api/
 ├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl
-├── user-handlers.ts    # UserHandlers interfaces + methods
-└── order-handlers.ts   # OrderHandlers interfaces + methods
+├── user-handlers.ts    # UserHandlers interfaces + functions
+└── order-handlers.ts   # OrderHandlers interfaces + functions
 ```
 
-Import and use:
+Each handler file exports standalone functions that take `ApiClient` as the first argument. This enables tree-shaking and namespace imports when multiple handlers have overlapping method names:
 
 ```typescript
-import { ApiClient, ApiError, ErrorCode, getWebSocketUrl } from './api/client';
-import './api/user-handlers';   // Adds user methods to ApiClient
-import './api/order-handlers';  // Adds order methods to ApiClient
+import { ApiClient, getWebSocketUrl } from './api/client';
+import { createUser } from './api/user-handlers';
+import { createOrder } from './api/order-handlers';
 
 const client = new ApiClient(getWebSocketUrl());
 await client.connect();
 
-// Methods from all imported handlers are available
-await client.createUser({ name: 'Alice' });
-await client.createOrder({ items: [...] });
+await createUser(client, { name: 'Alice' });
+await createOrder(client, { items: [...] });
 ```
+
+Or use namespace imports to avoid name conflicts:
+
+```typescript
+import * as users from './api/user-handlers';
+import * as orders from './api/order-handlers';
+
+await users.create(client, { name: 'Alice' });
+await orders.create(client, { items: [...] });
+```
+
+Wire protocol method names are namespaced as `"HandlerStruct.MethodName"` (e.g., `"UserHandlers.CreateUser"`), allowing multiple handler groups to have methods with the same name.
 
 For single-file output (legacy), use `GenerateTo()`:
 
@@ -743,6 +757,7 @@ gen.GenerateTo(os.Stdout)  // Everything in one file
 
 ```typescript
 import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
+import { createUser, onUserCreatedEvent } from './api/public-handlers';
 
 // WebSocket (default) — auto-detects protocol from page URL
 const client = new ApiClient(getWebSocketUrl());
@@ -752,9 +767,9 @@ const client = new ApiClient(getWebSocketUrl());
 
 await client.connect();
 
-const user = await client.createUser({ name: 'Alice', email: 'alice@example.com' });
+const user = await createUser(client, { name: 'Alice', email: 'alice@example.com' });
 
-client.onUserCreatedEvent((event) => {
+onUserCreatedEvent(client, (event) => {
     console.log('User created:', event);
 });
 ```
@@ -763,7 +778,7 @@ client.onUserCreatedEvent((event) => {
 
 ```tsx
 import { ApiClient, ApiClientProvider, getWebSocketUrl, useApiClient } from './api/client';
-import { useListUsers } from './api/handlers';
+import { createUser, useListUsers } from './api/handlers';
 
 const client = new ApiClient(getWebSocketUrl());
 
@@ -781,7 +796,7 @@ function UsersList() {
 
     const addUser = useCallback((name: string) => {
         // mutate() runs the async action, shows loading state, then refetches
-        mutate(api.createUser({ name }));
+        mutate(createUser(api, { name }));
     }, [mutate, api]);
 
     if (error) return <div>Error: {error.message}</div>;
@@ -804,7 +819,7 @@ Messages are JSON with a `type` field:
 
 | Direction | Type | Example |
 |-----------|------|---------|
-| client→server | request | `{"type":"request","id":"1","method":"CreateUser","params":[{...}]}` |
+| client→server | request | `{"type":"request","id":"1","method":"Handlers.CreateUser","params":[{...}]}` |
 | server→client | response | `{"type":"response","id":"1","result":{...}}` |
 | server→client | error | `{"type":"error","id":"1","code":404,"message":"Not found"}` |
 | server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |

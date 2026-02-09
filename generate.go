@@ -142,9 +142,10 @@ type paramData struct {
 }
 
 type methodData struct {
-	Name         string
-	MethodName   string
-	HookName     string
+	Name         string // short method name (e.g., "CreateUser")
+	WireMethod   string // qualified wire name (e.g., "PublicHandlers.CreateUser")
+	MethodName   string // camelCase function name (e.g., "createUser")
+	HookName     string // React hook name (e.g., "useCreateUser")
 	ResponseType string
 	IsVoid       bool
 	Params       []paramData
@@ -303,17 +304,19 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	}
 	sort.Strings(names)
 
-	for _, name := range names {
-		info := handlers[name]
+	for _, qualifiedName := range names {
+		info := handlers[qualifiedName]
+		shortName := info.Name
 		isVoid := info.ResponseType == voidResponseType
 		respType := info.ResponseType.Name()
 		if isVoid {
 			respType = "void"
 		}
 		data.Methods = append(data.Methods, methodData{
-			Name:         name,
-			MethodName:   toLowerCamel(name),
-			HookName:     "use" + name,
+			Name:         shortName,
+			WireMethod:   qualifiedName,
+			MethodName:   toLowerCamel(shortName),
+			HookName:     "use" + shortName,
 			ResponseType: respType,
 			IsVoid:       isVoid,
 			Params:       g.buildParamData(info, paramNames),
@@ -415,6 +418,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
+			WireMethod:   group.Name + "." + name,
 			MethodName:   toLowerCamel(name),
 			HookName:     "use" + name,
 			ResponseType: respType,

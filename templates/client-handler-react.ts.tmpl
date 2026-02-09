@@ -30,28 +30,16 @@ export interface {{.Name}} {
 }
 
 {{end -}}
-// Extend ApiClient with {{.StructName}} methods
-declare module './client' {
-    interface ApiClient {
-{{- range .Methods}}
-        {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- end}}
-{{- range .PushEvents}}
-        {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void;
-{{- end}}
-    }
-}
-
 {{range .Methods -}}
-ApiClient.prototype.{{.MethodName}} = function({{paramNames .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
-};
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
 
 {{end -}}
 {{range .PushEvents -}}
-ApiClient.prototype.{{.HandlerName}} = function(handler: PushHandler<{{.DataType}}>): () => void {
-    return this.onPush<{{.DataType}}>('{{.Name}}', handler);
-};
+export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
+    return client.onPush<{{.DataType}}>('{{.Name}}', handler);
+}
 
 {{end -}}
 // React Hooks for {{.StructName}}
@@ -69,7 +57,7 @@ export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: n
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}();
+            const result = await {{.MethodName}}(client);
             setData(result);
         } catch (err) {
             setError(err as Error);
@@ -120,7 +108,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}({
+            const result = await {{.MethodName}}(client, {
                 onProgress: options?.onProgress,
             });
             setData(result);
@@ -157,7 +145,7 @@ export function {{.HookName}}(options: UseQueryOptions<[{{paramDecl .Params}}]>)
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}(...options.params);
+            const result = await {{.MethodName}}(client, ...options.params);
             setData(result);
         } catch (err) {
             setError(err as Error);
@@ -208,7 +196,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
         setIsLoading(true);
         setError(null);
         try {
-            const result = await client.{{.MethodName}}({{paramNames .Params}}, {
+            const result = await {{.MethodName}}(client, {{paramNames .Params}}, {
                 onProgress: options?.onProgress,
             });
             setData(result);
@@ -240,7 +228,7 @@ export function {{.HookName}}(options?: { maxEvents?: number }): UsePushResult<{
     const maxEvents = options?.maxEvents ?? 100;
 
     useEffect(() => {
-        return client.{{.HandlerName}}((data) => {
+        return {{.HandlerName}}(client, (data) => {
             setLastEvent(data);
             setEvents((prev) => {
                 const next = [...prev, data];

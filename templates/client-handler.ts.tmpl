@@ -21,27 +21,15 @@ export interface {{.Name}} {
 }
 
 {{end -}}
-// Extend ApiClient with {{.StructName}} methods
-declare module './client' {
-    interface ApiClient {
-{{- range .Methods}}
-        {{.MethodName}}({{paramDecl .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}>;
-{{- end}}
-{{- range .PushEvents}}
-        {{.HandlerName}}(handler: PushHandler<{{.DataType}}>): () => void;
-{{- end}}
-    }
-}
-
 {{range .Methods -}}
-ApiClient.prototype.{{.MethodName}} = function({{paramNames .Params}}{{if hasParams .Params}}, {{end}}options?: RequestOptions): Promise<{{.ResponseType}}> {
-    return this.request<{{.ResponseType}}>('{{.Name}}', [{{paramArray .Params}}], options);
-};
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
 
 {{end -}}
 {{range .PushEvents -}}
-ApiClient.prototype.{{.HandlerName}} = function(handler: PushHandler<{{.DataType}}>): () => void {
-    return this.onPush<{{.DataType}}>('{{.Name}}', handler);
-};
+export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
+    return client.onPush<{{.DataType}}>('{{.Name}}', handler);
+}
 
 {{end -}}

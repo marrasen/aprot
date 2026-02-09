@@ -1,6 +1,5 @@
 import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
-import { TaskStatus, TaskStatusType } from './api/public-handlers';
-import './api/protected-handlers';
+import { TaskStatus, TaskStatusType, createUser, getUser, listUsers, getTask, processBatch, sendNotification, onUserCreatedEvent, onUserUpdatedEvent, onSystemNotificationEvent } from './api/public-handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
@@ -29,7 +28,7 @@ function clearLog(): void {
     document.getElementById('log')!.innerHTML = '';
 }
 
-async function createUser(): Promise<void> {
+async function doCreateUser(): Promise<void> {
     if (!client) return;
     const name = (document.getElementById('userName') as HTMLInputElement).value.trim();
     const email = (document.getElementById('userEmail') as HTMLInputElement).value.trim();
@@ -38,7 +37,7 @@ async function createUser(): Promise<void> {
         return;
     }
     try {
-        const result = await client.createUser({ name, email });
+        const result = await createUser(client, { name, email });
         log(`Created user: ${JSON.stringify(result)}`, 'response');
         (document.getElementById('userName') as HTMLInputElement).value = '';
         (document.getElementById('userEmail') as HTMLInputElement).value = '';
@@ -47,10 +46,10 @@ async function createUser(): Promise<void> {
     }
 }
 
-async function listUsers(): Promise<void> {
+async function doListUsers(): Promise<void> {
     if (!client) return;
     try {
-        const result = await client.listUsers();
+        const result = await listUsers(client);
         const listEl = document.getElementById('usersList')!;
         if (result.users.length === 0) {
             listEl.innerHTML = '<li>No users yet</li>';
@@ -96,7 +95,7 @@ function getStatusClass(status: TaskStatusType): string {
     }
 }
 
-async function getTask(): Promise<void> {
+async function doGetTask(): Promise<void> {
     if (!client) return;
     const taskId = (document.getElementById('taskId') as HTMLInputElement).value.trim();
     if (!taskId) {
@@ -104,7 +103,7 @@ async function getTask(): Promise<void> {
         return;
     }
     try {
-        const task = await client.getTask({ id: taskId });
+        const task = await getTask(client, { id: taskId });
 
         // Display task info with enum-based status
         const taskInfoEl = document.getElementById('taskInfo')!;
@@ -134,7 +133,7 @@ async function getTask(): Promise<void> {
     }
 }
 
-async function processBatch(): Promise<void> {
+async function doProcessBatch(): Promise<void> {
     if (!client) return;
     const itemsStr = (document.getElementById('batchItems') as HTMLInputElement).value.trim();
     const delay = parseInt((document.getElementById('batchDelay') as HTMLInputElement).value) || 500;
@@ -149,7 +148,8 @@ async function processBatch(): Promise<void> {
     document.getElementById('progressText')!.textContent = 'Starting...';
     abortController = new AbortController();
     try {
-        const result = await client.processBatch(
+        const result = await processBatch(
+            client,
             { items, delay },
             {
                 signal: abortController.signal,
@@ -190,17 +190,17 @@ function createClient(transport: 'websocket' | 'sse'): ApiClient {
         updateStatus(state === 'connected');
     });
 
-    c.onUserCreatedEvent((data) => {
+    onUserCreatedEvent(c, (data) => {
         log(`User created: ${data.name} (${data.id})`, 'push');
-        listUsers();
+        doListUsers();
     });
 
-    c.onUserUpdatedEvent((data) => {
+    onUserUpdatedEvent(c, (data) => {
         log(`User updated: ${data.name} (${data.id})`, 'push');
-        listUsers();
+        doListUsers();
     });
 
-    c.onSystemNotificationEvent((data) => {
+    onSystemNotificationEvent(c, (data) => {
         log(`Notification [${data.level}]: ${data.message}`, 'push');
     });
 
@@ -216,7 +216,7 @@ async function reconnect(): Promise<void> {
     try {
         await client.connect();
         log(`Connected via ${transport}`, 'response');
-        listUsers();
+        doListUsers();
     } catch (err) {
         log(`Connection failed: ${(err as Error).message}`, 'error');
     }
@@ -228,7 +228,7 @@ async function init(): Promise<void> {
     try {
         await client.connect();
         log(`Connected via ${transport}`, 'response');
-        listUsers();
+        doListUsers();
     } catch (err) {
         log(`Connection failed: ${(err as Error).message}`, 'error');
     }
@@ -237,20 +237,20 @@ async function init(): Promise<void> {
 // Expose functions to window for HTML onclick handlers
 declare global {
     interface Window {
-        createUser: typeof createUser;
-        listUsers: typeof listUsers;
-        getTask: typeof getTask;
-        processBatch: typeof processBatch;
+        createUser: typeof doCreateUser;
+        listUsers: typeof doListUsers;
+        getTask: typeof doGetTask;
+        processBatch: typeof doProcessBatch;
         cancelBatch: typeof cancelBatch;
         clearLog: typeof clearLog;
         reconnect: typeof reconnect;
     }
 }
 
-window.createUser = createUser;
-window.listUsers = listUsers;
-window.getTask = getTask;
-window.processBatch = processBatch;
+window.createUser = doCreateUser;
+window.listUsers = doListUsers;
+window.getTask = doGetTask;
+window.processBatch = doProcessBatch;
 window.cancelBatch = cancelBatch;
 window.clearLog = clearLog;
 window.reconnect = reconnect;
