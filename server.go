@@ -62,6 +62,11 @@ type Server struct {
 	options         ServerOptions
 	connectHooks    []ConnectHook
 	disconnectHooks []DisconnectHook
+	stopping        atomic.Bool   // reject new connections when set
+	stopCh          chan struct{} // closed by Stop() to signal run() to drain and exit
+	stopOnce        sync.Once    // ensures stopCh is closed only once
+	done            chan struct{} // closed by run() when it finishes
+	requestsWg      sync.WaitGroup
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -101,6 +106,8 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		unregister: make(chan *Conn),
 		middleware: []Middleware{},
 		options:    options,
+		stopCh:     make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 	go s.run()
 	return s
@@ -232,6 +239,11 @@ func (s *Server) HTTPTransport() http.Handler {
 
 // ServeHTTP implements http.Handler for WebSocket upgrades.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.stopping.Load() {
+		http.Error(w, "server stopping", http.StatusServiceUnavailable)
+		return
+	}
+
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -280,6 +292,9 @@ func (s *Server) ConnectionCount() int {
 }
 
 func (s *Server) run() {
+	defer close(s.done)
+
+	stopCh := s.stopCh
 	for {
 		select {
 		case conn := <-s.register:
@@ -292,6 +307,7 @@ func (s *Server) run() {
 			if existed {
 				delete(s.conns, conn)
 			}
+			empty := len(s.conns) == 0
 			s.mu.Unlock()
 
 			if existed {
@@ -299,8 +315,61 @@ func (s *Server) run() {
 				s.disassociateUser(conn)
 				conn.close()
 			}
+
+			if s.stopping.Load() && empty {
+				return
+			}
+		case <-stopCh:
+			stopCh = nil // prevent re-firing
+			s.mu.RLock()
+			empty := len(s.conns) == 0
+			s.mu.RUnlock()
+			if empty {
+				return
+			}
 		}
 	}
+}
+
+// Stop gracefully shuts down the server. It rejects new connections,
+// closes existing connections with a close frame, waits for in-flight
+// requests to complete, and waits for disconnect hooks to finish.
+// Returns nil on clean shutdown, or ctx.Err() if the context expires.
+func (s *Server) Stop(ctx context.Context) error {
+	s.stopping.Store(true)
+
+	// Close all current connections gracefully
+	s.mu.RLock()
+	conns := make([]*Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	s.mu.RUnlock()
+
+	for _, conn := range conns {
+		conn.closeGracefully()
+	}
+
+	// Wait for in-flight requests to complete
+	requestsDone := make(chan struct{})
+	go func() {
+		s.requestsWg.Wait()
+		close(requestsDone)
+	}()
+
+	select {
+	case <-requestsDone:
+		// All requests finished
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	// Signal run() to exit
+	s.stopOnce.Do(func() { close(s.stopCh) })
+	// Wait for run() to finish processing remaining unregister events
+	<-s.done
+
+	return nil
 }
 
 // Registry returns the server's handler registry.

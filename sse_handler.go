@@ -40,6 +40,11 @@ func (h *sseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
+	if h.server.stopping.Load() {
+		http.Error(w, "server stopping", http.StatusServiceUnavailable)
+		return
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -122,10 +127,11 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 			h.server.unregister <- conn
 			return
 		case <-sseT.done:
-			// Transport was closed
+			// Transport was closed (e.g. by server shutdown)
 			h.mu.Lock()
 			delete(h.connections, connectionID)
 			h.mu.Unlock()
+			h.server.unregister <- conn
 			return
 		case <-keepAlive.C:
 			sseT.sendComment("keep-alive")
@@ -142,6 +148,11 @@ type rpcRequest struct {
 }
 
 func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
+	if h.server.stopping.Load() {
+		http.Error(w, "server stopping", http.StatusServiceUnavailable)
+		return
+	}
+
 	var req rpcRequest
 	if err := json.UnmarshalRead(r.Body, &req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -164,6 +175,7 @@ func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
 		Method: req.Method,
 		Params: req.Params,
 	}
+	h.server.requestsWg.Add(1)
 	go conn.handleRequest(msg)
 
 	w.WriteHeader(http.StatusAccepted)

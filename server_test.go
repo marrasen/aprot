@@ -3,6 +3,7 @@ package aprot
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -809,6 +810,221 @@ func TestServerNoRequestHandlerWithParams(t *testing.T) {
 
 	if resp.Type != TypeResponse {
 		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+}
+
+// BlockingRequest is used for shutdown tests where we need precise control
+// over when a request completes.
+type BlockingRequest struct {
+	Token string `json:"token"`
+}
+
+type BlockingResponse struct {
+	Done bool `json:"done"`
+}
+
+type BlockingHandlers struct {
+	ch chan struct{} // closed to unblock the handler
+}
+
+func (h *BlockingHandlers) Block(ctx context.Context, req *BlockingRequest) (*BlockingResponse, error) {
+	select {
+	case <-h.ch:
+		return &BlockingResponse{Done: true}, nil
+	case <-ctx.Done():
+		return nil, ErrCanceled()
+	}
+}
+
+// StubbornHandlers has a handler that ignores context cancellation,
+// used to test Stop() timeout behavior.
+type StubbornHandlers struct {
+	ch chan struct{}
+}
+
+func (h *StubbornHandlers) Stubborn(ctx context.Context, req *BlockingRequest) (*BlockingResponse, error) {
+	<-h.ch // blocks until channel is closed, ignores ctx
+	return &BlockingResponse{Done: true}, nil
+}
+
+func TestStopGraceful(t *testing.T) {
+	registry := NewRegistry()
+	blockCh := make(chan struct{})
+	handlers := &BlockingHandlers{ch: blockCh}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+
+	var disconnected int32
+	server.OnDisconnect(func(ctx context.Context, conn *Conn) {
+		atomic.AddInt32(&disconnected, 1)
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Wait for connection registration
+	time.Sleep(50 * time.Millisecond)
+
+	// Start a long-running request
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "Block",
+		Params: jsontext.Value(`{"token":"test"}`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Give time for request to be dispatched
+	time.Sleep(50 * time.Millisecond)
+
+	// Start Stop in a goroutine
+	stopDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		stopDone <- server.Stop(ctx)
+	}()
+
+	// Unblock the handler after a short delay
+	time.Sleep(50 * time.Millisecond)
+	close(blockCh)
+
+	// Stop should complete without error
+	err := <-stopDone
+	if err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+
+	// Disconnect hook should have been called
+	if atomic.LoadInt32(&disconnected) != 1 {
+		t.Errorf("Expected 1 disconnect hook call, got %d", atomic.LoadInt32(&disconnected))
+	}
+
+	// Server should have 0 connections
+	if server.ConnectionCount() != 0 {
+		t.Errorf("Expected 0 connections, got %d", server.ConnectionCount())
+	}
+}
+
+func TestStopTimeout(t *testing.T) {
+	registry := NewRegistry()
+	blockCh := make(chan struct{})
+	handlers := &StubbornHandlers{ch: blockCh}
+	registry.Register(handlers)
+	defer close(blockCh) // unblock after test so goroutines don't leak
+
+	server := NewServer(registry)
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Start a request that will block and ignore cancellation
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "Stubborn",
+		Params: jsontext.Value(`{"token":"test"}`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop with a very short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := server.Stop(ctx)
+	if err == nil {
+		t.Fatal("Expected timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Expected context.DeadlineExceeded, got %v", err)
+	}
+}
+
+func TestStopRejectsNewConnections(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	// Stop the server (no connections, should return immediately)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Stop(ctx); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	// Try to connect via WebSocket — should get 503
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	_, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	if err == nil {
+		t.Fatal("Expected connection to fail")
+	}
+	if resp != nil && resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestStopNoConnections(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := server.Stop(ctx)
+	if err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+}
+
+func TestStopIdempotent(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First stop
+	err := server.Stop(ctx)
+	if err != nil {
+		t.Fatalf("First Stop returned error: %v", err)
+	}
+
+	// Second stop should not panic
+	// Use a separate context since done is already closed
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel2()
+	err = server.Stop(ctx2)
+	if err != nil {
+		t.Fatalf("Second Stop returned error: %v", err)
 	}
 }
 

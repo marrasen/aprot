@@ -7,4 +7,6 @@ type transport interface {
 	Send(data []byte) error
 	// Close closes the transport.
 	Close() error
+	// CloseGracefully sends a close frame (if supported) before closing.
+	CloseGracefully() error
 }
