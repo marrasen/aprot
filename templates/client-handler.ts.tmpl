@@ -2,7 +2,13 @@
 // Handler: {{.StructName}}
 
 import { ApiClient } from './client';
+{{- if and .Methods .PushEvents}}
 import type { RequestOptions, PushHandler } from './client';
+{{- else if .Methods}}
+import type { RequestOptions } from './client';
+{{- else if .PushEvents}}
+import type { PushHandler } from './client';
+{{- end}}
 
 {{range .Enums -}}
 export const {{.Name}} = {
