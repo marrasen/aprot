@@ -53,6 +53,14 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return strings.Join(parts, ", ")
 	},
+	"hasMethodsWithParams": func(methods []methodData) bool {
+		for _, m := range methods {
+			if len(m.Params) > 0 {
+				return true
+			}
+		}
+		return false
+	},
 }).ParseFS(templateFS, "templates/*.tmpl"))
 
 // OutputMode specifies the type of client code to generate.
