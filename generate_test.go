@@ -1232,6 +1232,101 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 	}
 }
 
+func TestGenerateWithTaskMeta(t *testing.T) {
+	type TaskMeta struct {
+		UserName string `json:"userName,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasksWithMeta(TaskMeta{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should have TaskMeta interface
+	if !strings.Contains(output, "export interface TaskMeta") {
+		t.Error("Missing TaskMeta interface")
+	}
+	if !strings.Contains(output, "userName?: string") {
+		t.Error("Missing userName field in TaskMeta")
+	}
+	if !strings.Contains(output, "error?: string") {
+		t.Error("Missing error field in TaskMeta")
+	}
+
+	// SharedTaskState should have meta field typed as TaskMeta
+	if !strings.Contains(output, "meta?: TaskMeta;") {
+		t.Error("Missing typed meta field")
+	}
+
+	// TaskNode should also have meta field
+	// (both SharedTaskState and TaskNode should have meta)
+	t.Logf("Generated TypeScript (task meta):\n%s", output)
+}
+
+func TestGenerateWithTaskMetaMultiFile(t *testing.T) {
+	type TaskMeta struct {
+		UserName string `json:"userName,omitempty"`
+	}
+
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasksWithMeta(TaskMeta{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	baseContent, ok := files["client.ts"]
+	if !ok {
+		t.Fatalf("Expected client.ts, got files: %v", mapKeys(files))
+	}
+
+	if !strings.Contains(baseContent, "export interface TaskMeta") {
+		t.Error("Missing TaskMeta interface in client.ts")
+	}
+	if !strings.Contains(baseContent, "meta?: TaskMeta;") {
+		t.Error("Missing typed meta field in client.ts")
+	}
+}
+
+func TestGenerateWithoutMetaNoMetaField(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.EnableTasks()
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Without meta, TaskNode and SharedTaskState should NOT have a meta field
+	if strings.Contains(output, "meta?: ") {
+		t.Error("Should not have meta field without EnableTasksWithMeta")
+	}
+	if strings.Contains(output, "export interface TaskMeta") {
+		t.Error("Should not have TaskMeta interface without EnableTasksWithMeta")
+	}
+}
+
 func TestGenerateDeterministic(t *testing.T) {
 	const iterations = 10
 

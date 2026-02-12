@@ -273,6 +273,12 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		return nil, aprot.ErrInternal(nil)
 	}
 
+	// Attach metadata visible to all clients
+	conn := aprot.Connection(ctx)
+	if conn != nil {
+		task.SetMeta(TaskMeta{UserName: conn.UserID()})
+	}
+
 	task.Go(func(ctx context.Context) {
 		for i, step := range req.Steps {
 			select {

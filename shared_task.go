@@ -20,13 +20,14 @@ type TaskOutputEvent struct {
 
 // SharedTaskState is the wire representation of a shared task.
 type SharedTaskState struct {
-	ID       string      `json:"id"`
-	ParentID string      `json:"parentId,omitempty"`
-	Title    string      `json:"title"`
-	Status   TaskNodeStatus  `json:"status"`
-	Current  int         `json:"current,omitempty"`
-	Total    int         `json:"total,omitempty"`
-	Children []*TaskNode `json:"children,omitempty"`
+	ID       string         `json:"id"`
+	ParentID string         `json:"parentId,omitempty"`
+	Title    string         `json:"title"`
+	Status   TaskNodeStatus `json:"status"`
+	Current  int            `json:"current,omitempty"`
+	Total    int            `json:"total,omitempty"`
+	Meta     any            `json:"meta,omitempty"`
+	Children []*TaskNode    `json:"children,omitempty"`
 }
 
 // TaskRef is the reference returned to the client from a handler
@@ -48,6 +49,7 @@ type SharedTask struct {
 	status   TaskNodeStatus
 	current  int
 	total    int
+	meta     any
 	children []*sharedTaskNode
 	mu       sync.Mutex
 	manager  *taskManager
@@ -70,6 +72,15 @@ func (t *SharedTask) Progress(current, total int) {
 	t.mu.Lock()
 	t.current = current
 	t.total = total
+	t.mu.Unlock()
+	t.manager.markDirty(t.id)
+}
+
+// SetMeta sets arbitrary metadata on the shared task.
+// The value is included in the JSON snapshot broadcast to clients.
+func (t *SharedTask) SetMeta(v any) {
+	t.mu.Lock()
+	t.meta = v
 	t.mu.Unlock()
 	t.manager.markDirty(t.id)
 }
@@ -150,6 +161,7 @@ func (t *SharedTask) snapshot() SharedTaskState {
 		Status:  t.status,
 		Current: t.current,
 		Total:   t.total,
+		Meta:    t.meta,
 	}
 	for _, child := range t.children {
 		state.Children = append(state.Children, child.snapshot())
@@ -179,6 +191,28 @@ func (s *SharedTaskSub) Fail() {
 	s.task.manager.markDirty(s.task.id)
 }
 
+// SetMeta sets arbitrary metadata on this sub-task node.
+func (s *SharedTaskSub) SetMeta(v any) {
+	s.node.mu.Lock()
+	s.node.meta = v
+	s.node.mu.Unlock()
+	s.task.manager.markDirty(s.task.id)
+}
+
+// SubTask creates a child node under this sub-task.
+func (s *SharedTaskSub) SubTask(title string) *SharedTaskSub {
+	child := &sharedTaskNode{
+		id:     s.task.manager.allocID(),
+		title:  title,
+		status: TaskNodeStatusRunning,
+	}
+	s.node.mu.Lock()
+	s.node.children = append(s.node.children, child)
+	s.node.mu.Unlock()
+	s.task.manager.markDirty(s.task.id)
+	return &SharedTaskSub{node: child, task: s.task}
+}
+
 // Progress updates the sub-task's progress.
 func (s *SharedTaskSub) Progress(current, total int) {
 	s.node.mu.Lock()
@@ -195,6 +229,7 @@ type sharedTaskNode struct {
 	status   TaskNodeStatus
 	current  int
 	total    int
+	meta     any
 	children []*sharedTaskNode
 	mu       sync.Mutex
 }
@@ -208,6 +243,7 @@ func (n *sharedTaskNode) snapshot() *TaskNode {
 		Status:  n.status,
 		Current: n.current,
 		Total:   n.total,
+		Meta:    n.meta,
 	}
 	for _, child := range n.children {
 		node.Children = append(node.Children, child.snapshot())

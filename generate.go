@@ -112,14 +112,16 @@ func (g *Generator) WithOptions(opts GeneratorOptions) *Generator {
 
 // templateData holds all data needed for template rendering.
 type templateData struct {
-	StructName       string
-	FileName         string
-	Interfaces       []interfaceData
-	Methods          []methodData
-	PushEvents       []pushEventData
-	CustomErrorCodes []errorCodeData
-	Enums            []enumTemplateData
-	HasTasks         bool
+	StructName         string
+	FileName           string
+	Interfaces         []interfaceData
+	Methods            []methodData
+	PushEvents         []pushEventData
+	CustomErrorCodes   []errorCodeData
+	Enums              []enumTemplateData
+	HasTasks           bool
+	TaskMetaType       string          // e.g. "TaskMeta", empty if no meta
+	TaskMetaInterfaces []interfaceData // the meta type's interface definitions
 }
 
 type enumTemplateData struct {
@@ -187,6 +189,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 		FileName:   "client.ts",
 		HasTasks:   g.registry.tasksEnabled,
 	}
+	baseData.TaskMetaType, baseData.TaskMetaInterfaces = g.buildTaskMetaData()
 	for _, ec := range g.registry.ErrorCodes() {
 		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
@@ -281,6 +284,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		FileName:   "client.ts",
 		HasTasks:   g.registry.tasksEnabled,
 	}
+	data.TaskMetaType, data.TaskMetaInterfaces = g.buildTaskMetaData()
 
 	// Build interfaces
 	types := make([]reflect.Type, 0, len(g.types))
@@ -295,7 +299,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		iface := interfaceData{Name: t.Name()}
 		for i := 0; i < t.NumField(); i++ {
 			field := t.Field(i)
-			if !field.IsExported() {
+			if !field.IsExported() || shouldSkipField(field) {
 				continue
 			}
 			iface.Fields = append(iface.Fields, fieldData{
@@ -410,7 +414,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 		iface := interfaceData{Name: t.Name()}
 		for i := 0; i < t.NumField(); i++ {
 			field := t.Field(i)
-			if !field.IsExported() {
+			if !field.IsExported() || shouldSkipField(field) {
 				continue
 			}
 			iface.Fields = append(iface.Fields, fieldData{
@@ -499,6 +503,67 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 	return data
 }
 
+// buildTaskMetaData builds the template data for the task meta type.
+// Returns the meta type name and its interface definitions.
+func (g *Generator) buildTaskMetaData() (string, []interfaceData) {
+	metaType := g.registry.TaskMetaType()
+	if metaType == nil {
+		return "", nil
+	}
+
+	var ifaces []interfaceData
+	g.collectTaskMetaType(metaType, &ifaces)
+	return metaType.Name(), ifaces
+}
+
+// collectTaskMetaType recursively collects interfaces for the meta type and its nested structs.
+func (g *Generator) collectTaskMetaType(t reflect.Type, ifaces *[]interfaceData) {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct || t.PkgPath() == "" {
+		return
+	}
+
+	// Avoid duplicates
+	for _, iface := range *ifaces {
+		if iface.Name == t.Name() {
+			return
+		}
+	}
+
+	iface := interfaceData{Name: t.Name()}
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		iface.Fields = append(iface.Fields, fieldData{
+			Name:     g.getJSONName(field),
+			Type:     g.goTypeToTS(field.Type),
+			Optional: g.isOptional(field),
+		})
+		// Recurse into nested struct types
+		ft := field.Type
+		if ft.Kind() == reflect.Ptr {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
+			g.collectTaskMetaType(ft, ifaces)
+		}
+		if ft.Kind() == reflect.Slice {
+			et := ft.Elem()
+			if et.Kind() == reflect.Ptr {
+				et = et.Elem()
+			}
+			if et.Kind() == reflect.Struct && et.PkgPath() != "" && et != timeType {
+				g.collectTaskMetaType(et, ifaces)
+			}
+		}
+	}
+	*ifaces = append(*ifaces, iface)
+}
+
 func (g *Generator) collectType(t reflect.Type) {
 	if t == nil || t == voidResponseType {
 		return
@@ -558,6 +623,13 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 		return true
 	}
 	return false
+}
+
+// shouldSkipField returns true for fields that should be excluded from reflected interfaces.
+// Fields of type interface{} (any) are skipped because they produce unhelpful "any" types
+// and are typically handled by hardcoded template definitions instead.
+func shouldSkipField(field reflect.StructField) bool {
+	return field.Type.Kind() == reflect.Interface
 }
 
 func (g *Generator) goTypeToTS(t reflect.Type) string {

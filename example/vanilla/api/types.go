@@ -119,6 +119,11 @@ type ProcessWithSubTasksResponse struct {
 
 // SharedTask demo types
 
+type TaskMeta struct {
+	UserName string `json:"userName,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
 type StartSharedWorkRequest struct {
 	Title string   `json:"title"`
 	Steps []string `json:"steps"`

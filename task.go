@@ -19,12 +19,13 @@ const (
 
 // TaskNode is the JSON-serializable snapshot of a task sent to the client.
 type TaskNode struct {
-	ID       string      `json:"id"`
-	Title    string      `json:"title"`
-	Status   TaskNodeStatus  `json:"status"`
-	Current  int         `json:"current,omitempty"`
-	Total    int         `json:"total,omitempty"`
-	Children []*TaskNode `json:"children,omitempty"`
+	ID       string         `json:"id"`
+	Title    string         `json:"title"`
+	Status   TaskNodeStatus `json:"status"`
+	Current  int            `json:"current,omitempty"`
+	Total    int            `json:"total,omitempty"`
+	Meta     any            `json:"meta,omitempty"`
+	Children []*TaskNode    `json:"children,omitempty"`
 }
 
 // taskTree is the mutable state for a request's task hierarchy.
