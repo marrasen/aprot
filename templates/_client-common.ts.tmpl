@@ -43,12 +43,23 @@ export class ApiError extends Error {
 {{end}}
 
 {{define "types"}}
+{{- range .TaskMetaInterfaces}}
+export interface {{.Name}} {
+{{- range .Fields}}
+    {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
+{{- end}}
+}
+
+{{end -}}
 export interface TaskNode {
     id: string;
     title: string;
     status: 'running' | 'completed' | 'failed';
     current?: number;
     total?: number;
+{{- if .TaskMetaType}}
+    meta?: {{.TaskMetaType}};
+{{- end}}
     children?: TaskNode[];
 }
 
@@ -67,6 +78,9 @@ export interface SharedTaskState {
     status: 'running' | 'completed' | 'failed';
     current?: number;
     total?: number;
+{{- if .TaskMetaType}}
+    meta?: {{.TaskMetaType}};
+{{- end}}
     children?: TaskNode[];
 }
 

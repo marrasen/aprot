@@ -97,6 +97,7 @@ type Registry struct {
 	enums          []EnumInfo                    // registered enum types
 	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
 	tasksEnabled   bool                          // true when EnableTasks() has been called
+	taskMetaType   reflect.Type                  // nil when EnableTasks() used without meta
 }
 
 // NewRegistry creates a new handler registry.
@@ -394,6 +395,31 @@ func (r *Registry) EnableTasks() {
 	r.Register(handler)
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskOutputEvent{})
+}
+
+// EnableTasksWithMeta enables the shared task system with a typed metadata struct.
+// The meta type will be used in the generated TypeScript client for type-safe
+// metadata on SharedTaskState and TaskNode.
+//
+// Example:
+//
+//	type TaskMeta struct {
+//	    UserName string `json:"userName,omitempty"`
+//	    Error    string `json:"error,omitempty"`
+//	}
+//	registry.EnableTasksWithMeta(TaskMeta{})
+func (r *Registry) EnableTasksWithMeta(meta any) {
+	t := reflect.TypeOf(meta)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	r.taskMetaType = t
+	r.EnableTasks()
+}
+
+// TaskMetaType returns the registered meta type, or nil if EnableTasks() was used without meta.
+func (r *Registry) TaskMetaType() reflect.Type {
+	return r.taskMetaType
 }
 
 // TasksEnabled returns whether EnableTasks() has been called.

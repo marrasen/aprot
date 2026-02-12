@@ -354,6 +354,19 @@ registry.Register(&Handlers{})
 registry.EnableTasks()  // Registers TaskStateEvent, TaskOutputEvent push events + CancelTask handler
 ```
 
+To attach typed metadata to tasks, use `EnableTasksWithMeta` instead:
+
+```go
+type TaskMeta struct {
+    UserName string `json:"userName,omitempty"`
+    Error    string `json:"error,omitempty"`
+}
+
+registry.EnableTasksWithMeta(TaskMeta{})
+```
+
+This generates a typed `TaskMeta` interface in the TypeScript client and adds an optional `meta?: TaskMeta` field to `SharedTaskState` and `TaskNode`.
+
 #### Creating Shared Tasks
 
 ```go
@@ -362,6 +375,9 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.
     if task == nil {
         return nil, aprot.ErrInternal(nil)
     }
+
+    // Attach metadata visible to all clients
+    task.SetMeta(TaskMeta{UserName: "alice"})
 
     // Run in background — task auto-closes when fn returns
     task.Go(func(ctx context.Context) {
@@ -373,6 +389,11 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.
         sub.Progress(1, 2)
         // ... push ...
         sub.Complete()
+
+        // Sub-tasks can also nest and have metadata
+        nested := sub.SubTask("Verify push")
+        nested.SetMeta(TaskMeta{UserName: "bot"})
+        nested.Complete()
 
         task.Progress(3, 3)
     })
@@ -387,9 +408,16 @@ Key methods on `SharedTask`:
 - `Progress(current, total)` — updates progress
 - `Output(msg)` — sends output text to all clients
 - `SubTask(title)` — creates a child node
+- `SetMeta(v)` — sets metadata broadcast to all clients
 - `Close()` / `Fail()` — marks as completed/failed
 - `Context()` — returns the task's cancellation context
 - `Ref()` — returns a `TaskRef{TaskID}` to send to the client
+
+Key methods on `SharedTaskSub` (child nodes):
+- `Complete()` / `Fail()` — marks as completed/failed
+- `Progress(current, total)` — updates progress
+- `SetMeta(v)` — sets metadata on this sub-task
+- `SubTask(title)` — creates a nested child node
 
 #### TypeScript (React)
 

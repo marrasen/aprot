@@ -383,3 +383,133 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 
 	task.Close()
 }
+
+func TestSharedTaskSetMeta(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEvent(NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+	task := tm.create("Meta task", context.Background())
+
+	type Meta struct {
+		UserName string `json:"userName"`
+	}
+
+	task.SetMeta(Meta{UserName: "alice"})
+
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(states))
+	}
+	meta, ok := states[0].Meta.(Meta)
+	if !ok {
+		t.Fatalf("expected Meta type, got %T", states[0].Meta)
+	}
+	if meta.UserName != "alice" {
+		t.Errorf("expected userName 'alice', got %s", meta.UserName)
+	}
+
+	task.Close()
+}
+
+func TestSharedTaskSubSetMeta(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEvent(NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+	task := tm.create("Parent", context.Background())
+
+	sub := task.SubTask("Child")
+	sub.SetMeta(map[string]string{"key": "value"})
+
+	states := tm.snapshotAll()
+	child := states[0].Children[0]
+	meta, ok := child.Meta.(map[string]string)
+	if !ok {
+		t.Fatalf("expected map[string]string, got %T", child.Meta)
+	}
+	if meta["key"] != "value" {
+		t.Errorf("expected key='value', got %s", meta["key"])
+	}
+
+	task.Close()
+}
+
+func TestSharedTaskSubSubTask(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEvent(NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+	task := tm.create("Root", context.Background())
+
+	sub := task.SubTask("Level 1")
+	grandchild := sub.SubTask("Level 2")
+	grandchild.Complete()
+	sub.Complete()
+
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(states))
+	}
+	if len(states[0].Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(states[0].Children))
+	}
+	child := states[0].Children[0]
+	if child.Title != "Level 1" {
+		t.Errorf("expected 'Level 1', got %s", child.Title)
+	}
+	if len(child.Children) != 1 {
+		t.Fatalf("expected 1 grandchild, got %d", len(child.Children))
+	}
+	gc := child.Children[0]
+	if gc.Title != "Level 2" {
+		t.Errorf("expected 'Level 2', got %s", gc.Title)
+	}
+	if gc.Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed, got %s", gc.Status)
+	}
+
+	task.Close()
+}
+
+func TestEnableTasksWithMeta(t *testing.T) {
+	type TaskMeta struct {
+		UserName string `json:"userName,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEvent(NotificationEvent{})
+	registry.EnableTasksWithMeta(TaskMeta{})
+
+	if !registry.TasksEnabled() {
+		t.Fatal("expected tasks to be enabled")
+	}
+
+	metaType := registry.TaskMetaType()
+	if metaType == nil {
+		t.Fatal("expected non-nil meta type")
+	}
+	if metaType.Name() != "TaskMeta" {
+		t.Errorf("expected meta type name 'TaskMeta', got %s", metaType.Name())
+	}
+	if metaType.NumField() != 2 {
+		t.Errorf("expected 2 fields, got %d", metaType.NumField())
+	}
+}
