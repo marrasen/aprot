@@ -25,5 +25,8 @@ func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Reg
 	registry.RegisterPushEventFor(publicHandlers, SystemNotificationEvent{})
 	registry.RegisterPushEventFor(protectedHandlers, DirectMessageEvent{})
 
+	// Enable shared tasks (registers TaskStateEvent, TaskOutputEvent, CancelTask handler)
+	registry.EnableTasks()
+
 	return registry
 }
