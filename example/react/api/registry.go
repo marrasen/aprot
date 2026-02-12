@@ -10,12 +10,13 @@ func NewRegistry() *aprot.Registry {
 	registry.RegisterEnum(TaskStatusValues())
 
 	// Register handlers
-	registry.Register(&Handlers{})
+	handlers := &Handlers{}
+	registry.Register(handlers)
 
 	// Register push events
-	registry.RegisterPushEvent(UserCreatedEvent{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
-	registry.RegisterPushEvent(SystemNotificationEvent{})
+	registry.RegisterPushEventFor(handlers, UserCreatedEvent{})
+	registry.RegisterPushEventFor(handlers, UserUpdatedEvent{})
+	registry.RegisterPushEventFor(handlers, SystemNotificationEvent{})
 
 	return registry
 }

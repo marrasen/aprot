@@ -138,7 +138,7 @@ func main() {
 
     registry := aprot.NewRegistry()
     registry.Register(handlers)
-    registry.RegisterPushEvent(api.UserCreatedEvent{})
+    registry.RegisterPushEventFor(handlers, api.UserCreatedEvent{})
 
     server := aprot.NewServer(registry)
     handlers.Broadcaster = server
@@ -163,9 +163,10 @@ import (
 )
 
 func main() {
+    handlers := &api.Handlers{}
     registry := aprot.NewRegistry()
-    registry.Register(&api.Handlers{})
-    registry.RegisterPushEvent(api.UserCreatedEvent{})
+    registry.Register(handlers)
+    registry.RegisterPushEventFor(handlers, api.UserCreatedEvent{})
 
     gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
         OutputDir: "../../client/src/api",

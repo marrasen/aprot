@@ -14,7 +14,7 @@ import (
 func TestSharedTaskBasic(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -60,7 +60,7 @@ func TestSharedTaskBasic(t *testing.T) {
 func TestSharedTaskProgress(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -82,7 +82,7 @@ func TestSharedTaskProgress(t *testing.T) {
 func TestSharedTaskSubTask(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -119,7 +119,7 @@ func TestSharedTaskSubTask(t *testing.T) {
 func TestSharedTaskCancel(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -153,7 +153,7 @@ func TestSharedTaskCancel(t *testing.T) {
 func TestSharedTaskCancelNonExistent(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -168,7 +168,7 @@ func TestSharedTaskCancelNonExistent(t *testing.T) {
 func TestSharedTaskGo(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -211,7 +211,7 @@ func TestSharedTaskGo(t *testing.T) {
 func TestSharedTaskBatchBroadcast(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -243,7 +243,7 @@ func TestSharedTaskBatchBroadcast(t *testing.T) {
 func TestSharedTaskFail(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -267,7 +267,7 @@ func TestSharedTaskFail(t *testing.T) {
 func TestEnableTasksRegistersHandler(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	_, ok := registry.Get("taskCancelHandler.CancelTask")
@@ -294,7 +294,7 @@ func TestSharedTaskBroadcastOverWebSocket(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -342,7 +342,7 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -387,7 +387,7 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 func TestSharedTaskSetMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -420,7 +420,7 @@ func TestSharedTaskSetMeta(t *testing.T) {
 func TestSharedTaskSubSetMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -448,7 +448,7 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 func TestSharedTaskSubSubTask(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasks()
 
 	server := NewServer(registry)
@@ -495,7 +495,7 @@ func TestEnableTasksWithMeta(t *testing.T) {
 
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
 	registry.EnableTasksWithMeta(TaskMeta{})
 
 	if !registry.TasksEnabled() {

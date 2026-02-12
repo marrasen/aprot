@@ -84,7 +84,7 @@ func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandl
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
-	registry.RegisterPushEvent(NotificationEvent{})
+	registry.RegisterPushEventFor(handlers, NotificationEvent{})
 
 	server := NewServer(registry)
 	handlers.server = server
