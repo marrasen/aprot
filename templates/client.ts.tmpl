@@ -141,6 +141,8 @@ export class ApiClient {
         resolve: (value: any) => void;
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
+        onTaskProgress?: (tasks: TaskNode[]) => void;
+        onOutput?: (output: string) => void;
     }>();
     private buffer: Array<{
         method: string;
@@ -329,8 +331,16 @@ export class ApiClient {
             }
             case 'progress': {
                 const p = this.pending.get(msg.id);
-                if (p?.onProgress) {
-                    p.onProgress(msg.current, msg.total, msg.message);
+                if (p) {
+                    if (msg.tasks && p.onTaskProgress) {
+                        p.onTaskProgress(msg.tasks);
+                    }
+                    if (msg.output && p.onOutput) {
+                        p.onOutput(msg.output);
+                    }
+                    if (p.onProgress && (msg.current || msg.total || msg.message)) {
+                        p.onProgress(msg.current, msg.total, msg.message);
+                    }
                 }
                 break;
             }
@@ -378,7 +388,12 @@ export class ApiClient {
     private sendRequest(method: string, params: any, options: RequestOptions | undefined,
         resolve: (value: any) => void, reject: (error: Error) => void): void {
         const id = String(++this.requestId);
-        this.pending.set(id, { resolve, reject, onProgress: options?.onProgress });
+        this.pending.set(id, {
+            resolve, reject,
+            onProgress: options?.onProgress,
+            onTaskProgress: options?.onTaskProgress,
+            onOutput: options?.onOutput,
+        });
         if (options?.signal) {
             if (options.signal.aborted) {
                 this.pending.delete(id);
@@ -433,3 +448,9 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
     return client.onPush<{{.DataType}}>('{{.Name}}', handler);
 }
 {{end -}}
+{{- if .HasTasks}}
+
+export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
+    return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
+}
+{{- end}}

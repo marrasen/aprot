@@ -9,3 +9,9 @@
 {{template "get-websocket-url" .}}
 
 {{template "api-client-class" .}}
+{{- if .HasTasks}}
+
+export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
+    return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
+}
+{{- end}}

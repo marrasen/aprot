@@ -17,6 +17,8 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 - **Connection lifecycle hooks** - React to client connect/disconnect events, reject connections
 - **User-targeted push** - Send push messages to specific users across multiple connections
 - **Progress reporting** - Built-in support for long-running operations with progress updates
+- **Hierarchical sub-tasks** - Nested task trees with progress tracking, streamed to clients during handler execution
+- **Shared tasks** - Server-wide tasks visible to all clients via push events, with cancel support
 - **Request cancellation** - Clients can cancel in-flight requests via AbortController
 - **Server push** - Broadcast events to all connected clients
 - **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
@@ -279,6 +281,157 @@ info := aprot.HandlerInfoFromContext(ctx)  // Handler metadata and options
 req := aprot.RequestFromContext(ctx)       // Request ID, method, params
 conn := aprot.Connection(ctx)              // WebSocket connection
 progress := aprot.Progress(ctx)            // Progress reporter
+```
+
+### Sub-Tasks
+
+Use `SubTask` inside any handler to report hierarchical progress to the calling client. Sub-tasks nest automatically via context:
+
+```go
+func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
+    err := aprot.SubTask(ctx, "Build image", func(ctx context.Context) error {
+        // Nested sub-task
+        return aprot.SubTask(ctx, "Compile", func(ctx context.Context) error {
+            // ... do work ...
+            return nil
+        })
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    err = aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+        return nil
+    })
+
+    return &DeployResponse{Status: "ok"}, err
+}
+```
+
+The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (`running`/`completed`/`failed`), and optional `current`/`total` progress.
+
+**Output streaming** sends text output during execution:
+
+```go
+aprot.Output(ctx, "Starting deployment...")
+
+// Or use a writer for command output:
+w := aprot.OutputWriter(ctx, "Running tests")
+cmd.Stdout = w
+cmd.Run()
+w.Close()
+
+// Track bytes as progress (e.g. file downloads):
+pw := aprot.WriterProgress(ctx, "Downloading", fileSize)
+io.Copy(pw, resp.Body)
+pw.Close()
+```
+
+**TypeScript client** — the `onTaskProgress` and `onOutput` callbacks in `RequestOptions` receive these updates:
+
+```typescript
+const result = await deploy(client, req, {
+    onTaskProgress: (tasks) => {
+        // tasks is TaskNode[] — render a progress tree
+    },
+    onOutput: (output) => {
+        // Append to a log view
+    },
+});
+```
+
+### Shared Tasks
+
+Shared tasks are visible to **all** connected clients (not just the requesting one). They survive the originating connection's disconnect. Use them for server-wide operations like deployments, imports, or batch jobs.
+
+#### Setup
+
+Enable shared tasks in the registry:
+
+```go
+registry := aprot.NewRegistry()
+registry.Register(&Handlers{})
+registry.EnableTasks()  // Registers TaskStateEvent, TaskOutputEvent push events + CancelTask handler
+```
+
+#### Creating Shared Tasks
+
+```go
+func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.TaskRef, error) {
+    task := aprot.ShareTask(ctx, "Deploying "+req.Service)
+    if task == nil {
+        return nil, aprot.ErrInternal(nil)
+    }
+
+    // Run in background — task auto-closes when fn returns
+    task.Go(func(ctx context.Context) {
+        task.Progress(1, 3)
+        task.Output("Building image...")
+        // ... build ...
+
+        sub := task.SubTask("Push to registry")
+        sub.Progress(1, 2)
+        // ... push ...
+        sub.Complete()
+
+        task.Progress(3, 3)
+    })
+
+    // Return TaskRef so the client can track/cancel this task
+    return task.Ref(), nil
+}
+```
+
+Key methods on `SharedTask`:
+- `Go(fn)` — runs fn in a goroutine, auto-closes on return
+- `Progress(current, total)` — updates progress
+- `Output(msg)` — sends output text to all clients
+- `SubTask(title)` — creates a child node
+- `Close()` / `Fail()` — marks as completed/failed
+- `Context()` — returns the task's cancellation context
+- `Ref()` — returns a `TaskRef{TaskID}` to send to the client
+
+#### TypeScript (React)
+
+```tsx
+import { useSharedTasks, useSharedTask, useTaskOutput, cancelSharedTask } from './api/client';
+
+function TaskList() {
+    const tasks = useSharedTasks();
+
+    return (
+        <ul>
+            {tasks.map(task => (
+                <li key={task.id}>
+                    {task.title} ({task.status}) — {task.current}/{task.total}
+                    <button onClick={() => cancelSharedTask(client, task.id)}>Cancel</button>
+                </li>
+            ))}
+        </ul>
+    );
+}
+
+function TaskLog({ taskId }: { taskId: string }) {
+    const { lines, clear } = useTaskOutput(taskId);
+    return <pre>{lines.join('\n')}</pre>;
+}
+```
+
+#### TypeScript (Vanilla)
+
+```typescript
+import { cancelSharedTask } from './api/client';
+
+client.onPush<{ tasks: SharedTaskState[] }>('TaskStateEvent', (event) => {
+    console.log('Active tasks:', event.tasks);
+});
+
+client.onPush<{ taskId: string; output: string }>('TaskOutputEvent', (event) => {
+    console.log(`[${event.taskId}] ${event.output}`);
+});
+
+// Cancel a shared task
+await cancelSharedTask(client, taskId);
 ```
 
 ### Connection Info

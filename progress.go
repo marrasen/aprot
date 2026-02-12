@@ -27,3 +27,13 @@ func newProgressReporter(conn *Conn, requestID string) *progressReporter {
 func (p *progressReporter) Update(current, total int, message string) {
 	p.conn.sendProgress(p.requestID, current, total, message)
 }
+
+func (p *progressReporter) updateTasks(tasks []*TaskNode) {
+	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Tasks: tasks}
+	p.conn.sendJSON(msg)
+}
+
+func (p *progressReporter) sendOutput(output string) {
+	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Output: output}
+	p.conn.sendJSON(msg)
+}

@@ -67,6 +67,7 @@ type Server struct {
 	stopOnce        sync.Once    // ensures stopCh is closed only once
 	done            chan struct{} // closed by run() when it finishes
 	requestsWg      sync.WaitGroup
+	taskManager     *taskManager  // nil unless EnableTasks() was called
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -109,6 +110,18 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		stopCh:     make(chan struct{}),
 		done:       make(chan struct{}),
 	}
+	if registry.tasksEnabled {
+		s.taskManager = newTaskManager(s)
+		s.OnConnect(func(ctx context.Context, conn *Conn) error {
+			// Push current shared task state to newly connected clients.
+			states := s.taskManager.snapshotAll()
+			if len(states) > 0 {
+				conn.Push(TaskStateEvent{Tasks: states})
+			}
+			return nil
+		})
+	}
+
 	go s.run()
 	return s
 }
@@ -362,6 +375,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		// All requests finished
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+
+	// Stop task manager if enabled
+	if s.taskManager != nil {
+		s.taskManager.stop()
 	}
 
 	// Signal run() to exit

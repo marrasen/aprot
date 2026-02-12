@@ -43,10 +43,37 @@ export class ApiError extends Error {
 {{end}}
 
 {{define "types"}}
+export interface TaskNode {
+    id: string;
+    title: string;
+    status: 'running' | 'completed' | 'failed';
+    current?: number;
+    total?: number;
+    children?: TaskNode[];
+}
+
 export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
+    onTaskProgress?: (tasks: TaskNode[]) => void;
+    onOutput?: (output: string) => void;
 }
+{{- if .HasTasks}}
+
+export interface SharedTaskState {
+    id: string;
+    parentId?: string;
+    title: string;
+    status: 'running' | 'completed' | 'failed';
+    current?: number;
+    total?: number;
+    children?: TaskNode[];
+}
+
+export interface TaskRef {
+    taskId: string;
+}
+{{- end}}
 
 export type PushHandler<T> = (data: T) => void;
 
@@ -249,6 +276,8 @@ export class ApiClient {
         resolve: (value: any) => void;
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
+        onTaskProgress?: (tasks: TaskNode[]) => void;
+        onOutput?: (output: string) => void;
     }>();
     private buffer: Array<{
         method: string;
@@ -446,8 +475,16 @@ export class ApiClient {
             }
             case 'progress': {
                 const p = this.pending.get(msg.id);
-                if (p?.onProgress) {
-                    p.onProgress(msg.current, msg.total, msg.message);
+                if (p) {
+                    if (msg.tasks && p.onTaskProgress) {
+                        p.onTaskProgress(msg.tasks);
+                    }
+                    if (msg.output && p.onOutput) {
+                        p.onOutput(msg.output);
+                    }
+                    if (p.onProgress && (msg.current || msg.total || msg.message)) {
+                        p.onProgress(msg.current, msg.total, msg.message);
+                    }
                 }
                 break;
             }
@@ -524,7 +561,12 @@ export class ApiClient {
     private sendRequest(method: string, params: any, options: RequestOptions | undefined,
         resolve: (value: any) => void, reject: (error: Error) => void): void {
         const id = String(++this.requestId);
-        this.pending.set(id, { resolve, reject, onProgress: options?.onProgress });
+        this.pending.set(id, {
+            resolve, reject,
+            onProgress: options?.onProgress,
+            onTaskProgress: options?.onTaskProgress,
+            onOutput: options?.onOutput,
+        });
         if (options?.signal) {
             if (options.signal.aborted) {
                 this.pending.delete(id);

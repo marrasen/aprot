@@ -235,6 +235,10 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
 
+	// Add task tree to context (zero-cost until SubTask is called)
+	tree := newTaskTree(progress)
+	ctx = withTaskTree(ctx, tree)
+
 	// Add handler info to context for middleware
 	ctx = withHandlerInfo(ctx, info)
 
