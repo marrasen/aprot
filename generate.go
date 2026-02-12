@@ -350,8 +350,17 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		})
 	}
 
-	// Build enums
-	for _, enumInfo := range g.collectedEnums {
+	// Build enums (sorted by name for deterministic output)
+	enumTypes := make([]reflect.Type, 0, len(g.collectedEnums))
+	for t := range g.collectedEnums {
+		enumTypes = append(enumTypes, t)
+	}
+	sort.Slice(enumTypes, func(i, j int) bool {
+		return g.collectedEnums[enumTypes[i]].Name < g.collectedEnums[enumTypes[j]].Name
+	})
+
+	for _, t := range enumTypes {
+		enumInfo := g.collectedEnums[t]
 		ed := enumTemplateData{
 			Name:     enumInfo.Name,
 			IsString: enumInfo.IsString,
@@ -454,8 +463,17 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 		})
 	}
 
-	// Build enums
-	for _, enumInfo := range g.collectedEnums {
+	// Build enums (sorted by name for deterministic output)
+	enumTypes := make([]reflect.Type, 0, len(g.collectedEnums))
+	for t := range g.collectedEnums {
+		enumTypes = append(enumTypes, t)
+	}
+	sort.Slice(enumTypes, func(i, j int) bool {
+		return g.collectedEnums[enumTypes[i]].Name < g.collectedEnums[enumTypes[j]].Name
+	})
+
+	for _, t := range enumTypes {
+		enumInfo := g.collectedEnums[t]
 		ed := enumTemplateData{
 			Name:     enumInfo.Name,
 			IsString: enumInfo.IsString,
