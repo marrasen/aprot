@@ -1061,3 +1061,56 @@ func TestGenerateNoRequestMultipleFiles(t *testing.T) {
 
 	t.Logf("Generated TypeScript (no-request, multi-file):\n%s", handlerContent)
 }
+
+func TestGenerateDeterministic(t *testing.T) {
+	const iterations = 10
+
+	// Test single-file output (GenerateTo)
+	t.Run("SingleFile", func(t *testing.T) {
+		var first string
+		for i := 0; i < iterations; i++ {
+			registry := NewRegistry()
+			registry.RegisterEnum(TaskStatusValues())
+			registry.RegisterEnum(PriorityValues())
+			registry.Register(&TaskHandlers{})
+
+			gen := NewGenerator(registry)
+			var buf bytes.Buffer
+			if err := gen.GenerateTo(&buf); err != nil {
+				t.Fatalf("iteration %d: GenerateTo failed: %v", i, err)
+			}
+			output := buf.String()
+			if i == 0 {
+				first = output
+			} else if output != first {
+				t.Fatalf("iteration %d: output differs from first run", i)
+			}
+		}
+	})
+
+	// Test multi-file output (Generate)
+	t.Run("MultiFile", func(t *testing.T) {
+		var firstFiles map[string]string
+		for i := 0; i < iterations; i++ {
+			registry := NewRegistry()
+			registry.RegisterEnum(TaskStatusValues())
+			registry.RegisterEnum(PriorityValues())
+			registry.Register(&TaskHandlers{})
+
+			gen := NewGenerator(registry)
+			files, err := gen.Generate()
+			if err != nil {
+				t.Fatalf("iteration %d: Generate failed: %v", i, err)
+			}
+			if i == 0 {
+				firstFiles = files
+			} else {
+				for name, content := range files {
+					if firstFiles[name] != content {
+						t.Fatalf("iteration %d: file %s differs from first run", i, name)
+					}
+				}
+			}
+		}
+	})
+}
