@@ -1,0 +1,291 @@
+package aprot
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/go-json-experiment/json"
+)
+
+func TestSubTaskBasic(t *testing.T) {
+	// Without a task tree in context, SubTask should just run the function.
+	called := false
+	err := SubTask(context.Background(), "test", func(ctx context.Context) error {
+		called = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("function was not called")
+	}
+}
+
+func TestSubTaskWithTree(t *testing.T) {
+	// Create a mock progress reporter that captures messages.
+	var captured []ProgressMessage
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error {
+				var msg ProgressMessage
+				unmarshalJSON(data, &msg)
+				captured = append(captured, msg)
+				return nil
+			},
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	err := SubTask(ctx, "Step 1", func(ctx context.Context) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have received 2 progress messages: one for "running", one for "completed".
+	if len(captured) < 2 {
+		t.Fatalf("expected at least 2 progress messages, got %d", len(captured))
+	}
+
+	// First message should have a task in "running" state
+	if len(captured[0].Tasks) != 1 {
+		t.Fatalf("expected 1 task in first message, got %d", len(captured[0].Tasks))
+	}
+	if captured[0].Tasks[0].Status != TaskNodeStatusRunning {
+		t.Errorf("expected running status, got %s", captured[0].Tasks[0].Status)
+	}
+	if captured[0].Tasks[0].Title != "Step 1" {
+		t.Errorf("expected title 'Step 1', got %s", captured[0].Tasks[0].Title)
+	}
+
+	// Last message should have the task in "completed" state
+	last := captured[len(captured)-1]
+	if last.Tasks[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed status, got %s", last.Tasks[0].Status)
+	}
+}
+
+func TestSubTaskError(t *testing.T) {
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error { return nil },
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	testErr := errors.New("test failure")
+	err := SubTask(ctx, "Failing step", func(ctx context.Context) error {
+		return testErr
+	})
+	if err != testErr {
+		t.Fatalf("expected testErr, got %v", err)
+	}
+
+	// Check that the task was marked as failed
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Status != TaskNodeStatusFailed {
+		t.Errorf("expected failed status, got %s", snap[0].Status)
+	}
+}
+
+func TestSubTaskNested(t *testing.T) {
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error { return nil },
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	err := SubTask(ctx, "Parent", func(ctx context.Context) error {
+		return SubTask(ctx, "Child", func(ctx context.Context) error {
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 top-level task, got %d", len(snap))
+	}
+	if snap[0].Title != "Parent" {
+		t.Errorf("expected 'Parent', got %s", snap[0].Title)
+	}
+	if len(snap[0].Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(snap[0].Children))
+	}
+	if snap[0].Children[0].Title != "Child" {
+		t.Errorf("expected 'Child', got %s", snap[0].Children[0].Title)
+	}
+	if snap[0].Children[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected child completed, got %s", snap[0].Children[0].Status)
+	}
+}
+
+func TestOutput(t *testing.T) {
+	var captured []ProgressMessage
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error {
+				var msg ProgressMessage
+				unmarshalJSON(data, &msg)
+				captured = append(captured, msg)
+				return nil
+			},
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	Output(ctx, "hello output")
+
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(captured))
+	}
+	if captured[0].Output != "hello output" {
+		t.Errorf("expected 'hello output', got %s", captured[0].Output)
+	}
+}
+
+func TestOutputWithoutTree(t *testing.T) {
+	// Should not panic when there's no tree in context.
+	Output(context.Background(), "no tree")
+}
+
+func TestOutputWriter(t *testing.T) {
+	var captured []ProgressMessage
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error {
+				var msg ProgressMessage
+				unmarshalJSON(data, &msg)
+				captured = append(captured, msg)
+				return nil
+			},
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	w := OutputWriter(ctx, "Log output")
+	w.Write([]byte("line 1\n"))
+	w.Write([]byte("line 2\n"))
+	w.Close()
+
+	// Should have task updates + output messages
+	hasOutput := false
+	hasCompleted := false
+	for _, msg := range captured {
+		if msg.Output != "" {
+			hasOutput = true
+		}
+		if len(msg.Tasks) > 0 && msg.Tasks[0].Status == TaskNodeStatusCompleted {
+			hasCompleted = true
+		}
+	}
+	if !hasOutput {
+		t.Error("expected output messages")
+	}
+	if !hasCompleted {
+		t.Error("expected completed task status")
+	}
+}
+
+func TestOutputWriterWithoutTree(t *testing.T) {
+	w := OutputWriter(context.Background(), "no tree")
+	n, err := w.Write([]byte("data"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("expected 4 bytes written, got %d", n)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
+}
+
+func TestWriterProgress(t *testing.T) {
+	var captured []ProgressMessage
+	conn := &Conn{
+		transport: &mockTransport{
+			sendFn: func(data []byte) error {
+				var msg ProgressMessage
+				unmarshalJSON(data, &msg)
+				captured = append(captured, msg)
+				return nil
+			},
+		},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	w := WriterProgress(ctx, "Downloading", 100)
+	w.Write([]byte("12345")) // 5 bytes
+	w.Close()
+
+	// After close, we should see the task with current=5, total=100, completed
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Current != 5 {
+		t.Errorf("expected current=5, got %d", snap[0].Current)
+	}
+	if snap[0].Total != 100 {
+		t.Errorf("expected total=100, got %d", snap[0].Total)
+	}
+	if snap[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed status, got %s", snap[0].Status)
+	}
+}
+
+func TestWriterProgressWithoutTree(t *testing.T) {
+	w := WriterProgress(context.Background(), "no tree", 100)
+	n, err := w.Write([]byte("data"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("expected 4 bytes written, got %d", n)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
+}
+
+// mockTransport for testing task tree without a real WebSocket.
+type mockTransport struct {
+	sendFn func(data []byte) error
+}
+
+func (m *mockTransport) Send(data []byte) error {
+	if m.sendFn != nil {
+		return m.sendFn(data)
+	}
+	return nil
+}
+
+func (m *mockTransport) Close() error           { return nil }
+func (m *mockTransport) CloseGracefully() error { return nil }
+
+// unmarshalJSON is a test helper to unmarshal JSON.
+func unmarshalJSON(data []byte, v any) {
+	json.Unmarshal(data, v)
+}

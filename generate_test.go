@@ -1062,6 +1062,176 @@ func TestGenerateNoRequestMultipleFiles(t *testing.T) {
 	t.Logf("Generated TypeScript (no-request, multi-file):\n%s", handlerContent)
 }
 
+func TestGenerateTaskNodeInterface(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// TaskNode should always be present (used by SubTask progress)
+	if !strings.Contains(output, "export interface TaskNode") {
+		t.Error("Missing TaskNode interface")
+	}
+	if !strings.Contains(output, "onTaskProgress?: (tasks: TaskNode[]) => void") {
+		t.Error("Missing onTaskProgress in RequestOptions")
+	}
+	if !strings.Contains(output, "onOutput?: (output: string) => void") {
+		t.Error("Missing onOutput in RequestOptions")
+	}
+
+	// Without EnableTasks(), shared task types should NOT be present
+	if strings.Contains(output, "export interface SharedTaskState") {
+		t.Error("SharedTaskState should not be present without EnableTasks()")
+	}
+	if strings.Contains(output, "export interface TaskRef") {
+		t.Error("TaskRef should not be present without EnableTasks()")
+	}
+	if strings.Contains(output, "cancelSharedTask") {
+		t.Error("cancelSharedTask should not be present without EnableTasks()")
+	}
+}
+
+func TestGenerateWithTasks(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasks()
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// TaskNode always present
+	if !strings.Contains(output, "export interface TaskNode") {
+		t.Error("Missing TaskNode interface")
+	}
+
+	// Shared task types should be present with EnableTasks()
+	if !strings.Contains(output, "export interface SharedTaskState") {
+		t.Error("Missing SharedTaskState interface")
+	}
+	if !strings.Contains(output, "export interface TaskRef") {
+		t.Error("Missing TaskRef interface")
+	}
+	if !strings.Contains(output, "cancelSharedTask") {
+		t.Error("Missing cancelSharedTask function")
+	}
+}
+
+func TestGenerateWithTasksMultiFile(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasks()
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	baseContent, ok := files["client.ts"]
+	if !ok {
+		t.Fatalf("Expected client.ts, got files: %v", mapKeys(files))
+	}
+
+	if !strings.Contains(baseContent, "export interface SharedTaskState") {
+		t.Error("Missing SharedTaskState in client.ts")
+	}
+	if !strings.Contains(baseContent, "export interface TaskRef") {
+		t.Error("Missing TaskRef in client.ts")
+	}
+	if !strings.Contains(baseContent, "cancelSharedTask") {
+		t.Error("Missing cancelSharedTask in client.ts")
+	}
+}
+
+func TestGenerateWithTasksReact(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasks()
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Shared task hooks
+	if !strings.Contains(output, "export function useSharedTasks") {
+		t.Error("Missing useSharedTasks hook")
+	}
+	if !strings.Contains(output, "export function useSharedTask") {
+		t.Error("Missing useSharedTask hook")
+	}
+	if !strings.Contains(output, "export function useTaskOutput") {
+		t.Error("Missing useTaskOutput hook")
+	}
+	if !strings.Contains(output, "export function cancelSharedTask") {
+		t.Error("Missing cancelSharedTask function")
+	}
+
+	// Shared task types
+	if !strings.Contains(output, "export interface SharedTaskState") {
+		t.Error("Missing SharedTaskState interface")
+	}
+	if !strings.Contains(output, "export interface TaskRef") {
+		t.Error("Missing TaskRef interface")
+	}
+}
+
+func TestGenerateWithTasksReactMultiFile(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.EnableTasks()
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	baseContent, ok := files["client.ts"]
+	if !ok {
+		t.Fatalf("Expected client.ts, got files: %v", mapKeys(files))
+	}
+
+	if !strings.Contains(baseContent, "useSharedTasks") {
+		t.Error("Missing useSharedTasks in client.ts")
+	}
+	if !strings.Contains(baseContent, "useTaskOutput") {
+		t.Error("Missing useTaskOutput in client.ts")
+	}
+	if !strings.Contains(baseContent, "cancelSharedTask") {
+		t.Error("Missing cancelSharedTask in client.ts")
+	}
+}
+
 func TestGenerateDeterministic(t *testing.T) {
 	const iterations = 10
 

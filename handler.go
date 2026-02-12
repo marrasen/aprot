@@ -96,6 +96,7 @@ type Registry struct {
 	nextErrorCode  int                           // auto-incrementing error code
 	enums          []EnumInfo                    // registered enum types
 	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
+	tasksEnabled   bool                          // true when EnableTasks() has been called
 }
 
 // NewRegistry creates a new handler registry.
@@ -382,6 +383,22 @@ func (r *Registry) GetEnum(t reflect.Type) *EnumInfo {
 // Enums returns all registered enum types.
 func (r *Registry) Enums() []EnumInfo {
 	return r.enums
+}
+
+// EnableTasks enables the shared task system.
+// It registers a CancelTask handler and the TaskStateEvent and TaskOutputEvent
+// push events. Call this before creating the Server.
+func (r *Registry) EnableTasks() {
+	r.tasksEnabled = true
+	handler := &taskCancelHandler{}
+	r.Register(handler)
+	r.RegisterPushEventFor(handler, TaskStateEvent{})
+	r.RegisterPushEventFor(handler, TaskOutputEvent{})
+}
+
+// TasksEnabled returns whether EnableTasks() has been called.
+func (r *Registry) TasksEnabled() bool {
+	return r.tasksEnabled
 }
 
 // capitalize capitalizes the first letter of a string.

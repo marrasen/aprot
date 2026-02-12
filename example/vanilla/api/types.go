@@ -105,3 +105,22 @@ type AuthUser struct {
 	ID       string
 	Username string
 }
+
+// SubTask demo types
+
+type ProcessWithSubTasksRequest struct {
+	Steps []string `json:"steps"`
+	Delay int      `json:"delay"` // milliseconds per step
+}
+
+type ProcessWithSubTasksResponse struct {
+	Completed int `json:"completed"`
+}
+
+// SharedTask demo types
+
+type StartSharedWorkRequest struct {
+	Title string   `json:"title"`
+	Steps []string `json:"steps"`
+	Delay int      `json:"delay"` // milliseconds per step
+}

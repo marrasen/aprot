@@ -9,6 +9,8 @@ const (
 	connectionKey
 	handlerInfoKey
 	requestKey
+	taskTreeKey
+	taskNodeKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -65,4 +67,32 @@ func withHandlerInfo(ctx context.Context, info *HandlerInfo) context.Context {
 // withRequest returns a context with the given request.
 func withRequest(ctx context.Context, req *Request) context.Context {
 	return context.WithValue(ctx, requestKey, req)
+}
+
+// taskTreeFromContext returns the taskTree from the context.
+// Returns nil if not present.
+func taskTreeFromContext(ctx context.Context) *taskTree {
+	if t, ok := ctx.Value(taskTreeKey).(*taskTree); ok {
+		return t
+	}
+	return nil
+}
+
+// taskNodeFromContext returns the current taskNode from the context.
+// Returns nil if not present.
+func taskNodeFromContext(ctx context.Context) *taskNode {
+	if n, ok := ctx.Value(taskNodeKey).(*taskNode); ok {
+		return n
+	}
+	return nil
+}
+
+// withTaskTree returns a context with the given task tree.
+func withTaskTree(ctx context.Context, t *taskTree) context.Context {
+	return context.WithValue(ctx, taskTreeKey, t)
+}
+
+// withTaskNode returns a context with the given task node.
+func withTaskNode(ctx context.Context, n *taskNode) context.Context {
+	return context.WithValue(ctx, taskNodeKey, n)
 }

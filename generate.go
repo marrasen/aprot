@@ -119,6 +119,7 @@ type templateData struct {
 	PushEvents       []pushEventData
 	CustomErrorCodes []errorCodeData
 	Enums            []enumTemplateData
+	HasTasks         bool
 }
 
 type enumTemplateData struct {
@@ -184,6 +185,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	baseData := templateData{
 		StructName: "Base",
 		FileName:   "client.ts",
+		HasTasks:   g.registry.tasksEnabled,
 	}
 	for _, ec := range g.registry.ErrorCodes() {
 		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
@@ -277,6 +279,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	data := templateData{
 		StructName: "Combined",
 		FileName:   "client.ts",
+		HasTasks:   g.registry.tasksEnabled,
 	}
 
 	// Build interfaces

@@ -226,6 +226,71 @@ func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginRe
 	}, nil
 }
 
+// ProcessWithSubTasks demonstrates hierarchical sub-tasks with progress and output.
+func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, req *ProcessWithSubTasksRequest) (*ProcessWithSubTasksResponse, error) {
+	if len(req.Steps) == 0 {
+		return nil, aprot.ErrInvalidParams("steps cannot be empty")
+	}
+
+	delay := req.Delay
+	if delay <= 0 {
+		delay = 50
+	}
+
+	completed := 0
+	for i, step := range req.Steps {
+		err := aprot.SubTask(ctx, step, func(ctx context.Context) error {
+			aprot.Output(ctx, fmt.Sprintf("Starting %s", step))
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+			aprot.Output(ctx, fmt.Sprintf("Finished %s", step))
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		completed = i + 1
+	}
+
+	return &ProcessWithSubTasksResponse{Completed: completed}, nil
+}
+
+// StartSharedWork creates a shared task visible to all clients.
+func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWorkRequest) (*aprot.TaskRef, error) {
+	if req.Title == "" {
+		return nil, aprot.ErrInvalidParams("title is required")
+	}
+	if len(req.Steps) == 0 {
+		return nil, aprot.ErrInvalidParams("steps cannot be empty")
+	}
+
+	delay := req.Delay
+	if delay <= 0 {
+		delay = 50
+	}
+
+	task := aprot.ShareTask(ctx, req.Title)
+	if task == nil {
+		return nil, aprot.ErrInternal(nil)
+	}
+
+	task.Go(func(ctx context.Context) {
+		for i, step := range req.Steps {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			sub := task.SubTask(step)
+			task.Output(fmt.Sprintf("Working on: %s", step))
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+			sub.Complete()
+			task.Progress(i+1, len(req.Steps))
+		}
+	})
+
+	return task.Ref(), nil
+}
+
 // GetProfile returns the authenticated user's profile.
 // This method requires authentication (middleware applied via registry).
 func (h *ProtectedHandlers) GetProfile(ctx context.Context) (*GetProfileResponse, error) {
