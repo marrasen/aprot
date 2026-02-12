@@ -147,7 +147,7 @@ func TestRegistry(t *testing.T) {
 func TestRegistryGroups(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 
 	groups := registry.Groups()
 	if len(groups) != 1 {
@@ -191,7 +191,7 @@ func TestHandlerCall(t *testing.T) {
 func TestGenerate(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 
@@ -244,7 +244,7 @@ func TestGenerate(t *testing.T) {
 func TestGenerateMultipleFiles(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 
@@ -300,7 +300,7 @@ func mapKeys(m map[string]string) []string {
 func TestGenerateReact(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 
 	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
 		Mode: OutputReact,
@@ -349,7 +349,7 @@ func TestGenerateReact(t *testing.T) {
 func TestGenerateOutput(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 
 	gen := NewGenerator(registry)
 
@@ -1102,7 +1102,7 @@ func TestGenerateTaskNodeInterface(t *testing.T) {
 func TestGenerateWithTasks(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasks()
 
 	gen := NewGenerator(registry)
@@ -1135,7 +1135,7 @@ func TestGenerateWithTasks(t *testing.T) {
 func TestGenerateWithTasksMultiFile(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasks()
 
 	gen := NewGenerator(registry)
@@ -1163,7 +1163,7 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 func TestGenerateWithTasksReact(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasks()
 
 	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
@@ -1204,7 +1204,7 @@ func TestGenerateWithTasksReact(t *testing.T) {
 func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasks()
 
 	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
@@ -1240,7 +1240,7 @@ func TestGenerateWithTaskMeta(t *testing.T) {
 
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasksWithMeta(TaskMeta{})
 
 	gen := NewGenerator(registry)
@@ -1281,7 +1281,7 @@ func TestGenerateWithTaskMetaMultiFile(t *testing.T) {
 
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 	registry.EnableTasksWithMeta(TaskMeta{})
 
 	gen := NewGenerator(registry)
@@ -1325,6 +1325,89 @@ func TestGenerateWithoutMetaNoMetaField(t *testing.T) {
 	if strings.Contains(output, "export interface TaskMeta") {
 		t.Error("Should not have TaskMeta interface without EnableTasksWithMeta")
 	}
+}
+
+// Handler groups for deterministic push-event test.
+type PushGroupA struct{}
+
+func (h *PushGroupA) MethodA(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+	return nil, nil
+}
+
+type PushGroupB struct{}
+
+func (h *PushGroupB) MethodB(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+	return nil, nil
+}
+
+type PushGroupC struct{}
+
+func (h *PushGroupC) MethodC(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+	return nil, nil
+}
+
+type PushGroupD struct{}
+
+func (h *PushGroupD) MethodD(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
+	return nil, nil
+}
+
+func TestPushEventDeterministicAssignment(t *testing.T) {
+	const iterations = 10
+	var firstFiles map[string]string
+
+	for i := 0; i < iterations; i++ {
+		registry := NewRegistry()
+		registry.Register(&PushGroupA{})
+		registry.Register(&PushGroupB{})
+		registry.Register(&PushGroupC{})
+		registry.Register(&PushGroupD{})
+		registry.RegisterPushEventFor(&PushGroupB{}, UserUpdatedEvent{})
+
+		gen := NewGenerator(registry)
+		files, err := gen.Generate()
+		if err != nil {
+			t.Fatalf("iteration %d: Generate failed: %v", i, err)
+		}
+
+		if i == 0 {
+			firstFiles = files
+			// Verify the event lands in push-group-b.ts
+			content, ok := files["push-group-b.ts"]
+			if !ok {
+				t.Fatalf("expected push-group-b.ts, got files: %v", mapKeys(files))
+			}
+			if !strings.Contains(content, "UserUpdatedEvent") {
+				t.Fatal("expected UserUpdatedEvent in push-group-b.ts")
+			}
+		} else {
+			for name, content := range files {
+				if firstFiles[name] != content {
+					t.Fatalf("iteration %d: file %s differs from first run", i, name)
+				}
+			}
+		}
+	}
+}
+
+func TestRegisterPushEventForPanicsOnUnregisteredHandler(t *testing.T) {
+	registry := NewRegistry()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for unregistered handler")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("expected string panic, got %T: %v", r, r)
+		}
+		if !strings.Contains(msg, "unregistered handler") {
+			t.Fatalf("expected panic message about unregistered handler, got: %s", msg)
+		}
+	}()
+
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
 }
 
 func TestGenerateDeterministic(t *testing.T) {

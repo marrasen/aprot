@@ -12,7 +12,7 @@ import (
 
 // Broadcaster is an interface for broadcasting push events to all clients.
 // The event name is derived from the Go type of data, which must have been
-// registered via RegisterPushEvent or RegisterPushEventFor.
+// registered via RegisterPushEventFor.
 type Broadcaster interface {
 	Broadcast(data any)
 }
@@ -192,7 +192,7 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 
 // PushToUser sends a push message to all connections for a specific user.
 // The event name is derived from the Go type of data, which must have been
-// registered via RegisterPushEvent or RegisterPushEventFor.
+// registered via RegisterPushEventFor.
 func (s *Server) PushToUser(userID string, data any) {
 	event := s.registry.eventName(data)
 	s.mu.RLock()
@@ -286,7 +286,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Broadcast sends a push message to all connected clients.
 // The event name is derived from the Go type of data, which must have been
-// registered via RegisterPushEvent or RegisterPushEventFor.
+// registered via RegisterPushEventFor.
 func (s *Server) Broadcast(data any) {
 	event := s.registry.eventName(data)
 	s.mu.RLock()

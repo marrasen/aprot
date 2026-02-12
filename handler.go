@@ -178,43 +178,8 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 	r.groups[structName] = group
 }
 
-// RegisterPushEvent registers a push event type for code generation and type-safe broadcasting.
-// The event name is the Go type name (e.g., UserCreatedEvent → "UserCreatedEvent").
-// The event will be associated with the most recently registered handler struct.
-// Broadcasting an unregistered push type will panic.
-//
-// Example:
-//
-//	registry.RegisterPushEvent(UserCreatedEvent{})
-func (r *Registry) RegisterPushEvent(dataType any) {
-	t := reflect.TypeOf(dataType)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-
-	eventName := t.Name()
-
-	// Find the last registered group to associate with
-	var structName string
-	for name := range r.groups {
-		structName = name
-	}
-
-	event := PushEventInfo{
-		Name:       eventName,
-		DataType:   t,
-		StructName: structName,
-	}
-	r.pushEvents = append(r.pushEvents, event)
-	r.pushEventTypes[t] = eventName
-
-	// Also add to the group
-	if group, ok := r.groups[structName]; ok {
-		group.PushEvents = append(group.PushEvents, event)
-	}
-}
-
 // RegisterPushEventFor registers a push event associated with a specific handler.
+// The handler must have been previously registered via Register().
 // The event name is the Go type name (e.g., UserCreatedEvent → "UserCreatedEvent").
 // Broadcasting an unregistered push type will panic.
 //
@@ -228,6 +193,11 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 		ht = ht.Elem()
 	}
 	structName := ht.Name()
+
+	group, ok := r.groups[structName]
+	if !ok {
+		panic("aprot: RegisterPushEventFor called with unregistered handler: " + structName)
+	}
 
 	// Get event type and derive name
 	dt := reflect.TypeOf(dataType)
@@ -244,9 +214,7 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 	r.pushEvents = append(r.pushEvents, event)
 	r.pushEventTypes[dt] = eventName
 
-	if group, ok := r.groups[structName]; ok {
-		group.PushEvents = append(group.PushEvents, event)
-	}
+	group.PushEvents = append(group.PushEvents, event)
 }
 
 // Groups returns all registered handler groups.
@@ -260,7 +228,7 @@ func (r *Registry) PushEvents() []PushEventInfo {
 }
 
 // eventName returns the registered event name for the given push data type.
-// Panics if the type was not registered via RegisterPushEvent or RegisterPushEventFor.
+// Panics if the type was not registered via RegisterPushEventFor.
 func (r *Registry) eventName(data any) string {
 	t := reflect.TypeOf(data)
 	if t.Kind() == reflect.Ptr {

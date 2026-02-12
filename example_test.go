@@ -93,8 +93,8 @@ func Example() {
 	registry := aprot.NewRegistry()
 	handlers := &MyHandlers{}
 	registry.Register(handlers)
-	registry.RegisterPushEvent(UserUpdatedEvent{})
-	registry.RegisterPushEvent(ProcessingCompleteEvent{})
+	registry.RegisterPushEventFor(handlers, UserUpdatedEvent{})
+	registry.RegisterPushEventFor(handlers, ProcessingCompleteEvent{})
 
 	// Create server
 	server := aprot.NewServer(registry)
@@ -111,10 +111,11 @@ func Example() {
 func Example_generate() {
 	// Create registry with handlers
 	registry := aprot.NewRegistry()
-	registry.Register(&MyHandlers{})
+	myHandlers := &MyHandlers{}
+	registry.Register(myHandlers)
 
 	// Register push events on the registry
-	registry.RegisterPushEvent(UserUpdatedEvent{})
+	registry.RegisterPushEventFor(myHandlers, UserUpdatedEvent{})
 
 	// Create generator and generate TypeScript to stdout (or file)
 	gen := aprot.NewGenerator(registry)

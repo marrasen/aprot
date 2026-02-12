@@ -415,7 +415,7 @@ type NotificationData struct {
 func TestUserTargetedPush(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&MiddlewareTestHandler{})
-	registry.RegisterPushEvent(NotificationData{})
+	registry.RegisterPushEventFor(&MiddlewareTestHandler{}, NotificationData{})
 
 	server := NewServer(registry)
 
