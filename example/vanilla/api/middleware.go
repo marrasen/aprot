@@ -94,7 +94,10 @@ func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
 			}
 
 			// Check connection-scoped cache first (set by ConnectHookAuth or Login)
-			user, _ := conn.Get(authUserKey).(*AuthUser)
+			var user *AuthUser
+			if v, ok := conn.Load(authUserKey); ok {
+				user, _ = v.(*AuthUser)
+			}
 			if user == nil {
 				// Fallback: look up by user ID in the token store
 				if conn.UserID() == "" {

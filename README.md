@@ -501,7 +501,7 @@ func LoggingMiddleware() aprot.Middleware {
 }
 ```
 
-### Connection-Scoped State (`Set/Get`)
+### Connection-Scoped State (`Set/Get/Load`)
 
 Store arbitrary data on a connection that persists for its lifetime. This follows the `context.WithValue` convention of using unexported struct keys to avoid collisions:
 
@@ -514,9 +514,14 @@ conn.Set(principalKey{}, &Principal{ID: "user_123", Role: "admin"})
 
 // Retrieve it later (in any handler or middleware)
 principal, _ := conn.Get(principalKey{}).(*Principal)
+
+// Use Load to distinguish "not set" from "set to nil"
+if v, ok := conn.Load(principalKey{}); ok {
+    principal, _ = v.(*Principal)
+}
 ```
 
-`Set/Get` is safe for concurrent use. The internal map is lazily initialized — connections that never call `Set` pay zero allocation cost.
+`Set/Get/Load` are safe for concurrent use (`Get` and `Load` take a read lock). The internal map is lazily initialized — connections that never call `Set` pay zero allocation cost. Keep stored values small; they live for the entire connection lifetime.
 
 ### Authentication
 
@@ -549,7 +554,10 @@ func RequireAuth() aprot.Middleware {
     return func(next aprot.Handler) aprot.Handler {
         return func(ctx context.Context, req *aprot.Request) (any, error) {
             conn := aprot.Connection(ctx)
-            if conn == nil || conn.Get(principalKey{}) == nil {
+            if conn == nil {
+                return nil, aprot.ErrUnauthorized("authentication required")
+            }
+            if _, ok := conn.Load(principalKey{}); !ok {
                 return nil, aprot.ErrUnauthorized("authentication required")
             }
             return next(ctx, req)
@@ -561,6 +569,8 @@ func RequireAuth() aprot.Middleware {
 registry.Register(&PublicHandlers{})
 registry.Register(&ProtectedHandlers{}, RequireAuth())
 ```
+
+**Note:** `conn.SetUserID` / `conn.UserID` is a *routing identity* used for push targeting (`PushToUser`). It is not a security boundary — always use the stored principal (via `Set`/`Load`) for authorization decisions in middleware.
 
 **Origin validation** — By default, aprot accepts all origins. For production, restrict origins to prevent cross-site WebSocket hijacking (CSWSH):
 

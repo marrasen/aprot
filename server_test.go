@@ -1159,6 +1159,77 @@ func TestConnSetOverwrite(t *testing.T) {
 	}
 }
 
+func TestConnLoadDistinguishesUnsetFromNil(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	type myKey struct{}
+
+	var (
+		getUnset       any
+		loadUnsetVal   any
+		loadUnsetOk    bool
+		getAfterSetNil any
+		loadSetNilVal  any
+		loadSetNilOk   bool
+		mu             sync.Mutex
+	)
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		mu.Lock()
+		defer mu.Unlock()
+
+		// Before Set: Get returns nil, Load returns (nil, false)
+		getUnset = conn.Get(myKey{})
+		loadUnsetVal, loadUnsetOk = conn.Load(myKey{})
+
+		// Set key to nil explicitly
+		conn.Set(myKey{}, nil)
+
+		// After Set(nil): Get still returns nil, but Load returns (nil, true)
+		getAfterSetNil = conn.Get(myKey{})
+		loadSetNilVal, loadSetNilOk = conn.Load(myKey{})
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Unset key
+	if getUnset != nil {
+		t.Errorf("Get on unset key: expected nil, got %v", getUnset)
+	}
+	if loadUnsetVal != nil {
+		t.Errorf("Load on unset key: expected nil value, got %v", loadUnsetVal)
+	}
+	if loadUnsetOk {
+		t.Error("Load on unset key: expected ok=false, got true")
+	}
+
+	// Key set to nil
+	if getAfterSetNil != nil {
+		t.Errorf("Get after Set(nil): expected nil, got %v", getAfterSetNil)
+	}
+	if loadSetNilVal != nil {
+		t.Errorf("Load after Set(nil): expected nil value, got %v", loadSetNilVal)
+	}
+	if !loadSetNilOk {
+		t.Error("Load after Set(nil): expected ok=true, got false")
+	}
+}
+
 func TestConnSetGetConcurrent(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
@@ -1193,10 +1264,10 @@ func TestConnSetGetConcurrent(t *testing.T) {
 		t.Fatal("Connection not captured")
 	}
 
-	// Concurrent Set/Get should not race (run with -race)
+	// Concurrent Set/Get/Load should not race (run with -race)
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		wg.Add(2)
+		wg.Add(3)
 		i := i
 		go func() {
 			defer wg.Done()
@@ -1206,14 +1277,25 @@ func TestConnSetGetConcurrent(t *testing.T) {
 			defer wg.Done()
 			conn.Get(i)
 		}()
+		go func() {
+			defer wg.Done()
+			conn.Load(i)
+		}()
 	}
 	wg.Wait()
 
-	// Verify final values
+	// Verify final values via both Get and Load
 	for i := 0; i < 100; i++ {
 		v := conn.Get(i)
 		if v != i*10 {
-			t.Errorf("Key %d: expected %d, got %v", i, i*10, v)
+			t.Errorf("Get key %d: expected %d, got %v", i, i*10, v)
+		}
+		lv, ok := conn.Load(i)
+		if !ok {
+			t.Errorf("Load key %d: expected ok=true", i)
+		}
+		if lv != i*10 {
+			t.Errorf("Load key %d: expected %d, got %v", i, i*10, lv)
 		}
 	}
 }

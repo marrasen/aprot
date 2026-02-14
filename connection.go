@@ -27,6 +27,7 @@ type Conn struct {
 	userID    string          // associated user ID (set by middleware)
 	id        uint64          // unique connection ID
 	info      ConnInfo
+	valuesMu  sync.RWMutex    // guards values map (separate from mu to avoid contention with sendJSON/requests)
 	values    map[any]any     // connection-scoped key-value store (lazy init)
 	ctx       context.Context // Context from HTTP request
 }
@@ -85,10 +86,11 @@ func (c *Conn) Context() context.Context {
 // This is useful for caching connection-scoped data (e.g. an authenticated
 // principal) that persists for the connection's lifetime. The map is lazily
 // initialized on first call, so connections that never call Set pay no cost.
+// Keep stored values small — they live for the entire connection lifetime.
 // Safe for concurrent use.
 func (c *Conn) Set(key, value any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.valuesMu.Lock()
+	defer c.valuesMu.Unlock()
 	if c.values == nil {
 		c.values = make(map[any]any)
 	}
@@ -96,15 +98,31 @@ func (c *Conn) Set(key, value any) {
 }
 
 // Get retrieves a value previously stored with Set.
-// Returns nil if the key was never set.
+// Returns nil if the key was never set (or was set to nil).
+// Use Load to distinguish between an unset key and a key set to nil.
 // Safe for concurrent use.
 func (c *Conn) Get(key any) any {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.valuesMu.RLock()
+	defer c.valuesMu.RUnlock()
 	if c.values == nil {
 		return nil
 	}
 	return c.values[key]
+}
+
+// Load retrieves a value previously stored with Set.
+// The ok result indicates whether the key was found.
+// This follows the sync.Map convention and allows callers to distinguish
+// between an unset key and a key explicitly set to nil.
+// Safe for concurrent use.
+func (c *Conn) Load(key any) (value any, ok bool) {
+	c.valuesMu.RLock()
+	defer c.valuesMu.RUnlock()
+	if c.values == nil {
+		return nil, false
+	}
+	value, ok = c.values[key]
+	return
 }
 
 // RemoteAddr returns the remote address of the connection.

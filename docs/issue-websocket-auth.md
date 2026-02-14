@@ -72,23 +72,31 @@ conn.Get(key any) any     // Retrieve a value (nil if not set)
 
 ## Proposed API Changes
 
-Two new methods on `*Conn`:
+Three new methods on `*Conn`:
 
 ```go
 // Set stores a value on the connection, keyed by an arbitrary key.
 // The map is lazily initialized on first call.
+// Keep stored values small — they live for the entire connection lifetime.
 // Safe for concurrent use.
 func (c *Conn) Set(key, value any)
 
 // Get retrieves a value previously stored with Set.
-// Returns nil if the key was never set.
+// Returns nil if the key was never set (or was set to nil).
+// Use Load to distinguish between an unset key and a key set to nil.
 // Safe for concurrent use.
 func (c *Conn) Get(key any) any
+
+// Load retrieves a value previously stored with Set.
+// The ok result indicates whether the key was found.
+// Follows the sync.Map convention.
+// Safe for concurrent use.
+func (c *Conn) Load(key any) (value any, ok bool)
 ```
 
 Implementation details:
 - New field: `values map[any]any` on `Conn` (nil until first `Set`)
-- Both methods acquire the existing `c.mu` mutex
+- Separate `valuesMu sync.RWMutex` — avoids contention with `c.mu` (used by `sendJSON`, request register/unregister). `Get` and `Load` take a read lock, allowing concurrent reads in middleware.
 - Zero-cost for connections that never call `Set` (nil map check, no allocation)
 
 ## Server-Side Usage Examples
@@ -127,7 +135,10 @@ func RequireAuth() aprot.Middleware {
     return func(next aprot.Handler) aprot.Handler {
         return func(ctx context.Context, req *aprot.Request) (any, error) {
             conn := aprot.Connection(ctx)
-            if conn == nil || conn.Get(principalKey{}) == nil {
+            if conn == nil {
+                return nil, aprot.ErrUnauthorized("authentication required")
+            }
+            if _, ok := conn.Load(principalKey{}); !ok {
                 return nil, aprot.ErrUnauthorized("authentication required")
             }
             return next(ctx, req)
@@ -173,13 +184,23 @@ registry.Register(&AdminHandlers{}, RequireAuth(), RequireRole("admin"))
 - `TestConnSetGet` — Set in ConnectHook, retrieve in middleware
 - `TestConnGetBeforeSet` — Returns nil for unset keys
 - `TestConnSetOverwrite` — Second Set replaces first value
-- `TestConnSetGetConcurrent` — No data race under `-race` flag
+- `TestConnLoadDistinguishesUnsetFromNil` — `Load` returns `(nil, false)` for unset keys, `(nil, true)` after `Set(key, nil)`, and `Get` returns `nil` for both (documents the limitation)
+- `TestConnSetGetConcurrent` — No data race under `-race` flag (exercises `Set`, `Get`, and `Load` concurrently)
 
 ### Integration Tests (existing, unchanged)
 
 - `TestOnConnectHookCalled` — ConnectHook executes
 - `TestOnConnectHookRejectsConnection` — Connection rejected with error
 - `TestOnDisconnectHookHasUserID` — UserID persists through disconnect
+
+## Design Notes
+
+- **`UserID` vs Principal:** `conn.SetUserID` / `conn.UserID` is a *routing identity* for push targeting (`PushToUser`). It is **not** a security boundary. Applications should store the authenticated principal via `Set`/`Load` and use it for authorization decisions in middleware.
+- **Memory:** Stored values live for the entire connection lifetime. Keep them small and prefer pointers to large structs.
+
+## Future Considerations
+
+- **Connection base context:** Request contexts currently derive from `context.Background()`. A future enhancement could derive them from a per-connection context (`context.WithCancel(conn.ctx)`), enabling connection-scoped cancellation and deadline propagation.
 
 ## Out of Scope
 
