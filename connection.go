@@ -27,6 +27,7 @@ type Conn struct {
 	userID    string          // associated user ID (set by middleware)
 	id        uint64          // unique connection ID
 	info      ConnInfo
+	values    map[any]any     // connection-scoped key-value store (lazy init)
 	ctx       context.Context // Context from HTTP request
 }
 
@@ -78,6 +79,32 @@ func (c *Conn) Info() ConnInfo {
 // This is useful for accessing request-scoped values like zerolog loggers.
 func (c *Conn) Context() context.Context {
 	return c.ctx
+}
+
+// Set stores a value on the connection, keyed by an arbitrary key.
+// This is useful for caching connection-scoped data (e.g. an authenticated
+// principal) that persists for the connection's lifetime. The map is lazily
+// initialized on first call, so connections that never call Set pay no cost.
+// Safe for concurrent use.
+func (c *Conn) Set(key, value any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values == nil {
+		c.values = make(map[any]any)
+	}
+	c.values[key] = value
+}
+
+// Get retrieves a value previously stored with Set.
+// Returns nil if the key was never set.
+// Safe for concurrent use.
+func (c *Conn) Get(key any) any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.values == nil {
+		return nil
+	}
+	return c.values[key]
 }
 
 // RemoteAddr returns the remote address of the connection.

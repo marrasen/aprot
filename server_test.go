@@ -1028,6 +1028,196 @@ func TestStopIdempotent(t *testing.T) {
 	}
 }
 
+func TestConnSetGet(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	type principalKey struct{}
+	type principal struct{ Name string }
+
+	var capturedName string
+	var mu sync.Mutex
+
+	// Set a value in ConnectHook, read it in middleware
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		conn.Set(principalKey{}, &principal{Name: "alice"})
+		return nil
+	})
+
+	server.Use(func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			conn := Connection(ctx)
+			p, _ := conn.Get(principalKey{}).(*principal)
+			mu.Lock()
+			capturedName = p.Name
+			mu.Unlock()
+			return next(ctx, req)
+		}
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Send a request to trigger middleware
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.Echo",
+		Params: jsontext.Value(`[{"message":"hi"}]`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedName != "alice" {
+		t.Errorf("Expected 'alice', got %q", capturedName)
+	}
+}
+
+func TestConnGetBeforeSet(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	type unknownKey struct{}
+
+	var capturedValue any
+	var mu sync.Mutex
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		mu.Lock()
+		capturedValue = conn.Get(unknownKey{})
+		mu.Unlock()
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedValue != nil {
+		t.Errorf("Expected nil, got %v", capturedValue)
+	}
+}
+
+func TestConnSetOverwrite(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	type roleKey struct{}
+
+	var capturedRole string
+	var mu sync.Mutex
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		conn.Set(roleKey{}, "viewer")
+		conn.Set(roleKey{}, "admin") // overwrite
+		mu.Lock()
+		capturedRole, _ = conn.Get(roleKey{}).(string)
+		mu.Unlock()
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedRole != "admin" {
+		t.Errorf("Expected 'admin', got %q", capturedRole)
+	}
+}
+
+func TestConnSetGetConcurrent(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	var testConn *Conn
+	var connMu sync.Mutex
+
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		connMu.Lock()
+		testConn = conn
+		connMu.Unlock()
+		return nil
+	})
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	connMu.Lock()
+	conn := testConn
+	connMu.Unlock()
+
+	if conn == nil {
+		t.Fatal("Connection not captured")
+	}
+
+	// Concurrent Set/Get should not race (run with -race)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		i := i
+		go func() {
+			defer wg.Done()
+			conn.Set(i, i*10)
+		}()
+		go func() {
+			defer wg.Done()
+			conn.Get(i)
+		}()
+	}
+	wg.Wait()
+
+	// Verify final values
+	for i := 0; i < 100; i++ {
+		v := conn.Get(i)
+		if v != i*10 {
+			t.Errorf("Key %d: expected %d, got %v", i, i*10, v)
+		}
+	}
+}
+
 func TestServerOptionsDefaults(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
