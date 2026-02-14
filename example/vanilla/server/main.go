@@ -33,6 +33,11 @@ func main() {
 	state.Broadcaster = server
 	state.UserPusher = server
 
+	// Optional: authenticate connections via session cookie at connect time.
+	// This caches the authenticated user on the connection so AuthMiddleware
+	// can read it without re-loading from the store on every request.
+	// server.OnConnect(api.ConnectHookAuth(tokenStore))
+
 	// Add server-level middleware (applies to all handlers)
 	server.Use(
 		api.LoggingMiddleware(),

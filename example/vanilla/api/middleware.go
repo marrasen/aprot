@@ -80,25 +80,64 @@ func LoggingMiddleware() aprot.Middleware {
 	}
 }
 
-// AuthMiddleware checks that the connection is authenticated (via Login)
-// and sets up the user context. Login calls conn.SetUserID(), so this
-// middleware simply looks up the user by the connection's user ID.
+// AuthMiddleware checks that the connection is authenticated and sets up the
+// user context. It first checks conn.Get for a cached *AuthUser (set by
+// ConnectHookAuth or Login), falling back to a token store lookup by the
+// connection's user ID.
 // Apply this middleware only to handlers that require authentication.
 func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
 			conn := aprot.Connection(ctx)
-			if conn == nil || conn.UserID() == "" {
+			if conn == nil {
 				return nil, aprot.ErrUnauthorized("authentication required")
 			}
 
-			user := tokenStore.UserByID(conn.UserID())
+			// Check connection-scoped cache first (set by ConnectHookAuth or Login)
+			var user *AuthUser
+			if v, ok := conn.Load(authUserKey); ok {
+				user, _ = v.(*AuthUser)
+			}
 			if user == nil {
-				return nil, aprot.ErrUnauthorized("invalid session")
+				// Fallback: look up by user ID in the token store
+				if conn.UserID() == "" {
+					return nil, aprot.ErrUnauthorized("authentication required")
+				}
+				user = tokenStore.UserByID(conn.UserID())
+				if user == nil {
+					return nil, aprot.ErrUnauthorized("invalid session")
+				}
 			}
 
 			ctx = context.WithValue(ctx, authUserKey, user)
 			return next(ctx, req)
 		}
+	}
+}
+
+// ConnectHookAuth returns a ConnectHook that validates a session cookie at
+// connection time and caches the authenticated user on the connection via
+// conn.Set. This avoids re-loading the user from a store on every request.
+//
+// Usage:
+//
+//	server.OnConnect(api.ConnectHookAuth(tokenStore))
+func ConnectHookAuth(tokenStore *TokenStore) aprot.ConnectHook {
+	return func(ctx context.Context, conn *aprot.Conn) error {
+		// Look for a session token in cookies
+		for _, cookie := range conn.Info().Cookies {
+			if cookie.Name == "session" {
+				user := tokenStore.Validate(cookie.Value)
+				if user == nil {
+					return aprot.ErrConnectionRejected("invalid session")
+				}
+				conn.SetUserID(user.ID)
+				conn.Set(authUserKey, user)
+				return nil
+			}
+		}
+		// No session cookie — allow connection (public endpoints still work).
+		// Protected handlers will reject via AuthMiddleware.
+		return nil
 	}
 }

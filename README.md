@@ -501,6 +501,86 @@ func LoggingMiddleware() aprot.Middleware {
 }
 ```
 
+### Connection-Scoped State (`Set/Get/Load`)
+
+Store arbitrary data on a connection that persists for its lifetime. This follows the `context.WithValue` convention of using unexported struct keys to avoid collisions:
+
+```go
+// Define a typed key (unexported to avoid collisions)
+type principalKey struct{}
+
+// Store a value (typically in a ConnectHook or auth middleware)
+conn.Set(principalKey{}, &Principal{ID: "user_123", Role: "admin"})
+
+// Retrieve it later (in any handler or middleware)
+principal, _ := conn.Get(principalKey{}).(*Principal)
+
+// Use Load to distinguish "not set" from "set to nil"
+if v, ok := conn.Load(principalKey{}); ok {
+    principal, _ = v.(*Principal)
+}
+```
+
+`Set/Get/Load` are safe for concurrent use (`Get` and `Load` take a read lock). The internal map is lazily initialized — connections that never call `Set` pay zero allocation cost. Keep stored values small; they live for the entire connection lifetime.
+
+### Authentication
+
+aprot provides the building blocks for authentication but does not prescribe a specific strategy. The common pattern for browser clients is **cookie-session auth at connect time**:
+
+1. **Validate at connect time** — Use an `OnConnect` hook to read session cookies and store the authenticated principal on the connection.
+2. **Guard per-handler** — Use per-handler middleware to check the cached principal.
+
+```go
+type principalKey struct{}
+
+// ConnectHook: validate session cookie and cache the user on the connection.
+server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+    for _, cookie := range conn.Info().Cookies {
+        if cookie.Name == "session" {
+            user, err := sessionStore.Validate(cookie.Value)
+            if err != nil {
+                return aprot.ErrConnectionRejected("invalid session")
+            }
+            conn.SetUserID(user.ID)
+            conn.Set(principalKey{}, user)
+            return nil
+        }
+    }
+    return nil // allow unauthenticated connections for public endpoints
+})
+
+// Middleware: require authentication on protected handlers.
+func RequireAuth() aprot.Middleware {
+    return func(next aprot.Handler) aprot.Handler {
+        return func(ctx context.Context, req *aprot.Request) (any, error) {
+            conn := aprot.Connection(ctx)
+            if conn == nil {
+                return nil, aprot.ErrUnauthorized("authentication required")
+            }
+            if _, ok := conn.Load(principalKey{}); !ok {
+                return nil, aprot.ErrUnauthorized("authentication required")
+            }
+            return next(ctx, req)
+        }
+    }
+}
+
+// Register handlers with auth middleware
+registry.Register(&PublicHandlers{})
+registry.Register(&ProtectedHandlers{}, RequireAuth())
+```
+
+**Note:** `conn.SetUserID` / `conn.UserID` is a *routing identity* used for push targeting (`PushToUser`). It is not a security boundary — always use the stored principal (via `Set`/`Load`) for authorization decisions in middleware.
+
+**Origin validation** — By default, aprot accepts all origins. For production, restrict origins to prevent cross-site WebSocket hijacking (CSWSH):
+
+```go
+server.SetCheckOrigin(func(r *http.Request) bool {
+    origin := r.Header.Get("Origin")
+    return origin == "https://myapp.example.com"
+})
+```
+
 ### Connection Lifecycle Hooks
 
 React to connection events with `OnConnect` and `OnDisconnect` hooks:
