@@ -420,6 +420,7 @@ Key methods on `SharedTask[M]`:
 - `SetMeta(v M)` — sets typed metadata broadcast to all clients
 - `Close()` / `Fail()` — marks as completed/failed
 - `Context()` — returns the task's cancellation context
+- `WithContext(ctx)` — returns a context carrying this task's shared context (see SharedSubTask below)
 - `Ref()` — returns a `TaskRef{TaskID}` to send to the client
 
 Key methods on `SharedTaskSub[M]` (child nodes):
@@ -469,6 +470,53 @@ client.onPush<{ taskId: string; output: string }>('TaskOutputEvent', (event) => 
 
 // Cancel a shared task
 await cancelSharedTask(client, taskId);
+```
+
+### SharedSubTask (Bridging Request-Scoped and Shared Tasks)
+
+`SharedSubTask` bridges both task systems: it creates a node in the request-scoped task tree (progress to the requester) **and** a top-level shared task (broadcast to all clients). Nested `SubTask` calls inside it automatically mirror to the shared tree.
+
+```go
+func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
+    // Creates a shared task visible to all clients + request-scoped progress for the caller.
+    err := aprot.SharedSubTask(ctx, "Deploying", func(ctx context.Context) error {
+        // Nested SubTask calls are mirrored to both systems.
+        if err := aprot.SubTask(ctx, "Build image", func(ctx context.Context) error {
+            aprot.Output(ctx, "Compiling...")  // sent to requester AND broadcast
+            return nil
+        }); err != nil {
+            return err
+        }
+
+        return aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+            return nil
+        })
+    })
+
+    return &DeployResponse{Status: "ok"}, err
+}
+```
+
+**Behavior:**
+- If called with no existing shared context, `SharedSubTask` creates a new shared task core. On return, the core is auto-closed (or marked failed on error).
+- If nested inside another `SharedSubTask`, it delegates to `SubTask` — no new core is created, just a child node.
+- If no connection or `taskManager` is available, it falls back to plain `SubTask`.
+- `Output(ctx, msg)` inside a shared context sends to both the requester and all clients.
+
+**`SharedTask.WithContext()` + `Go()`** — for background goroutines launched via `Go()` that should also dual-send:
+
+```go
+task := aprot.ShareTask[struct{}](ctx, "Background job")
+task.Go(func(ctx context.Context) {
+    // Attach the shared context so SubTask calls dual-send.
+    ctx = task.WithContext(ctx)
+
+    aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
+        // This creates a child in the shared task tree.
+        return nil
+    })
+})
+return task.Ref(), nil
 ```
 
 ### Connection Info

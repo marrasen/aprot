@@ -11,6 +11,7 @@ const (
 	requestKey
 	taskTreeKey
 	taskNodeKey
+	sharedContextKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -95,4 +96,18 @@ func withTaskTree(ctx context.Context, t *taskTree) context.Context {
 // withTaskNode returns a context with the given task node.
 func withTaskNode(ctx context.Context, n *taskNode) context.Context {
 	return context.WithValue(ctx, taskNodeKey, n)
+}
+
+// sharedCtxFromContext returns the sharedContext from the context.
+// Returns nil if not present.
+func sharedCtxFromContext(ctx context.Context) *sharedContext {
+	if sc, ok := ctx.Value(sharedContextKey).(*sharedContext); ok {
+		return sc
+	}
+	return nil
+}
+
+// withSharedContext returns a context with the given shared context.
+func withSharedContext(ctx context.Context, sc *sharedContext) context.Context {
+	return context.WithValue(ctx, sharedContextKey, sc)
 }
