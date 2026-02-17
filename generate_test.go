@@ -1241,7 +1241,7 @@ func TestGenerateWithTaskMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
 	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
-	registry.EnableTasksWithMeta(TaskMeta{})
+	EnableTasksWithMeta[TaskMeta](registry)
 
 	gen := NewGenerator(registry)
 
@@ -1282,7 +1282,7 @@ func TestGenerateWithTaskMetaMultiFile(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
 	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
-	registry.EnableTasksWithMeta(TaskMeta{})
+	EnableTasksWithMeta[TaskMeta](registry)
 
 	gen := NewGenerator(registry)
 	files, err := gen.Generate()

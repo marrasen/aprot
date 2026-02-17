@@ -25,7 +25,8 @@ func TestSharedTaskBasic(t *testing.T) {
 		t.Fatal("expected taskManager to be initialized")
 	}
 
-	task := tm.create("Build project", context.Background())
+	core := tm.create("Build project", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 	if task.ID() == "" {
 		t.Fatal("expected non-empty task ID")
 	}
@@ -67,7 +68,8 @@ func TestSharedTaskProgress(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Upload", context.Background())
+	core := tm.create("Upload", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 
 	task.Progress(50, 100)
 
@@ -89,7 +91,8 @@ func TestSharedTaskSubTask(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Deploy", context.Background())
+	core := tm.create("Deploy", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 
 	sub := task.SubTask("Build image")
 	sub.Progress(1, 3)
@@ -126,9 +129,9 @@ func TestSharedTaskCancel(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Long task", context.Background())
+	core := tm.create("Long task", context.Background())
 
-	ok := tm.cancelTask(task.ID())
+	ok := tm.cancelTask(core.id)
 	if !ok {
 		t.Fatal("expected cancel to succeed")
 	}
@@ -175,7 +178,8 @@ func TestSharedTaskGo(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Background work", context.Background())
+	core := tm.create("Background work", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 
 	var ran bool
 	var mu sync.Mutex
@@ -220,7 +224,8 @@ func TestSharedTaskBatchBroadcast(t *testing.T) {
 	tm := server.taskManager
 
 	// Create a task and update progress many times rapidly.
-	task := tm.create("Batch test", context.Background())
+	core := tm.create("Batch test", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 	for i := 0; i < 100; i++ {
 		task.Progress(i, 100)
 	}
@@ -250,7 +255,8 @@ func TestSharedTaskFail(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Failing task", context.Background())
+	core := tm.create("Failing task", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 
 	task.Fail()
 
@@ -310,8 +316,8 @@ func TestSharedTaskBroadcastOverWebSocket(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Create a shared task directly on the server's task manager
-	task := server.taskManager.create("Test task", context.Background())
-	task.Progress(1, 10)
+	core := server.taskManager.create("Test task", context.Background())
+	core.progress(1, 10)
 
 	// Wait for batch flush
 	time.Sleep(300 * time.Millisecond)
@@ -334,7 +340,7 @@ func TestSharedTaskBroadcastOverWebSocket(t *testing.T) {
 		t.Error("expected to receive TaskStateEvent push")
 	}
 
-	task.Close()
+	core.closeTask()
 }
 
 // Integration test: New client gets current shared tasks on connect.
@@ -352,8 +358,8 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 	defer ts.Close()
 
 	// Create a shared task before any client connects
-	task := server.taskManager.create("Existing task", context.Background())
-	task.Progress(5, 10)
+	core := server.taskManager.create("Existing task", context.Background())
+	core.progress(5, 10)
 
 	// Now connect a client
 	ws := connectWS(t, ts)
@@ -381,7 +387,7 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 		t.Error("expected new client to receive existing shared tasks on connect")
 	}
 
-	task.Close()
+	core.closeTask()
 }
 
 func TestSharedTaskSetMeta(t *testing.T) {
@@ -394,12 +400,13 @@ func TestSharedTaskSetMeta(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Meta task", context.Background())
+	core := tm.create("Meta task", context.Background())
 
 	type Meta struct {
 		UserName string `json:"userName"`
 	}
 
+	task := &SharedTask[Meta]{core: core}
 	task.SetMeta(Meta{UserName: "alice"})
 
 	states := tm.snapshotAll()
@@ -427,19 +434,24 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Parent", context.Background())
+	core := tm.create("Parent", context.Background())
 
+	type SubMeta struct {
+		Key string `json:"key"`
+	}
+
+	task := &SharedTask[SubMeta]{core: core}
 	sub := task.SubTask("Child")
-	sub.SetMeta(map[string]string{"key": "value"})
+	sub.SetMeta(SubMeta{Key: "value"})
 
 	states := tm.snapshotAll()
 	child := states[0].Children[0]
-	meta, ok := child.Meta.(map[string]string)
+	meta, ok := child.Meta.(SubMeta)
 	if !ok {
-		t.Fatalf("expected map[string]string, got %T", child.Meta)
+		t.Fatalf("expected SubMeta, got %T", child.Meta)
 	}
-	if meta["key"] != "value" {
-		t.Errorf("expected key='value', got %s", meta["key"])
+	if meta.Key != "value" {
+		t.Errorf("expected key='value', got %s", meta.Key)
 	}
 
 	task.Close()
@@ -455,7 +467,8 @@ func TestSharedTaskSubSubTask(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	task := tm.create("Root", context.Background())
+	core := tm.create("Root", context.Background())
+	task := &SharedTask[struct{}]{core: core}
 
 	sub := task.SubTask("Level 1")
 	grandchild := sub.SubTask("Level 2")
@@ -496,7 +509,7 @@ func TestEnableTasksWithMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	registry.EnableTasksWithMeta(TaskMeta{})
+	EnableTasksWithMeta[TaskMeta](registry)
 
 	if !registry.TasksEnabled() {
 		t.Fatal("expected tasks to be enabled")
