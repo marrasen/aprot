@@ -157,53 +157,102 @@ func (t *taskTree) ensureRoot() *taskNode {
 // the sub-task as completed (or failed if fn returns an error).
 // The child task node is stored in the context passed to fn, so nested SubTask
 // calls create a proper hierarchy.
+//
+// When a sharedContext is present on ctx (set by SharedSubTask or
+// SharedTask.WithContext), SubTask also creates a mirrored node in the shared
+// task system, so progress is sent both to the requesting client and broadcast
+// to all clients.
 func SubTask(ctx context.Context, title string, fn func(ctx context.Context) error) error {
 	tree := taskTreeFromContext(ctx)
-	if tree == nil {
-		// No task tree — just run the function directly.
+	sc := sharedCtxFromContext(ctx)
+
+	if tree == nil && sc == nil {
+		// No task tree and no shared context — just run the function directly.
 		return fn(ctx)
 	}
 
-	parent := taskNodeFromContext(ctx)
+	// --- request-scoped node ---
+	var child *taskNode
+	if tree != nil {
+		parent := taskNodeFromContext(ctx)
 
-	tree.mu.Lock()
-	root := tree.ensureRoot()
-	tree.mu.Unlock()
+		tree.mu.Lock()
+		root := tree.ensureRoot()
+		tree.mu.Unlock()
 
-	if parent == nil {
-		parent = root
+		if parent == nil {
+			parent = root
+		}
+
+		child = &taskNode{
+			tree:   tree,
+			id:     tree.allocID(),
+			title:  title,
+			status: TaskNodeStatusRunning,
+		}
+		parent.addChild(child)
+		tree.send()
 	}
 
-	child := &taskNode{
-		tree:   tree,
-		id:     tree.allocID(),
-		title:  title,
-		status: TaskNodeStatusRunning,
+	// --- shared node ---
+	var sharedNode *sharedTaskNode
+	if sc != nil {
+		if sc.node != nil {
+			sharedNode = sc.node.subTask(sc.core, title)
+		} else {
+			sharedNode = sc.core.subTask(title)
+		}
 	}
-	parent.addChild(child)
-	tree.send()
 
-	childCtx := withTaskNode(ctx, child)
+	// Build child context with both nodes propagated.
+	childCtx := ctx
+	if child != nil {
+		childCtx = withTaskNode(childCtx, child)
+	}
+	if sharedNode != nil {
+		childCtx = withSharedContext(childCtx, &sharedContext{core: sc.core, node: sharedNode})
+	}
+
 	err := fn(childCtx)
 
-	if err != nil {
-		child.setStatus(TaskNodeStatusFailed)
-	} else {
-		child.setStatus(TaskNodeStatusCompleted)
+	// --- finalize request-scoped node ---
+	if child != nil {
+		if err != nil {
+			child.setStatus(TaskNodeStatusFailed)
+		} else {
+			child.setStatus(TaskNodeStatusCompleted)
+		}
+		tree.send()
 	}
-	tree.send()
+
+	// --- finalize shared node ---
+	if sharedNode != nil {
+		sharedNode.mu.Lock()
+		if err != nil {
+			sharedNode.status = TaskNodeStatusFailed
+		} else {
+			sharedNode.status = TaskNodeStatusCompleted
+		}
+		sharedNode.mu.Unlock()
+		sc.core.manager.markDirty(sc.core.id)
+	}
 
 	return err
 }
 
 // Output sends a text output message for the current request.
 // This reuses the progress channel with the Output field.
+// When a sharedContext is present, the output is also broadcast
+// to all clients via the shared task system.
 func Output(ctx context.Context, msg string) {
 	tree := taskTreeFromContext(ctx)
-	if tree == nil {
-		return
+	if tree != nil {
+		tree.reporter.sendOutput(msg)
 	}
-	tree.reporter.sendOutput(msg)
+	sc := sharedCtxFromContext(ctx)
+	if sc != nil {
+		sc.core.output(msg)
+	}
 }
 
 // OutputWriter returns an io.WriteCloser that creates a child task node

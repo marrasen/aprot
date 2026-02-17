@@ -204,6 +204,14 @@ func (t *SharedTask[M]) Context() context.Context {
 	return t.core.ctx
 }
 
+// WithContext returns a new context derived from ctx that carries
+// this task's shared context. Use this to propagate shared task
+// awareness into goroutines launched via Go(), so that SubTask
+// calls inside them also create mirrored shared task nodes.
+func (t *SharedTask[M]) WithContext(ctx context.Context) context.Context {
+	return withSharedContext(ctx, &sharedContext{core: t.core})
+}
+
 // SharedTaskSub is a type-safe, generic child node of a SharedTask.
 type SharedTaskSub[M any] struct {
 	node *sharedTaskNode
@@ -236,15 +244,7 @@ func (s *SharedTaskSub[M]) SetMeta(v M) {
 
 // SubTask creates a child node under this sub-task.
 func (s *SharedTaskSub[M]) SubTask(title string) *SharedTaskSub[M] {
-	child := &sharedTaskNode{
-		id:     s.core.manager.allocID(),
-		title:  title,
-		status: TaskNodeStatusRunning,
-	}
-	s.node.mu.Lock()
-	s.node.children = append(s.node.children, child)
-	s.node.mu.Unlock()
-	s.core.manager.markDirty(s.core.id)
+	child := s.node.subTask(s.core, title)
 	return &SharedTaskSub[M]{node: child, core: s.core}
 }
 
@@ -257,6 +257,13 @@ func (s *SharedTaskSub[M]) Progress(current, total int) {
 	s.core.manager.markDirty(s.core.id)
 }
 
+// sharedContext is propagated through the context to bridge SubTask with the shared task system.
+// When SubTask detects it, it creates mirrored shared task nodes.
+type sharedContext struct {
+	core *sharedTaskCore
+	node *sharedTaskNode // nil = at core level
+}
+
 // sharedTaskNode is the internal mutable child node of a SharedTask.
 type sharedTaskNode struct {
 	id       string
@@ -267,6 +274,19 @@ type sharedTaskNode struct {
 	meta     any
 	children []*sharedTaskNode
 	mu       sync.Mutex
+}
+
+func (n *sharedTaskNode) subTask(core *sharedTaskCore, title string) *sharedTaskNode {
+	child := &sharedTaskNode{
+		id:     core.manager.allocID(),
+		title:  title,
+		status: TaskNodeStatusRunning,
+	}
+	n.mu.Lock()
+	n.children = append(n.children, child)
+	n.mu.Unlock()
+	core.manager.markDirty(core.id)
+	return child
 }
 
 func (n *sharedTaskNode) snapshot() *TaskNode {
@@ -441,6 +461,54 @@ func ShareTask[M any](ctx context.Context, title string) *SharedTask[M] {
 	}
 	core := tm.create(title, ctx)
 	return &SharedTask[M]{core: core}
+}
+
+// SharedSubTask bridges the request-scoped (SubTask) and shared task systems.
+// It creates a node in the request-scoped task tree (progress to the requester)
+// AND in the shared task system (broadcast to all clients).
+//
+// If a sharedContext already exists on ctx (e.g. from a parent SharedSubTask or
+// SharedTask.WithContext), it delegates to SubTask which handles dual-send.
+//
+// Otherwise, it creates a new sharedTaskCore (top-level shared task), attaches
+// a sharedContext to the context, runs fn, and then closes or fails the core
+// on return.
+//
+// If no connection or taskManager is available, it falls back to SubTask.
+func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Context) error) error {
+	// If we're already inside a shared context, just delegate to SubTask
+	// which will handle dual-send via the sharedContext on ctx.
+	if sc := sharedCtxFromContext(ctx); sc != nil {
+		return SubTask(ctx, title, fn)
+	}
+
+	// Try to create a new shared task core.
+	conn := Connection(ctx)
+	var tm *taskManager
+	if conn != nil {
+		tm = conn.server.taskManager
+	}
+
+	if tm == nil {
+		// No shared task system available — fall back to SubTask.
+		return SubTask(ctx, title, fn)
+	}
+
+	// Create a new top-level shared task core.
+	core := tm.create(title, ctx)
+	sc := &sharedContext{core: core}
+	childCtx := withSharedContext(ctx, sc)
+
+	err := SubTask(childCtx, title, fn)
+
+	// Close or fail the shared task core based on the result.
+	if err != nil {
+		core.fail()
+	} else {
+		core.closeTask()
+	}
+
+	return err
 }
 
 // taskCancelHandler is an internal handler registered by EnableTasks()
