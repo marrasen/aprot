@@ -41,9 +41,9 @@ type CancelTaskRequest struct {
 	TaskID string `json:"taskId"`
 }
 
-// SharedTask is a task visible to all connected clients.
-// It is detached from the originating connection's lifecycle.
-type SharedTask struct {
+// sharedTaskCore is the internal, non-generic core of a shared task.
+// It is stored by taskManager and holds all mutable state.
+type sharedTaskCore struct {
 	id       string
 	title    string
 	status   TaskNodeStatus
@@ -57,18 +57,7 @@ type SharedTask struct {
 	ctx      context.Context
 }
 
-// ID returns the task's unique identifier.
-func (t *SharedTask) ID() string {
-	return t.id
-}
-
-// Ref returns a TaskRef that can be returned from a handler to the client.
-func (t *SharedTask) Ref() *TaskRef {
-	return &TaskRef{TaskID: t.id}
-}
-
-// Progress updates the shared task's progress.
-func (t *SharedTask) Progress(current, total int) {
+func (t *sharedTaskCore) progress(current, total int) {
 	t.mu.Lock()
 	t.current = current
 	t.total = total
@@ -76,30 +65,25 @@ func (t *SharedTask) Progress(current, total int) {
 	t.manager.markDirty(t.id)
 }
 
-// SetMeta sets arbitrary metadata on the shared task.
-// The value is included in the JSON snapshot broadcast to clients.
-func (t *SharedTask) SetMeta(v any) {
+func (t *sharedTaskCore) setMeta(v any) {
 	t.mu.Lock()
 	t.meta = v
 	t.mu.Unlock()
 	t.manager.markDirty(t.id)
 }
 
-// Output sends output text associated with this task.
-func (t *SharedTask) Output(msg string) {
+func (t *sharedTaskCore) output(msg string) {
 	t.manager.sendOutput(t.id, msg)
 }
 
-// Go runs fn in a goroutine, automatically closing the task when fn returns.
-func (t *SharedTask) Go(fn func(ctx context.Context)) {
+func (t *sharedTaskCore) goRun(fn func(ctx context.Context)) {
 	go func() {
-		defer t.Close()
+		defer t.closeTask()
 		fn(t.ctx)
 	}()
 }
 
-// Close marks the task as completed and removes it from the manager.
-func (t *SharedTask) Close() {
+func (t *sharedTaskCore) closeTask() {
 	t.mu.Lock()
 	if t.status != TaskNodeStatusRunning {
 		t.mu.Unlock()
@@ -116,8 +100,7 @@ func (t *SharedTask) Close() {
 	}()
 }
 
-// Fail marks the task as failed.
-func (t *SharedTask) Fail() {
+func (t *sharedTaskCore) fail() {
 	t.mu.Lock()
 	if t.status != TaskNodeStatusRunning {
 		t.mu.Unlock()
@@ -133,8 +116,7 @@ func (t *SharedTask) Fail() {
 	}()
 }
 
-// SubTask creates a child node under this shared task.
-func (t *SharedTask) SubTask(title string) *SharedTaskSub {
+func (t *sharedTaskCore) subTask(title string) *sharedTaskNode {
 	child := &sharedTaskNode{
 		id:     t.manager.allocID(),
 		title:  title,
@@ -144,15 +126,10 @@ func (t *SharedTask) SubTask(title string) *SharedTaskSub {
 	t.children = append(t.children, child)
 	t.mu.Unlock()
 	t.manager.markDirty(t.id)
-	return &SharedTaskSub{node: child, task: t}
+	return child
 }
 
-// Context returns the task's context.
-func (t *SharedTask) Context() context.Context {
-	return t.ctx
-}
-
-func (t *SharedTask) snapshot() SharedTaskState {
+func (t *sharedTaskCore) snapshot() SharedTaskState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	state := SharedTaskState{
@@ -169,57 +146,115 @@ func (t *SharedTask) snapshot() SharedTaskState {
 	return state
 }
 
-// SharedTaskSub is a child node of a SharedTask.
-type SharedTaskSub struct {
+// SharedTask is a type-safe, generic wrapper around sharedTaskCore.
+// M is the metadata type used with SetMeta.
+type SharedTask[M any] struct {
+	core *sharedTaskCore
+}
+
+// ID returns the task's unique identifier.
+func (t *SharedTask[M]) ID() string {
+	return t.core.id
+}
+
+// Ref returns a TaskRef that can be returned from a handler to the client.
+func (t *SharedTask[M]) Ref() *TaskRef {
+	return &TaskRef{TaskID: t.core.id}
+}
+
+// Progress updates the shared task's progress.
+func (t *SharedTask[M]) Progress(current, total int) {
+	t.core.progress(current, total)
+}
+
+// SetMeta sets typed metadata on the shared task.
+// The value is included in the JSON snapshot broadcast to clients.
+func (t *SharedTask[M]) SetMeta(v M) {
+	t.core.setMeta(v)
+}
+
+// Output sends output text associated with this task.
+func (t *SharedTask[M]) Output(msg string) {
+	t.core.output(msg)
+}
+
+// Go runs fn in a goroutine, automatically closing the task when fn returns.
+func (t *SharedTask[M]) Go(fn func(ctx context.Context)) {
+	t.core.goRun(fn)
+}
+
+// Close marks the task as completed and removes it from the manager.
+func (t *SharedTask[M]) Close() {
+	t.core.closeTask()
+}
+
+// Fail marks the task as failed.
+func (t *SharedTask[M]) Fail() {
+	t.core.fail()
+}
+
+// SubTask creates a child node under this shared task.
+func (t *SharedTask[M]) SubTask(title string) *SharedTaskSub[M] {
+	node := t.core.subTask(title)
+	return &SharedTaskSub[M]{node: node, core: t.core}
+}
+
+// Context returns the task's context.
+func (t *SharedTask[M]) Context() context.Context {
+	return t.core.ctx
+}
+
+// SharedTaskSub is a type-safe, generic child node of a SharedTask.
+type SharedTaskSub[M any] struct {
 	node *sharedTaskNode
-	task *SharedTask
+	core *sharedTaskCore
 }
 
 // Complete marks this sub-task as completed.
-func (s *SharedTaskSub) Complete() {
+func (s *SharedTaskSub[M]) Complete() {
 	s.node.mu.Lock()
 	s.node.status = TaskNodeStatusCompleted
 	s.node.mu.Unlock()
-	s.task.manager.markDirty(s.task.id)
+	s.core.manager.markDirty(s.core.id)
 }
 
 // Fail marks this sub-task as failed.
-func (s *SharedTaskSub) Fail() {
+func (s *SharedTaskSub[M]) Fail() {
 	s.node.mu.Lock()
 	s.node.status = TaskNodeStatusFailed
 	s.node.mu.Unlock()
-	s.task.manager.markDirty(s.task.id)
+	s.core.manager.markDirty(s.core.id)
 }
 
-// SetMeta sets arbitrary metadata on this sub-task node.
-func (s *SharedTaskSub) SetMeta(v any) {
+// SetMeta sets typed metadata on this sub-task node.
+func (s *SharedTaskSub[M]) SetMeta(v M) {
 	s.node.mu.Lock()
 	s.node.meta = v
 	s.node.mu.Unlock()
-	s.task.manager.markDirty(s.task.id)
+	s.core.manager.markDirty(s.core.id)
 }
 
 // SubTask creates a child node under this sub-task.
-func (s *SharedTaskSub) SubTask(title string) *SharedTaskSub {
+func (s *SharedTaskSub[M]) SubTask(title string) *SharedTaskSub[M] {
 	child := &sharedTaskNode{
-		id:     s.task.manager.allocID(),
+		id:     s.core.manager.allocID(),
 		title:  title,
 		status: TaskNodeStatusRunning,
 	}
 	s.node.mu.Lock()
 	s.node.children = append(s.node.children, child)
 	s.node.mu.Unlock()
-	s.task.manager.markDirty(s.task.id)
-	return &SharedTaskSub{node: child, task: s.task}
+	s.core.manager.markDirty(s.core.id)
+	return &SharedTaskSub[M]{node: child, core: s.core}
 }
 
 // Progress updates the sub-task's progress.
-func (s *SharedTaskSub) Progress(current, total int) {
+func (s *SharedTaskSub[M]) Progress(current, total int) {
 	s.node.mu.Lock()
 	s.node.current = current
 	s.node.total = total
 	s.node.mu.Unlock()
-	s.task.manager.markDirty(s.task.id)
+	s.core.manager.markDirty(s.core.id)
 }
 
 // sharedTaskNode is the internal mutable child node of a SharedTask.
@@ -255,7 +290,7 @@ func (n *sharedTaskNode) snapshot() *TaskNode {
 // It batches state changes and broadcasts them to all clients.
 type taskManager struct {
 	server  *Server
-	tasks   map[string]*SharedTask
+	tasks   map[string]*sharedTaskCore
 	dirty   map[string]bool
 	mu      sync.Mutex
 	nextID  atomic.Int64
@@ -266,7 +301,7 @@ type taskManager struct {
 func newTaskManager(server *Server) *taskManager {
 	tm := &taskManager{
 		server: server,
-		tasks:  make(map[string]*SharedTask),
+		tasks:  make(map[string]*sharedTaskCore),
 		dirty:  make(map[string]bool),
 		stopCh: make(chan struct{}),
 	}
@@ -279,13 +314,13 @@ func (tm *taskManager) allocID() string {
 	return "st" + itoa(n)
 }
 
-// create creates a new SharedTask and registers it.
-func (tm *taskManager) create(title string, ctx context.Context) *SharedTask {
+// create creates a new sharedTaskCore and registers it.
+func (tm *taskManager) create(title string, ctx context.Context) *sharedTaskCore {
 	detached := context.WithoutCancel(ctx)
 	taskCtx, cancel := context.WithCancel(detached)
 
 	id := tm.allocID()
-	task := &SharedTask{
+	task := &sharedTaskCore{
 		id:      id,
 		title:   title,
 		status:  TaskNodeStatusRunning,
@@ -336,7 +371,7 @@ func (tm *taskManager) cancelTask(id string) bool {
 	if !ok {
 		return false
 	}
-	task.Fail()
+	task.fail()
 	return true
 }
 
@@ -393,9 +428,9 @@ func (tm *taskManager) stop() {
 }
 
 // ShareTask creates a new shared task visible to all clients.
-// The returned SharedTask is detached from the connection's lifecycle
+// The returned SharedTask[M] is detached from the connection's lifecycle
 // (uses context.WithoutCancel) and has its own cancellation context.
-func ShareTask(ctx context.Context, title string) *SharedTask {
+func ShareTask[M any](ctx context.Context, title string) *SharedTask[M] {
 	conn := Connection(ctx)
 	if conn == nil {
 		return nil
@@ -404,7 +439,8 @@ func ShareTask(ctx context.Context, title string) *SharedTask {
 	if tm == nil {
 		return nil
 	}
-	return tm.create(title, ctx)
+	core := tm.create(title, ctx)
+	return &SharedTask[M]{core: core}
 }
 
 // taskCancelHandler is an internal handler registered by EnableTasks()

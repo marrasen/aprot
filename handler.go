@@ -369,19 +369,18 @@ func (r *Registry) EnableTasks() {
 // The meta type will be used in the generated TypeScript client for type-safe
 // metadata on SharedTaskState and TaskNode.
 //
+// This is a free function (not a method) because Go does not allow generic
+// methods on non-generic types.
+//
 // Example:
 //
 //	type TaskMeta struct {
 //	    UserName string `json:"userName,omitempty"`
 //	    Error    string `json:"error,omitempty"`
 //	}
-//	registry.EnableTasksWithMeta(TaskMeta{})
-func (r *Registry) EnableTasksWithMeta(meta any) {
-	t := reflect.TypeOf(meta)
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	r.taskMetaType = t
+//	aprot.EnableTasksWithMeta[TaskMeta](registry)
+func EnableTasksWithMeta[M any](r *Registry) {
+	r.taskMetaType = reflect.TypeFor[M]()
 	r.EnableTasks()
 }
 

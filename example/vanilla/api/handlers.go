@@ -268,7 +268,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		delay = 50
 	}
 
-	task := aprot.ShareTask(ctx, req.Title)
+	task := aprot.ShareTask[TaskMeta](ctx, req.Title)
 	if task == nil {
 		return nil, aprot.ErrInternal(nil)
 	}

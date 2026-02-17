@@ -355,7 +355,7 @@ registry.Register(&Handlers{})
 registry.EnableTasks()  // Registers TaskStateEvent, TaskOutputEvent push events + CancelTask handler
 ```
 
-To attach typed metadata to tasks, use `EnableTasksWithMeta` instead:
+To attach typed metadata to tasks, use `EnableTasksWithMeta` instead. This is a free function (not a method) because Go does not allow generic methods on non-generic types:
 
 ```go
 type TaskMeta struct {
@@ -363,21 +363,23 @@ type TaskMeta struct {
     Error    string `json:"error,omitempty"`
 }
 
-registry.EnableTasksWithMeta(TaskMeta{})
+aprot.EnableTasksWithMeta[TaskMeta](registry)
 ```
 
 This generates a typed `TaskMeta` interface in the TypeScript client and adds an optional `meta?: TaskMeta` field to `SharedTaskState` and `TaskNode`.
 
 #### Creating Shared Tasks
 
+`ShareTask` is generic — the type parameter `M` determines the metadata type accepted by `SetMeta`. If you registered metadata with `EnableTasksWithMeta[TaskMeta]`, use `ShareTask[TaskMeta]`:
+
 ```go
 func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.TaskRef, error) {
-    task := aprot.ShareTask(ctx, "Deploying "+req.Service)
+    task := aprot.ShareTask[TaskMeta](ctx, "Deploying "+req.Service)
     if task == nil {
         return nil, aprot.ErrInternal(nil)
     }
 
-    // Attach metadata visible to all clients
+    // Attach metadata visible to all clients — compile-time type-safe
     task.SetMeta(TaskMeta{UserName: "alice"})
 
     // Run in background — task auto-closes when fn returns
@@ -404,20 +406,26 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.
 }
 ```
 
-Key methods on `SharedTask`:
+If you don't use metadata, use `struct{}`:
+
+```go
+task := aprot.ShareTask[struct{}](ctx, "Simple task")
+```
+
+Key methods on `SharedTask[M]`:
 - `Go(fn)` — runs fn in a goroutine, auto-closes on return
 - `Progress(current, total)` — updates progress
 - `Output(msg)` — sends output text to all clients
-- `SubTask(title)` — creates a child node
-- `SetMeta(v)` — sets metadata broadcast to all clients
+- `SubTask(title)` — creates a child node (`*SharedTaskSub[M]`)
+- `SetMeta(v M)` — sets typed metadata broadcast to all clients
 - `Close()` / `Fail()` — marks as completed/failed
 - `Context()` — returns the task's cancellation context
 - `Ref()` — returns a `TaskRef{TaskID}` to send to the client
 
-Key methods on `SharedTaskSub` (child nodes):
+Key methods on `SharedTaskSub[M]` (child nodes):
 - `Complete()` / `Fail()` — marks as completed/failed
 - `Progress(current, total)` — updates progress
-- `SetMeta(v)` — sets metadata on this sub-task
+- `SetMeta(v M)` — sets typed metadata on this sub-task
 - `SubTask(title)` — creates a nested child node
 
 #### TypeScript (React)
