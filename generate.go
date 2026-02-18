@@ -297,17 +297,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	for _, t := range types {
 		iface := interfaceData{Name: t.Name()}
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if !field.IsExported() || shouldSkipField(field) {
-				continue
-			}
-			iface.Fields = append(iface.Fields, fieldData{
-				Name:     g.getJSONName(field),
-				Type:     g.goTypeToTS(field.Type),
-				Optional: g.isOptional(field),
-			})
-		}
+		iface.Fields = g.collectInterfaceFields(t)
 		data.Interfaces = append(data.Interfaces, iface)
 	}
 
@@ -412,17 +402,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 
 	for _, t := range types {
 		iface := interfaceData{Name: t.Name()}
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if !field.IsExported() || shouldSkipField(field) {
-				continue
-			}
-			iface.Fields = append(iface.Fields, fieldData{
-				Name:     g.getJSONName(field),
-				Type:     g.goTypeToTS(field.Type),
-				Optional: g.isOptional(field),
-			})
-		}
+		iface.Fields = g.collectInterfaceFields(t)
 		data.Interfaces = append(data.Interfaces, iface)
 	}
 
@@ -533,17 +513,31 @@ func (g *Generator) collectTaskMetaType(t reflect.Type, ifaces *[]interfaceData)
 	}
 
 	iface := interfaceData{Name: t.Name()}
+	iface.Fields = g.collectInterfaceFields(t)
+	// Recurse into nested struct types (including from embedded fields)
+	g.collectTaskMetaNestedTypes(t, ifaces)
+	*ifaces = append(*ifaces, iface)
+}
+
+// collectTaskMetaNestedTypes recursively collects nested struct types from fields,
+// handling embedded structs by recursing into their fields without registering
+// the embedded type itself (since its fields are flattened into the parent).
+func (g *Generator) collectTaskMetaNestedTypes(t reflect.Type, ifaces *[]interfaceData) {
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		if !field.IsExported() {
+		if !field.IsExported() || shouldSkipField(field) {
 			continue
 		}
-		iface.Fields = append(iface.Fields, fieldData{
-			Name:     g.getJSONName(field),
-			Type:     g.goTypeToTS(field.Type),
-			Optional: g.isOptional(field),
-		})
-		// Recurse into nested struct types
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
+				g.collectTaskMetaNestedTypes(ft, ifaces)
+			}
+			continue
+		}
 		ft := field.Type
 		if ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
@@ -561,7 +555,34 @@ func (g *Generator) collectTaskMetaType(t reflect.Type, ifaces *[]interfaceData)
 			}
 		}
 	}
-	*ifaces = append(*ifaces, iface)
+}
+
+// collectInterfaceFields collects fields from a struct, flattening anonymous (embedded)
+// struct fields to match encoding/json marshaling behavior.
+func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
+	var fields []fieldData
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !field.IsExported() || shouldSkipField(field) {
+			continue
+		}
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				fields = append(fields, g.collectInterfaceFields(ft)...)
+				continue
+			}
+		}
+		fields = append(fields, fieldData{
+			Name:     g.getJSONName(field),
+			Type:     g.goTypeToTS(field.Type),
+			Optional: g.isOptional(field),
+		})
+	}
+	return fields
 }
 
 func (g *Generator) collectType(t reflect.Type) {
@@ -573,9 +594,24 @@ func (g *Generator) collectType(t reflect.Type) {
 	}
 	g.types[t] = t.Name()
 
-	// Recursively collect field types
+	// Recursively collect field types, flattening embedded structs
 	for i := 0; i < t.NumField(); i++ {
-		g.collectNestedType(t.Field(i).Type)
+		field := t.Field(i)
+		if field.Anonymous {
+			ft := field.Type
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
+				// Don't register as separate interface — fields are flattened.
+				// But recurse into its fields to collect nested types.
+				for j := 0; j < ft.NumField(); j++ {
+					g.collectNestedType(ft.Field(j).Type)
+				}
+			}
+			continue
+		}
+		g.collectNestedType(field.Type)
 	}
 }
 
@@ -605,11 +641,11 @@ func (g *Generator) collectNestedType(ft reflect.Type) {
 func (g *Generator) getJSONName(field reflect.StructField) string {
 	tag := field.Tag.Get("json")
 	if tag == "" {
-		return toLowerCamel(field.Name)
+		return field.Name // match encoding/json: use field name as-is
 	}
 	parts := strings.Split(tag, ",")
-	if parts[0] == "" || parts[0] == "-" {
-		return toLowerCamel(field.Name)
+	if parts[0] == "" {
+		return field.Name // tag like ",omitempty" — use field name as-is
 	}
 	return parts[0]
 }
@@ -628,8 +664,12 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.
 // Fields of type interface{} (any) are skipped because they produce unhelpful "any" types
 // and are typically handled by hardcoded template definitions instead.
+// Fields with json:"-" are skipped to match encoding/json behavior.
 func shouldSkipField(field reflect.StructField) bool {
-	return field.Type.Kind() == reflect.Interface
+	if field.Type.Kind() == reflect.Interface {
+		return true
+	}
+	return field.Tag.Get("json") == "-"
 }
 
 func (g *Generator) goTypeToTS(t reflect.Type) string {
