@@ -1462,3 +1462,252 @@ func TestGenerateDeterministic(t *testing.T) {
 		}
 	})
 }
+
+// --- Bug fix tests: untagged field casing and embedded struct flattening ---
+
+// Types for testing untagged fields (Bug 1: should use Go field name as-is)
+type UntaggedFieldsRequest struct {
+	ID        int64
+	StationID string
+	Name      string
+	RtuIp     string `json:"RtuIp"`
+}
+
+type UntaggedFieldsResponse struct {
+	OK bool
+}
+
+type UntaggedHandlers struct{}
+
+func (h *UntaggedHandlers) GetStation(ctx context.Context, req *UntaggedFieldsRequest) (*UntaggedFieldsResponse, error) {
+	return &UntaggedFieldsResponse{OK: true}, nil
+}
+
+func TestGenerateUntaggedFields(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&UntaggedHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Untagged fields should use the exact Go field name (PascalCase), not camelCase
+	if !strings.Contains(output, "ID: number") {
+		t.Error("Expected 'ID: number' (PascalCase), got camelCase or missing")
+	}
+	if !strings.Contains(output, "StationID: string") {
+		t.Error("Expected 'StationID: string' (PascalCase), got camelCase or missing")
+	}
+	if !strings.Contains(output, "Name: string") {
+		t.Error("Expected 'Name: string' (PascalCase), got camelCase or missing")
+	}
+	// Explicitly tagged field should still use the tag value
+	if !strings.Contains(output, "RtuIp: string") {
+		t.Error("Expected 'RtuIp: string' from json tag")
+	}
+
+	// Verify camelCase versions are NOT present
+	if strings.Contains(output, "iD:") || strings.Contains(output, "iD?:") {
+		t.Error("Should not have camelCase 'iD'")
+	}
+	if strings.Contains(output, "stationID:") {
+		t.Error("Should not have camelCase 'stationID'")
+	}
+
+	t.Logf("Generated TypeScript (untagged fields):\n%s", output)
+}
+
+// Types for testing embedded struct flattening (Bug 2)
+type EmbeddedBase struct {
+	ID   int64  `json:"ID"`
+	Name string `json:"Name"`
+}
+
+type EmbeddedOuter struct {
+	EmbeddedBase
+	Extra string `json:"Extra"`
+}
+
+type EmbeddedOuterResponse struct {
+	OK bool `json:"OK"`
+}
+
+type EmbeddedHandlers struct{}
+
+func (h *EmbeddedHandlers) CreateOuter(ctx context.Context, req *EmbeddedOuter) (*EmbeddedOuterResponse, error) {
+	return &EmbeddedOuterResponse{OK: true}, nil
+}
+
+func TestGenerateEmbeddedStructFlattening(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&EmbeddedHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// EmbeddedOuter should have flat fields from EmbeddedBase, not a nested property
+	if !strings.Contains(output, "ID: number") {
+		t.Error("Expected flattened 'ID: number' from embedded struct")
+	}
+	if !strings.Contains(output, "Name: string") {
+		t.Error("Expected flattened 'Name: string' from embedded struct")
+	}
+	if !strings.Contains(output, "Extra: string") {
+		t.Error("Expected 'Extra: string' field")
+	}
+
+	// Should NOT have a nested property for the embedded struct
+	if strings.Contains(output, "embeddedBase:") || strings.Contains(output, "EmbeddedBase:") {
+		t.Error("Should not have nested property for embedded struct")
+	}
+
+	// EmbeddedBase should NOT be generated as a separate interface
+	// (its fields are flattened into EmbeddedOuter)
+	if strings.Contains(output, "export interface EmbeddedBase") {
+		t.Error("EmbeddedBase should not be a separate interface (fields are flattened)")
+	}
+
+	t.Logf("Generated TypeScript (embedded struct):\n%s", output)
+}
+
+// Pointer-embedded struct test
+type EmbeddedPointerOuter struct {
+	*EmbeddedBase
+	Extra string `json:"Extra"`
+}
+
+type EmbeddedPointerResponse struct {
+	OK bool `json:"OK"`
+}
+
+type EmbeddedPointerHandlers struct{}
+
+func (h *EmbeddedPointerHandlers) CreatePointerOuter(ctx context.Context, req *EmbeddedPointerOuter) (*EmbeddedPointerResponse, error) {
+	return &EmbeddedPointerResponse{OK: true}, nil
+}
+
+func TestGenerateEmbeddedPointerStruct(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&EmbeddedPointerHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Pointer-embedded struct should also be flattened
+	if !strings.Contains(output, "ID: number") {
+		t.Error("Expected flattened 'ID: number' from pointer-embedded struct")
+	}
+	if !strings.Contains(output, "Name: string") {
+		t.Error("Expected flattened 'Name: string' from pointer-embedded struct")
+	}
+	if !strings.Contains(output, "Extra: string") {
+		t.Error("Expected 'Extra: string' field")
+	}
+
+	// Should NOT have a nested property
+	if strings.Contains(output, "embeddedBase:") || strings.Contains(output, "EmbeddedBase:") {
+		t.Error("Should not have nested property for pointer-embedded struct")
+	}
+
+	t.Logf("Generated TypeScript (pointer-embedded struct):\n%s", output)
+}
+
+// Embedded struct with nested type that should still be collected
+type EmbeddedWithNestedType struct {
+	ID   int64 `json:"ID"`
+	Tags []Tag `json:"Tags"`
+}
+
+type OuterWithNestedFromEmbed struct {
+	EmbeddedWithNestedType
+	Extra string `json:"Extra"`
+}
+
+type NestedEmbedResponse struct {
+	OK bool `json:"OK"`
+}
+
+type NestedEmbedHandlers struct{}
+
+func (h *NestedEmbedHandlers) Create(ctx context.Context, req *OuterWithNestedFromEmbed) (*NestedEmbedResponse, error) {
+	return &NestedEmbedResponse{OK: true}, nil
+}
+
+func TestGenerateEmbeddedStructNestedTypeCollection(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NestedEmbedHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	err := gen.GenerateTo(&buf)
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Tag type referenced from embedded struct should still be collected
+	if !strings.Contains(output, "export interface Tag") {
+		t.Error("Tag interface should be collected from embedded struct's fields")
+	}
+
+	// Fields from embedded struct should be flattened
+	if !strings.Contains(output, "ID: number") {
+		t.Error("Expected flattened 'ID: number'")
+	}
+	if !strings.Contains(output, "Tags: Tag[]") {
+		t.Error("Expected flattened 'Tags: Tag[]'")
+	}
+
+	t.Logf("Generated TypeScript (nested type from embed):\n%s", output)
+}
+
+// Multi-file test for embedded struct flattening
+func TestGenerateEmbeddedStructMultiFile(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&EmbeddedHandlers{})
+
+	gen := NewGenerator(registry)
+
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	handlerContent, ok := files["embedded-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected embedded-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	// Same assertions as single-file test
+	if !strings.Contains(handlerContent, "ID: number") {
+		t.Error("Expected flattened 'ID: number' in multi-file output")
+	}
+	if !strings.Contains(handlerContent, "Name: string") {
+		t.Error("Expected flattened 'Name: string' in multi-file output")
+	}
+	if strings.Contains(handlerContent, "export interface EmbeddedBase") {
+		t.Error("EmbeddedBase should not be a separate interface in multi-file output")
+	}
+}
