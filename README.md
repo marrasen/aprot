@@ -402,8 +402,8 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.
     // Attach metadata visible to all clients — compile-time type-safe
     task.SetMeta(TaskMeta{UserName: "alice"})
 
-    // Run in background — task auto-closes when fn returns
-    task.Go(func(ctx context.Context) {
+    // Run in background — auto-completes on nil, auto-fails on error
+    task.Go(func(ctx context.Context) error {
         task.Progress(1, 3)
         task.Output("Building image...")
         // ... build ...
@@ -419,6 +419,7 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.
         nested.Complete()
 
         task.Progress(3, 3)
+        return nil
     })
 
     // Return TaskRef so the client can track/cancel this task
@@ -433,7 +434,7 @@ task := aprot.ShareTask[struct{}](ctx, "Simple task")
 ```
 
 Key methods on `SharedTask[M]`:
-- `Go(fn)` — runs fn in a goroutine, auto-closes on return
+- `Go(fn)` — runs fn in a goroutine; auto-completes on nil return, auto-fails on error
 - `Progress(current, total)` — updates progress
 - `Output(msg)` — sends output text to all clients
 - `SubTask(title)` — creates a child node (`*SharedTaskSub[M]`)
@@ -527,11 +528,11 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 
 ```go
 task := aprot.ShareTask[struct{}](ctx, "Background job")
-task.Go(func(ctx context.Context) {
+task.Go(func(ctx context.Context) error {
     // Attach the shared context so SubTask calls dual-send.
     ctx = task.WithContext(ctx)
 
-    aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
+    return aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
         // This creates a child in the shared task tree.
         return nil
     })
