@@ -270,6 +270,65 @@ func TestWriterProgressWithoutTree(t *testing.T) {
 	}
 }
 
+func TestTaskProgressBasic(t *testing.T) {
+	conn := &Conn{
+		transport: &mockTransport{sendFn: func(data []byte) error { return nil }},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	err := SubTask(ctx, "Processing", func(ctx context.Context) error {
+		TaskProgress(ctx, 5, 10)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Current != 5 || snap[0].Total != 10 {
+		t.Errorf("expected 5/10, got %d/%d", snap[0].Current, snap[0].Total)
+	}
+}
+
+func TestStepTaskProgressBasic(t *testing.T) {
+	conn := &Conn{
+		transport: &mockTransport{sendFn: func(data []byte) error { return nil }},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	err := SubTask(ctx, "Importing", func(ctx context.Context) error {
+		TaskProgress(ctx, 0, 3)
+		StepTaskProgress(ctx, 1)
+		StepTaskProgress(ctx, 1)
+		StepTaskProgress(ctx, 1)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Current != 3 || snap[0].Total != 3 {
+		t.Errorf("expected 3/3, got %d/%d", snap[0].Current, snap[0].Total)
+	}
+}
+
+func TestTaskProgressNoContext(t *testing.T) {
+	// Should not panic when there's no tree or shared context.
+	TaskProgress(context.Background(), 5, 10)
+	StepTaskProgress(context.Background(), 1)
+}
+
 // mockTransport for testing task tree without a real WebSocket.
 type mockTransport struct {
 	sendFn func(data []byte) error

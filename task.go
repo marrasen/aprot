@@ -140,6 +140,12 @@ func (n *taskNode) setProgress(current, total int) {
 	n.total = total
 }
 
+func (n *taskNode) stepProgress(step int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.current += step
+}
+
 // ensureRoot lazily creates the implicit root node.
 func (t *taskTree) ensureRoot() *taskNode {
 	if t.root == nil {
@@ -252,6 +258,45 @@ func Output(ctx context.Context, msg string) {
 	sc := sharedCtxFromContext(ctx)
 	if sc != nil {
 		sc.core.output(msg)
+	}
+}
+
+// TaskProgress sets the progress (current/total) on the current task node.
+// Updates both the request-scoped task tree and the shared task system (if present).
+// No-op if called outside a SubTask context.
+func TaskProgress(ctx context.Context, current, total int) {
+	node := taskNodeFromContext(ctx)
+	if node != nil {
+		node.setProgress(current, total)
+		node.tree.send()
+	}
+
+	sc := sharedCtxFromContext(ctx)
+	if sc != nil && sc.node != nil {
+		sc.node.mu.Lock()
+		sc.node.current = current
+		sc.node.total = total
+		sc.node.mu.Unlock()
+		sc.core.manager.markDirty(sc.core.id)
+	}
+}
+
+// StepTaskProgress increments the current progress on the current task node by step.
+// Updates both the request-scoped task tree and the shared task system (if present).
+// No-op if called outside a SubTask context.
+func StepTaskProgress(ctx context.Context, step int) {
+	node := taskNodeFromContext(ctx)
+	if node != nil {
+		node.stepProgress(step)
+		node.tree.send()
+	}
+
+	sc := sharedCtxFromContext(ctx)
+	if sc != nil && sc.node != nil {
+		sc.node.mu.Lock()
+		sc.node.current += step
+		sc.node.mu.Unlock()
+		sc.core.manager.markDirty(sc.core.id)
 	}
 }
 

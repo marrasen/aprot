@@ -575,6 +575,79 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 	core.closeTask()
 }
 
+func TestTaskProgressDualSend(t *testing.T) {
+	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+
+	core := tm.create("Dual progress", context.Background())
+	sc := &sharedContext{core: core}
+	ctx = withSharedContext(ctx, sc)
+
+	err := SubTask(ctx, "Step X", func(ctx context.Context) error {
+		TaskProgress(ctx, 7, 20)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Request-scoped snapshot should have progress.
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Current != 7 || snap[0].Total != 20 {
+		t.Errorf("request-scoped: expected 7/20, got %d/%d", snap[0].Current, snap[0].Total)
+	}
+
+	// Shared snapshot should also have progress.
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 shared task, got %d", len(states))
+	}
+	if len(states[0].Children) != 1 {
+		t.Fatalf("expected 1 shared child, got %d", len(states[0].Children))
+	}
+	child := states[0].Children[0]
+	if child.Current != 7 || child.Total != 20 {
+		t.Errorf("shared: expected 7/20, got %d/%d", child.Current, child.Total)
+	}
+
+	core.closeTask()
+}
+
+func TestStepTaskProgressDualSend(t *testing.T) {
+	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+
+	core := tm.create("Dual step", context.Background())
+	sc := &sharedContext{core: core}
+	ctx = withSharedContext(ctx, sc)
+
+	err := SubTask(ctx, "Step Y", func(ctx context.Context) error {
+		TaskProgress(ctx, 0, 5)
+		StepTaskProgress(ctx, 1)
+		StepTaskProgress(ctx, 1)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Request-scoped.
+	snap := tree.snapshot()
+	if snap[0].Current != 2 || snap[0].Total != 5 {
+		t.Errorf("request-scoped: expected 2/5, got %d/%d", snap[0].Current, snap[0].Total)
+	}
+
+	// Shared.
+	states := tm.snapshotAll()
+	child := states[0].Children[0]
+	if child.Current != 2 || child.Total != 5 {
+		t.Errorf("shared: expected 2/5, got %d/%d", child.Current, child.Total)
+	}
+
+	core.closeTask()
+}
+
 func TestSubTaskWithSharedContextNested(t *testing.T) {
 	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
 
