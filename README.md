@@ -688,6 +688,19 @@ server.OnDisconnect(func(ctx context.Context, conn *aprot.Conn) {
 
 Multiple hooks can be registered and are called in order. If an `OnConnect` hook returns an error, the connection is rejected and subsequent hooks are not called.
 
+**Client-side handling** — use `onConnectionRejected` to respond when the server rejects the connection (e.g., redirect to login):
+
+```typescript
+const client = new ApiClient(getWebSocketUrl(), {
+    onConnectionRejected: (error) => {
+        console.error('Connection rejected:', error.message);
+        window.location.href = '/login';
+    },
+});
+```
+
+When a connection is rejected, the client stops reconnecting and transitions to `disconnected` state. The `error.isConnectionRejected()` helper can also be used to check the error type.
+
 ### Graceful Shutdown
 
 Stop the server gracefully with `Server.Stop()`. It rejects new connections (503), sends WebSocket close frames, waits for in-flight requests to complete, and runs all disconnect hooks before returning.

@@ -10,6 +10,7 @@ export const ErrorCode = {
     InternalError: -32603,
     Canceled: -32800,
     Unauthorized: -32001,
+    ConnectionRejected: -32002,
     Forbidden: -32003,
 {{- range .CustomErrorCodes}}
     {{.Name}}: {{.Code}},
@@ -36,6 +37,7 @@ export class ApiError extends Error {
     isNotFound(): boolean { return this.code === ErrorCode.MethodNotFound; }
     isInvalidParams(): boolean { return this.code === ErrorCode.InvalidParams; }
     isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
+    isConnectionRejected(): boolean { return this.code === ErrorCode.ConnectionRejected; }
 {{- range .CustomErrorCodes}}
     {{.MethodName}}(): boolean { return this.code === ErrorCode.{{.Name}}; }
 {{- end}}
@@ -108,9 +110,13 @@ export interface ApiClientOptions {
     heartbeatInterval?: number;
     /** Heartbeat timeout in ms. Default: 5000 */
     heartbeatTimeout?: number;
+    /** Called when the server rejects the connection (e.g. invalid session). Connection will not auto-reconnect. */
+    onConnectionRejected?: (error: ApiError) => void;
 }
 
-const defaultOptions: Required<ApiClientOptions> = {
+type ResolvedOptions = Required<Omit<ApiClientOptions, 'onConnectionRejected'>> & Pick<ApiClientOptions, 'onConnectionRejected'>;
+
+const defaultOptions: ResolvedOptions = {
     transport: 'websocket',
     reconnect: true,
     reconnectInterval: 1000,
@@ -284,7 +290,7 @@ class SSETransport implements ClientTransport {
 export class ApiClient {
     private transport: ClientTransport;
     private url: string;
-    private options: Required<ApiClientOptions>;
+    private options: ResolvedOptions;
     private requestId = 0;
     private pending = new Map<string, {
         resolve: (value: any) => void;
@@ -484,6 +490,10 @@ export class ApiClient {
                 if (p) {
                     this.pending.delete(msg.id);
                     p.reject(new ApiError(msg.code, msg.message));
+                } else if (msg.code === ErrorCode.ConnectionRejected) {
+                    this.manualDisconnect = true;
+                    this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message));
+                    this.transport.disconnect();
                 }
                 break;
             }

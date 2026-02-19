@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -26,8 +27,16 @@ func main() {
 
 	sseHandler := server.HTTPTransport()
 
+	// Rejection server — always rejects connections for e2e testing.
+	rejectRegistry := aprot.NewRegistry()
+	rejectServer := aprot.NewServer(rejectRegistry)
+	rejectServer.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+		return aprot.ErrConnectionRejected("invalid session")
+	})
+
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server)
+	mux.Handle("/ws-reject", rejectServer)
 	mux.Handle("/sse", http.StripPrefix("/sse", sseHandler))
 	mux.Handle("/sse/", http.StripPrefix("/sse", sseHandler))
 
