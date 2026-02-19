@@ -18,6 +18,10 @@ export function wsUrl(): string {
     return `ws://${getServerAddr()}/ws`;
 }
 
+export function wsRejectUrl(): string {
+    return `ws://${getServerAddr()}/ws-reject`;
+}
+
 export function sseUrl(): string {
     return `http://${getServerAddr()}/sse`;
 }
