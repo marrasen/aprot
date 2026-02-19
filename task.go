@@ -91,6 +91,7 @@ type taskNode struct {
 	status   TaskNodeStatus
 	current  int
 	total    int
+	meta     any
 	children []*taskNode
 	mu       sync.Mutex
 }
@@ -104,6 +105,7 @@ func (n *taskNode) snapshot() *TaskNode {
 		Status:  n.status,
 		Current: n.current,
 		Total:   n.total,
+		Meta:    n.meta,
 	}
 	for _, child := range n.children {
 		node.Children = append(node.Children, child.snapshot())
@@ -424,3 +426,78 @@ type discardWriteCloser struct{}
 
 func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (discardWriteCloser) Close() error                 { return nil }
+
+// Task is a type-safe, generic wrapper around a request-scoped task node.
+// M is the metadata type used with SetMeta.
+// Created by StartTask and visible only to the requesting client via the
+// progress stream.
+type Task[M any] struct {
+	node *taskNode
+}
+
+// ID returns the task's unique identifier.
+func (t *Task[M]) ID() string {
+	return t.node.id
+}
+
+// Progress updates the task's progress counters.
+func (t *Task[M]) Progress(current, total int) {
+	t.node.setProgress(current, total)
+	t.node.tree.send()
+}
+
+// SetMeta sets typed metadata on the task.
+func (t *Task[M]) SetMeta(v M) {
+	t.node.mu.Lock()
+	t.node.meta = v
+	t.node.mu.Unlock()
+	t.node.tree.send()
+}
+
+// Close marks the task as completed.
+func (t *Task[M]) Close() {
+	t.node.setStatus(TaskNodeStatusCompleted)
+	t.node.tree.send()
+}
+
+// Fail marks the task as failed.
+func (t *Task[M]) Fail() {
+	t.node.setStatus(TaskNodeStatusFailed)
+	t.node.tree.send()
+}
+
+// StartTask creates a request-scoped task visible to the calling client via
+// the progress stream. The returned context carries the task node so that
+// SubTask, TaskProgress, and Output calls on it create child nodes under
+// this task.
+//
+// When called inside a handler, the task lifecycle is managed automatically:
+// returning nil completes the task, returning an error fails it.
+func StartTask[M any](ctx context.Context, title string) (context.Context, *Task[M]) {
+	tree := taskTreeFromContext(ctx)
+	if tree == nil {
+		return ctx, nil
+	}
+
+	tree.mu.Lock()
+	root := tree.ensureRoot()
+	tree.mu.Unlock()
+
+	node := &taskNode{
+		tree:   tree,
+		id:     tree.allocID(),
+		title:  title,
+		status: TaskNodeStatusRunning,
+	}
+	root.addChild(node)
+
+	// Populate the task slot so handleRequest can auto-manage lifecycle.
+	if slot := taskSlotFromContext(ctx); slot != nil {
+		slot.taskNode = node
+	}
+
+	ctx = withTaskNode(ctx, node)
+	tree.send()
+
+	return ctx, &Task[M]{node: node}
+}

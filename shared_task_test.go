@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -30,11 +29,6 @@ func TestSharedTaskBasic(t *testing.T) {
 	task := &SharedTask[struct{}]{core: core}
 	if task.ID() == "" {
 		t.Fatal("expected non-empty task ID")
-	}
-
-	ref := task.Ref()
-	if ref.TaskID != task.ID() {
-		t.Errorf("expected ref ID %s, got %s", task.ID(), ref.TaskID)
 	}
 
 	// Check snapshot
@@ -166,96 +160,6 @@ func TestSharedTaskCancelNonExistent(t *testing.T) {
 	ok := server.taskManager.cancelTask("nonexistent")
 	if ok {
 		t.Error("expected cancel of non-existent task to return false")
-	}
-}
-
-func TestSharedTaskGo(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	registry.EnableTasks()
-
-	server := NewServer(registry)
-	defer server.Stop(context.Background())
-
-	tm := server.taskManager
-	core := tm.create("Background work", context.Background())
-	task := &SharedTask[struct{}]{core: core}
-
-	var ran bool
-	var mu sync.Mutex
-	done := make(chan struct{})
-
-	task.Go(func(ctx context.Context) error {
-		mu.Lock()
-		ran = true
-		mu.Unlock()
-		close(done)
-		return nil
-	})
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for Go function")
-	}
-
-	mu.Lock()
-	if !ran {
-		t.Error("expected Go function to have run")
-	}
-	mu.Unlock()
-
-	// Wait for auto-close + deferred removal
-	time.Sleep(400 * time.Millisecond)
-	states := tm.snapshotAll()
-	if len(states) != 0 {
-		t.Errorf("expected 0 tasks after Go completes, got %d", len(states))
-	}
-}
-
-func TestSharedTaskGoError(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&IntegrationHandlers{})
-	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	registry.EnableTasks()
-
-	server := NewServer(registry)
-	defer server.Stop(context.Background())
-
-	tm := server.taskManager
-	core := tm.create("Failing background work", context.Background())
-	task := &SharedTask[struct{}]{core: core}
-
-	done := make(chan struct{})
-
-	task.Go(func(ctx context.Context) error {
-		defer close(done)
-		return errors.New("something went wrong")
-	})
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for Go function")
-	}
-
-	// Wait for status update to propagate
-	time.Sleep(50 * time.Millisecond)
-
-	states := tm.snapshotAll()
-	if len(states) != 1 {
-		t.Fatalf("expected 1 task, got %d", len(states))
-	}
-	if states[0].Status != TaskNodeStatusFailed {
-		t.Errorf("expected failed status, got %s", states[0].Status)
-	}
-
-	// Wait for deferred removal
-	time.Sleep(300 * time.Millisecond)
-	states = tm.snapshotAll()
-	if len(states) != 0 {
-		t.Errorf("expected 0 tasks after Go error + removal, got %d", len(states))
 	}
 }
 
@@ -910,7 +814,7 @@ func TestSharedSubTaskWithoutConnection(t *testing.T) {
 }
 
 func TestSharedTaskWithContextAndSubTask(t *testing.T) {
-	// Test SharedTask.WithContext() + SubTask inside Go().
+	// Test SharedTask.WithContext() + SubTask inside a goroutine.
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
@@ -935,17 +839,20 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	task := &SharedTask[struct{}]{core: core}
 
 	done := make(chan struct{})
-	task.Go(func(ctx context.Context) error {
+	go func() {
 		defer close(done)
 		// Attach shared context for SubTask dual-send.
-		ctx = task.WithContext(ctx)
+		ctx := task.WithContext(context.Background())
 		// Also attach the task tree from the original request.
 		ctx = withTaskTree(ctx, tree)
 
-		return SubTask(ctx, "Step in Go", func(ctx context.Context) error {
+		err := SubTask(ctx, "Step in goroutine", func(ctx context.Context) error {
 			return nil
 		})
-	})
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}()
 
 	select {
 	case <-done:
@@ -953,15 +860,10 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 		t.Fatal("timed out")
 	}
 
-	// Shared task should have a child node.
-	// Check before auto-close removes it (Go() calls closeTask after fn returns).
-	// The child was created during fn execution, so it should be visible.
-	// But Go() calls closeTask which triggers 200ms removal, so we need to check quickly.
-	// Actually, we can just check the tree snapshot since it's already done.
 	snap := tree.snapshot()
 	found := false
 	for _, n := range snap {
-		if n.Title == "Step in Go" {
+		if n.Title == "Step in goroutine" {
 			found = true
 			if n.Status != TaskNodeStatusCompleted {
 				t.Errorf("expected completed, got %s", n.Status)
@@ -969,8 +871,10 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected 'Step in Go' in request-scoped tree")
+		t.Error("expected 'Step in goroutine' in request-scoped tree")
 	}
+
+	core.closeTask()
 }
 
 func TestOutputDualSend(t *testing.T) {

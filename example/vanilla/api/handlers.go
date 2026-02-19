@@ -255,12 +255,14 @@ func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, req *ProcessWi
 }
 
 // StartSharedWork creates a shared task visible to all clients.
-func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWorkRequest) (*aprot.TaskRef, error) {
+// The handler body is the task body — no goroutine needed.
+// The task auto-completes when the handler returns nil, or auto-fails on error.
+func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWorkRequest) error {
 	if req.Title == "" {
-		return nil, aprot.ErrInvalidParams("title is required")
+		return aprot.ErrInvalidParams("title is required")
 	}
 	if len(req.Steps) == 0 {
-		return nil, aprot.ErrInvalidParams("steps cannot be empty")
+		return aprot.ErrInvalidParams("steps cannot be empty")
 	}
 
 	delay := req.Delay
@@ -268,9 +270,9 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		delay = 50
 	}
 
-	task := aprot.ShareTask[TaskMeta](ctx, req.Title)
+	ctx, task := aprot.StartSharedTask[TaskMeta](ctx, req.Title)
 	if task == nil {
-		return nil, aprot.ErrInternal(nil)
+		return aprot.ErrInternal(nil)
 	}
 
 	// Attach metadata visible to all clients
@@ -279,23 +281,19 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		task.SetMeta(TaskMeta{UserName: conn.UserID()})
 	}
 
-	task.Go(func(ctx context.Context) error {
-		for i, step := range req.Steps {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			sub := task.SubTask(step)
-			task.Output(fmt.Sprintf("Working on: %s", step))
-			time.Sleep(time.Duration(delay) * time.Millisecond)
-			sub.Complete()
-			task.Progress(i+1, len(req.Steps))
+	for i, step := range req.Steps {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		return nil
-	})
-
-	return task.Ref(), nil
+		sub := task.SubTask(step)
+		task.Output(fmt.Sprintf("Working on: %s", step))
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+		sub.Complete()
+		task.Progress(i+1, len(req.Steps))
+	}
+	return nil
 }
 
 // GetProfile returns the authenticated user's profile.

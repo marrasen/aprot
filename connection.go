@@ -287,6 +287,11 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	// Add handler info to context for middleware
 	ctx = withHandlerInfo(ctx, info)
 
+	// Add task slot so StartTask/StartSharedTask can deposit a reference
+	// for auto-lifecycle management after the handler returns.
+	slot := &taskSlot{}
+	ctx = withTaskSlot(ctx, slot)
+
 	// Create request object for middleware
 	req := &Request{
 		ID:     msg.ID,
@@ -298,6 +303,9 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
 	result, err := handler(ctx, req)
+
+	// Auto-manage inline task lifecycle.
+	c.finalizeTaskSlot(slot, ctx, err)
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {
@@ -317,6 +325,31 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 
 	c.sendResponse(msg.ID, result)
+}
+
+// finalizeTaskSlot auto-manages the lifecycle of inline tasks created by
+// StartTask or StartSharedTask during a handler call.
+func (c *Conn) finalizeTaskSlot(slot *taskSlot, ctx context.Context, handlerErr error) {
+	canceled := ctx.Err() != nil
+
+	// Finalize shared task.
+	if core := slot.sharedCore; core != nil {
+		if canceled || handlerErr != nil {
+			core.fail()
+		} else {
+			core.closeTask()
+		}
+	}
+
+	// Finalize request-scoped task.
+	if node := slot.taskNode; node != nil {
+		if canceled || handlerErr != nil {
+			node.setStatus(TaskNodeStatusFailed)
+		} else {
+			node.setStatus(TaskNodeStatusCompleted)
+		}
+		node.tree.send()
+	}
 }
 
 func (c *Conn) close() {
