@@ -85,7 +85,7 @@ describe('SharedTask (WebSocket)', () => {
         client.disconnect();
     });
 
-    test('startSharedWork returns taskRef and broadcasts TaskStateEvent', async () => {
+    test('startSharedWork broadcasts TaskStateEvent', async () => {
         // Set up listener for TaskStateEvent BEFORE starting work
         const stateEvents: SharedTaskState[][] = [];
         const unsubscribe = onTaskStateEvent(client, (event) => {
@@ -93,16 +93,14 @@ describe('SharedTask (WebSocket)', () => {
         });
 
         try {
-            const ref = await startSharedWork(client, {
+            // startSharedWork is now void — it blocks until work completes
+            await startSharedWork(client, {
                 title: 'E2E Shared Work',
                 steps: ['Step1', 'Step2'],
                 delay: 50,
             });
 
-            expect(ref.taskId).toBeDefined();
-            expect(ref.taskId).not.toBe('');
-
-            // Wait for the task to complete and broadcast
+            // Wait for final broadcasts to arrive
             await new Promise(resolve => setTimeout(resolve, 500));
 
             // Should have received at least one TaskStateEvent
@@ -133,20 +131,18 @@ describe('SharedTask (WebSocket)', () => {
                 });
             });
 
-            // Start shared work from the FIRST client
-            const ref = await startSharedWork(client, {
+            // Start shared work from the FIRST client (blocks until done)
+            await startSharedWork(client, {
                 title: 'Broadcast Test',
                 steps: ['A', 'B'],
                 delay: 50,
             });
 
-            expect(ref.taskId).toBeDefined();
-
-            // Second client should receive the task state
+            // Second client should have received the task state during execution
             const tasks = await received;
             const task = tasks.find(t => t.title === 'Broadcast Test');
             expect(task).toBeDefined();
-            expect(task!.id).toBe(ref.taskId);
+            expect(task!.id).toBeDefined();
         } finally {
             client2.disconnect();
         }
@@ -159,46 +155,57 @@ describe('SharedTask (WebSocket)', () => {
         });
 
         try {
-            const ref = await startSharedWork(client, {
+            // startSharedWork blocks until work completes
+            await startSharedWork(client, {
                 title: 'Output Test',
                 steps: ['X', 'Y'],
                 delay: 50,
             });
 
-            // Wait for work to complete
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Wait for any remaining events
+            await new Promise(resolve => setTimeout(resolve, 200));
 
-            // Should have received output events for our task
-            const taskOutputs = outputs.filter(o => o.taskId === ref.taskId);
-            expect(taskOutputs.length).toBeGreaterThanOrEqual(1);
-            expect(taskOutputs.some(o => o.output.includes('X'))).toBe(true);
+            // Should have received output events
+            expect(outputs.length).toBeGreaterThanOrEqual(1);
+            expect(outputs.some(o => o.output.includes('X'))).toBe(true);
         } finally {
             unsubscribe();
         }
     });
 
     test('cancelSharedTask cancels a running task', async () => {
-        // Start a long-running shared task
-        const ref = await startSharedWork(client, {
+        // We need to discover the taskId from the broadcast since startSharedWork is void.
+        // Start a long-running task WITHOUT awaiting (it blocks until done).
+        const workDone = startSharedWork(client, {
             title: 'Cancel Test',
             steps: ['Slow1', 'Slow2', 'Slow3', 'Slow4', 'Slow5'],
             delay: 500,
         });
 
-        // Give it a moment to start
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for the task to appear in a TaskStateEvent broadcast
+        const taskId = await new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timeout waiting for task to appear')), 3000);
+            const unsub = onTaskStateEvent(client, (event) => {
+                const task = event.tasks.find(t => t.title === 'Cancel Test');
+                if (task) {
+                    clearTimeout(timeout);
+                    unsub();
+                    resolve(task.id);
+                }
+            });
+        });
 
         // Cancel it
-        await cancelSharedTask(client, ref.taskId);
+        await cancelSharedTask(client, taskId);
 
-        // Wait for the cancelled state to broadcast
-        await new Promise(resolve => setTimeout(resolve, 400));
+        // The request should complete (with an error since it was cancelled)
+        await workDone.catch(() => {});
 
-        // The task should eventually be removed (completed/failed tasks are removed after 200ms)
-        // Verify by checking that a fresh TaskStateEvent doesn't contain the task
+        // Wait for the cancelled state to broadcast and task to be removed
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Verify the task is no longer in the active tasks
         const finalState = await new Promise<SharedTaskState[]>((resolve) => {
-            // The task should be gone by now, but we might get an empty array
-            // or no event at all. Let's use a timeout approach.
             let lastState: SharedTaskState[] = [];
             const unsub = onTaskStateEvent(client, (event) => {
                 lastState = event.tasks;
@@ -211,20 +218,30 @@ describe('SharedTask (WebSocket)', () => {
         });
 
         // The cancelled task should not be in the active tasks anymore
-        const cancelledTask = finalState.find(t => t.id === ref.taskId);
+        const cancelledTask = finalState.find(t => t.id === taskId);
         expect(cancelledTask).toBeUndefined();
     });
 
     test('late joiner receives active shared tasks', async () => {
-        // Start a long-running shared task from client 1
-        const ref = await startSharedWork(client, {
+        // Start a long-running shared task from client 1 WITHOUT awaiting
+        const workDone = startSharedWork(client, {
             title: 'Late Join Test',
             steps: ['Long1', 'Long2', 'Long3'],
             delay: 300,
         });
 
-        // Give the task a moment to start and broadcast
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Wait for the task to appear in broadcasts
+        const taskId = await new Promise<string>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timeout waiting for task to appear')), 3000);
+            const unsub = onTaskStateEvent(client, (event) => {
+                const task = event.tasks.find(t => t.title === 'Late Join Test');
+                if (task) {
+                    clearTimeout(timeout);
+                    unsub();
+                    resolve(task.id);
+                }
+            });
+        });
 
         // Connect a NEW client (late joiner)
         const lateClient = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
@@ -235,18 +252,20 @@ describe('SharedTask (WebSocket)', () => {
             const received = await new Promise<SharedTaskState[]>((resolve, reject) => {
                 const timeout = setTimeout(() => reject(new Error('Timeout waiting for task state')), 3000);
                 onTaskStateEvent(lateClient, (event) => {
-                    if (event.tasks.some(t => t.id === ref.taskId)) {
+                    if (event.tasks.some(t => t.id === taskId)) {
                         clearTimeout(timeout);
                         resolve(event.tasks);
                     }
                 });
             });
 
-            const task = received.find(t => t.id === ref.taskId);
+            const task = received.find(t => t.id === taskId);
             expect(task).toBeDefined();
             expect(task!.title).toBe('Late Join Test');
         } finally {
             lateClient.disconnect();
+            // Let the background work finish
+            await workDone.catch(() => {});
         }
     });
 });
