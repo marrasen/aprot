@@ -76,16 +76,6 @@ func (t *sharedTaskCore) output(msg string) {
 	t.manager.sendOutput(t.id, msg)
 }
 
-func (t *sharedTaskCore) goRun(fn func(ctx context.Context) error) {
-	go func() {
-		if err := fn(t.ctx); err != nil {
-			t.fail()
-		} else {
-			t.closeTask()
-		}
-	}()
-}
-
 func (t *sharedTaskCore) closeTask() {
 	t.mu.Lock()
 	if t.status != TaskNodeStatusRunning {
@@ -160,11 +150,6 @@ func (t *SharedTask[M]) ID() string {
 	return t.core.id
 }
 
-// Ref returns a TaskRef that can be returned from a handler to the client.
-func (t *SharedTask[M]) Ref() *TaskRef {
-	return &TaskRef{TaskID: t.core.id}
-}
-
 // Progress updates the shared task's progress.
 func (t *SharedTask[M]) Progress(current, total int) {
 	t.core.progress(current, total)
@@ -179,12 +164,6 @@ func (t *SharedTask[M]) SetMeta(v M) {
 // Output sends output text associated with this task.
 func (t *SharedTask[M]) Output(msg string) {
 	t.core.output(msg)
-}
-
-// Go runs fn in a goroutine. If fn returns nil the task is marked completed;
-// if fn returns a non-nil error the task is marked failed.
-func (t *SharedTask[M]) Go(fn func(ctx context.Context) error) {
-	t.core.goRun(fn)
 }
 
 // Close marks the task as completed and removes it from the manager.
@@ -210,8 +189,8 @@ func (t *SharedTask[M]) Context() context.Context {
 
 // WithContext returns a new context derived from ctx that carries
 // this task's shared context. Use this to propagate shared task
-// awareness into goroutines launched via Go(), so that SubTask
-// calls inside them also create mirrored shared task nodes.
+// awareness into other goroutines, so that SubTask calls inside
+// them also create mirrored shared task nodes.
 func (t *SharedTask[M]) WithContext(ctx context.Context) context.Context {
 	return withSharedContext(ctx, &sharedContext{core: t.core})
 }
@@ -339,9 +318,10 @@ func (tm *taskManager) allocID() string {
 }
 
 // create creates a new sharedTaskCore and registers it.
+// The task context is derived from ctx. The caller controls whether the task
+// survives parent cancellation by passing context.WithoutCancel(ctx) if desired.
 func (tm *taskManager) create(title string, ctx context.Context) *sharedTaskCore {
-	detached := context.WithoutCancel(ctx)
-	taskCtx, cancel := context.WithCancel(detached)
+	taskCtx, cancel := context.WithCancel(ctx)
 
 	id := tm.allocID()
 	task := &sharedTaskCore{
@@ -451,20 +431,37 @@ func (tm *taskManager) stop() {
 	tm.mu.Unlock()
 }
 
-// ShareTask creates a new shared task visible to all clients.
-// The returned SharedTask[M] is detached from the connection's lifecycle
-// (uses context.WithoutCancel) and has its own cancellation context.
-func ShareTask[M any](ctx context.Context, title string) *SharedTask[M] {
+// StartSharedTask creates a new shared task visible to all clients.
+// The returned context carries the shared task so that SubTask, Output,
+// and TaskProgress calls on it automatically create mirrored nodes in
+// the shared task system (dual-send to the requesting client and broadcast).
+//
+// The task uses the provided context for cancellation. If the client
+// disconnects and the request context is canceled, the task is canceled too.
+// To make a task survive disconnection, pass context.WithoutCancel(ctx).
+//
+// When called inside a handler, the task lifecycle is managed automatically:
+// returning nil completes the task, returning an error fails it.
+func StartSharedTask[M any](ctx context.Context, title string) (context.Context, *SharedTask[M]) {
 	conn := Connection(ctx)
 	if conn == nil {
-		return nil
+		return ctx, nil
 	}
 	tm := conn.server.taskManager
 	if tm == nil {
-		return nil
+		return ctx, nil
 	}
 	core := tm.create(title, ctx)
-	return &SharedTask[M]{core: core}
+
+	// Populate the task slot so handleRequest can auto-manage lifecycle.
+	if slot := taskSlotFromContext(ctx); slot != nil {
+		slot.sharedCore = core
+	}
+
+	// Enrich context with sharedContext so SubTask/Output/TaskProgress dual-send.
+	ctx = withSharedContext(ctx, &sharedContext{core: core})
+
+	return ctx, &SharedTask[M]{core: core}
 }
 
 // SharedSubTask bridges the request-scoped (SubTask) and shared task systems.
@@ -499,7 +496,9 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	}
 
 	// Create a new top-level shared task core.
-	core := tm.create(title, ctx)
+	// SharedSubTask manages its own lifecycle (calls fn synchronously then
+	// closes/fails), so detach from the request context.
+	core := tm.create(title, context.WithoutCancel(ctx))
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 

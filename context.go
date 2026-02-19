@@ -12,6 +12,7 @@ const (
 	taskTreeKey
 	taskNodeKey
 	sharedContextKey
+	taskSlotKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -110,4 +111,25 @@ func sharedCtxFromContext(ctx context.Context) *sharedContext {
 // withSharedContext returns a context with the given shared context.
 func withSharedContext(ctx context.Context, sc *sharedContext) context.Context {
 	return context.WithValue(ctx, sharedContextKey, sc)
+}
+
+// taskSlot is a mutable slot placed on the context by handleRequest.
+// StartTask and StartSharedTask populate it so handleRequest can detect
+// inline tasks after the handler returns and auto-manage their lifecycle.
+type taskSlot struct {
+	sharedCore *sharedTaskCore // non-nil if StartSharedTask was called
+	taskNode   *taskNode       // non-nil if StartTask was called
+}
+
+// taskSlotFromContext returns the taskSlot from the context.
+func taskSlotFromContext(ctx context.Context) *taskSlot {
+	if s, ok := ctx.Value(taskSlotKey).(*taskSlot); ok {
+		return s
+	}
+	return nil
+}
+
+// withTaskSlot returns a context with the given task slot.
+func withTaskSlot(ctx context.Context, s *taskSlot) context.Context {
+	return context.WithValue(ctx, taskSlotKey, s)
 }

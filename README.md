@@ -363,7 +363,7 @@ const result = await deploy(client, req, {
 
 ### Shared Tasks
 
-Shared tasks are visible to **all** connected clients (not just the requesting one). They survive the originating connection's disconnect. Use them for server-wide operations like deployments, imports, or batch jobs.
+Shared tasks are visible to **all** connected clients (not just the requesting one). Use them for server-wide operations like deployments, imports, or batch jobs.
 
 #### Setup
 
@@ -390,65 +390,86 @@ This generates a typed `TaskMeta` interface in the TypeScript client and adds an
 
 #### Creating Shared Tasks
 
-`ShareTask` is generic — the type parameter `M` determines the metadata type accepted by `SetMeta`. If you registered metadata with `EnableTasksWithMeta[TaskMeta]`, use `ShareTask[TaskMeta]`:
+`StartSharedTask` returns a context and a typed task handle. The handler body **is** the task body — no goroutine needed. The task auto-completes when the handler returns nil, and auto-fails on error.
 
 ```go
-func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) (*aprot.TaskRef, error) {
-    task := aprot.ShareTask[TaskMeta](ctx, "Deploying "+req.Service)
+func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) error {
+    ctx, task := aprot.StartSharedTask[TaskMeta](ctx, "Deploying "+req.Service)
     if task == nil {
-        return nil, aprot.ErrInternal(nil)
+        return aprot.ErrInternal(nil)
     }
 
     // Attach metadata visible to all clients — compile-time type-safe
     task.SetMeta(TaskMeta{UserName: "alice"})
 
-    // Run in background — auto-completes on nil, auto-fails on error
-    task.Go(func(ctx context.Context) error {
-        task.Progress(1, 3)
-        task.Output("Building image...")
-        // ... build ...
+    task.Progress(1, 3)
+    task.Output("Building image...")
 
-        sub := task.SubTask("Push to registry")
-        sub.Progress(1, 2)
-        // ... push ...
-        sub.Complete()
-
-        // Sub-tasks can also nest and have metadata
-        nested := sub.SubTask("Verify push")
-        nested.SetMeta(TaskMeta{UserName: "bot"})
-        nested.Complete()
-
-        task.Progress(3, 3)
+    // SubTask calls on ctx automatically create mirrored nodes in the shared task tree
+    err := aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+        aprot.TaskProgress(ctx, 1, 2)
         return nil
     })
+    if err != nil {
+        return err
+    }
 
-    // Return TaskRef so the client can track/cancel this task
-    return task.Ref(), nil
+    task.Progress(3, 3)
+    return nil  // auto-completes the shared task
 }
+```
+
+The task uses the request context for cancellation. If the client disconnects, the task is canceled. To make a task survive disconnection:
+
+```go
+ctx, task := aprot.StartSharedTask[struct{}](context.WithoutCancel(ctx), "Long job")
 ```
 
 If you don't use metadata, use `struct{}`:
 
 ```go
-task := aprot.ShareTask[struct{}](ctx, "Simple task")
+ctx, task := aprot.StartSharedTask[struct{}](ctx, "Simple task")
 ```
 
 Key methods on `SharedTask[M]`:
-- `Go(fn)` — runs fn in a goroutine; auto-completes on nil return, auto-fails on error
 - `Progress(current, total)` — updates progress
 - `Output(msg)` — sends output text to all clients
 - `SubTask(title)` — creates a child node (`*SharedTaskSub[M]`)
 - `SetMeta(v M)` — sets typed metadata broadcast to all clients
-- `Close()` / `Fail()` — marks as completed/failed
+- `Close()` / `Fail()` — marks as completed/failed (automatic when used inline)
+- `ID()` — returns the task's unique identifier
 - `Context()` — returns the task's cancellation context
-- `WithContext(ctx)` — returns a context carrying this task's shared context (see SharedSubTask below)
-- `Ref()` — returns a `TaskRef{TaskID}` to send to the client
+- `WithContext(ctx)` — returns a context carrying this task's shared context
 
 Key methods on `SharedTaskSub[M]` (child nodes):
 - `Complete()` / `Fail()` — marks as completed/failed
 - `Progress(current, total)` — updates progress
 - `SetMeta(v M)` — sets typed metadata on this sub-task
 - `SubTask(title)` — creates a nested child node
+
+#### Request-Scoped Tasks
+
+`StartTask` creates a task visible only to the calling client via the progress stream. Same inline pattern as shared tasks:
+
+```go
+func (h *Handlers) ProcessData(ctx context.Context, req *ProcessRequest) error {
+    ctx, task := aprot.StartTask[ProcessMeta](ctx, "Processing")
+    task.SetMeta(ProcessMeta{FileName: req.File})
+
+    // SubTask calls create child nodes in the task tree
+    err := aprot.SubTask(ctx, "Parse", func(ctx context.Context) error {
+        return nil
+    })
+    if err != nil {
+        return err
+    }
+
+    task.Progress(1, 1)
+    return nil  // auto-completes
+}
+```
+
+The client receives the task tree via the `onTaskProgress` callback in `RequestOptions`.
 
 #### TypeScript (React)
 
@@ -524,20 +545,19 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 - If no connection or `taskManager` is available, it falls back to plain `SubTask`.
 - `Output(ctx, msg)` inside a shared context sends to both the requester and all clients.
 
-**`SharedTask.WithContext()` + `Go()`** — for background goroutines launched via `Go()` that should also dual-send:
+**`SharedTask.WithContext()`** — for goroutines that should also dual-send:
 
 ```go
-task := aprot.ShareTask[struct{}](ctx, "Background job")
-task.Go(func(ctx context.Context) error {
+ctx, task := aprot.StartSharedTask[struct{}](ctx, "Background job")
+go func() {
     // Attach the shared context so SubTask calls dual-send.
-    ctx = task.WithContext(ctx)
+    ctx := task.WithContext(context.Background())
 
-    return aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
+    aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
         // This creates a child in the shared task tree.
         return nil
     })
-})
-return task.Ref(), nil
+}()
 ```
 
 ### Connection Info
