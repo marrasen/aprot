@@ -311,6 +311,26 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 
 The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (`running`/`completed`/`failed`), and optional `current`/`total` progress.
 
+**Task progress** — report numeric progress (current/total) on a sub-task from inside the callback:
+
+```go
+aprot.SubTask(ctx, "Parsing files", func(ctx context.Context) error {
+    aprot.TaskProgress(ctx, 0, len(files))
+    for _, file := range files {
+        if err := parseFile(ctx, file); err != nil {
+            return err
+        }
+        aprot.StepTaskProgress(ctx, 1)
+    }
+    return nil
+})
+```
+
+- `TaskProgress(ctx, current, total)` — sets both current and total on the task node
+- `StepTaskProgress(ctx, step)` — increments current by step (e.g. call with 1 after each item)
+
+Both update the request-scoped task tree and the shared task system (if present). No-op if called outside a `SubTask` context.
+
 **Output streaming** sends text output during execution:
 
 ```go
