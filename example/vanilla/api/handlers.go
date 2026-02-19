@@ -279,11 +279,11 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		task.SetMeta(TaskMeta{UserName: conn.UserID()})
 	}
 
-	task.Go(func(ctx context.Context) {
+	task.Go(func(ctx context.Context) error {
 		for i, step := range req.Steps {
 			select {
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			default:
 			}
 			sub := task.SubTask(step)
@@ -292,6 +292,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 			sub.Complete()
 			task.Progress(i+1, len(req.Steps))
 		}
+		return nil
 	})
 
 	return task.Ref(), nil

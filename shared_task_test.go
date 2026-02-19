@@ -186,11 +186,12 @@ func TestSharedTaskGo(t *testing.T) {
 	var mu sync.Mutex
 	done := make(chan struct{})
 
-	task.Go(func(ctx context.Context) {
+	task.Go(func(ctx context.Context) error {
 		mu.Lock()
 		ran = true
 		mu.Unlock()
 		close(done)
+		return nil
 	})
 
 	select {
@@ -210,6 +211,51 @@ func TestSharedTaskGo(t *testing.T) {
 	states := tm.snapshotAll()
 	if len(states) != 0 {
 		t.Errorf("expected 0 tasks after Go completes, got %d", len(states))
+	}
+}
+
+func TestSharedTaskGoError(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+	core := tm.create("Failing background work", context.Background())
+	task := &SharedTask[struct{}]{core: core}
+
+	done := make(chan struct{})
+
+	task.Go(func(ctx context.Context) error {
+		defer close(done)
+		return errors.New("something went wrong")
+	})
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Go function")
+	}
+
+	// Wait for status update to propagate
+	time.Sleep(50 * time.Millisecond)
+
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(states))
+	}
+	if states[0].Status != TaskNodeStatusFailed {
+		t.Errorf("expected failed status, got %s", states[0].Status)
+	}
+
+	// Wait for deferred removal
+	time.Sleep(300 * time.Millisecond)
+	states = tm.snapshotAll()
+	if len(states) != 0 {
+		t.Errorf("expected 0 tasks after Go error + removal, got %d", len(states))
 	}
 }
 
@@ -889,14 +935,14 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	task := &SharedTask[struct{}]{core: core}
 
 	done := make(chan struct{})
-	task.Go(func(ctx context.Context) {
+	task.Go(func(ctx context.Context) error {
 		defer close(done)
 		// Attach shared context for SubTask dual-send.
 		ctx = task.WithContext(ctx)
 		// Also attach the task tree from the original request.
 		ctx = withTaskTree(ctx, tree)
 
-		SubTask(ctx, "Step in Go", func(ctx context.Context) error {
+		return SubTask(ctx, "Step in Go", func(ctx context.Context) error {
 			return nil
 		})
 	})

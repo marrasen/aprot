@@ -76,10 +76,13 @@ func (t *sharedTaskCore) output(msg string) {
 	t.manager.sendOutput(t.id, msg)
 }
 
-func (t *sharedTaskCore) goRun(fn func(ctx context.Context)) {
+func (t *sharedTaskCore) goRun(fn func(ctx context.Context) error) {
 	go func() {
-		defer t.closeTask()
-		fn(t.ctx)
+		if err := fn(t.ctx); err != nil {
+			t.fail()
+		} else {
+			t.closeTask()
+		}
 	}()
 }
 
@@ -178,8 +181,9 @@ func (t *SharedTask[M]) Output(msg string) {
 	t.core.output(msg)
 }
 
-// Go runs fn in a goroutine, automatically closing the task when fn returns.
-func (t *SharedTask[M]) Go(fn func(ctx context.Context)) {
+// Go runs fn in a goroutine. If fn returns nil the task is marked completed;
+// if fn returns a non-nil error the task is marked failed.
+func (t *SharedTask[M]) Go(fn func(ctx context.Context) error) {
 	t.core.goRun(fn)
 }
 
