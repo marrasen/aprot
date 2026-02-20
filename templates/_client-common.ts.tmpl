@@ -80,6 +80,7 @@ export interface SharedTaskState {
     status: 'running' | 'completed' | 'failed';
     current?: number;
     total?: number;
+    isOwner: boolean;
 {{- if .TaskMetaType}}
     meta?: {{.TaskMetaType}};
 {{- end}}

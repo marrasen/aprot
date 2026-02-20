@@ -366,7 +366,7 @@ const result = await deploy(client, req, {
 
 ### Shared Tasks
 
-Shared tasks are visible to **all** connected clients (not just the requesting one). Use them for server-wide operations like deployments, imports, or batch jobs.
+Shared tasks are visible to **all** connected clients (not just the requesting one). Use them for server-wide operations like deployments, imports, or batch jobs. Each task carries an `isOwner` flag that is `true` only for the connection that started it, enabling clients to auto-display progress for their own tasks.
 
 #### Setup
 
@@ -477,7 +477,7 @@ The client receives the task tree via the `onTaskProgress` callback in `RequestO
 #### TypeScript (React)
 
 ```tsx
-import { useSharedTasks, useSharedTask, useTaskOutput, cancelSharedTask } from './api/client';
+import { useSharedTasks, useMyTasks, useSharedTask, useTaskOutput, cancelSharedTask } from './api/client';
 
 function TaskList() {
     const tasks = useSharedTasks();
@@ -487,11 +487,18 @@ function TaskList() {
             {tasks.map(task => (
                 <li key={task.id}>
                     {task.title} ({task.status}) — {task.current}/{task.total}
-                    <button onClick={() => cancelSharedTask(client, task.id)}>Cancel</button>
+                    {task.isOwner && <button onClick={() => cancelSharedTask(client, task.id)}>Cancel</button>}
                 </li>
             ))}
         </ul>
     );
+}
+
+function MyTasksDialog() {
+    // Only root tasks started by this connection
+    const myTasks = useMyTasks();
+    if (myTasks.length === 0) return null;
+    return <TaskProgressDialog tasks={myTasks} />;
 }
 
 function TaskLog({ taskId }: { taskId: string }) {
@@ -500,6 +507,13 @@ function TaskLog({ taskId }: { taskId: string }) {
 }
 ```
 
+Hooks:
+- `useSharedTasks()` — all shared tasks (from all clients)
+- `useMyTasks()` — root tasks (`!parentId`) started by this connection (`isOwner`)
+- `useSharedTask(id)` — single task by ID
+- `useTaskOutput(taskId)` — output lines for a task
+- `cancelSharedTask(client, taskId)` — cancel a task
+
 #### TypeScript (Vanilla)
 
 ```typescript
@@ -507,6 +521,8 @@ import { cancelSharedTask } from './api/client';
 
 client.onPush<{ tasks: SharedTaskState[] }>('TaskStateEvent', (event) => {
     console.log('Active tasks:', event.tasks);
+    // Filter to tasks started by this connection
+    const myTasks = event.tasks.filter(t => t.isOwner && !t.parentId);
 });
 
 client.onPush<{ taskId: string; output: string }>('TaskOutputEvent', (event) => {

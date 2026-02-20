@@ -28,6 +28,7 @@ type SharedTaskState struct {
 	Total    int            `json:"total,omitempty"`
 	Meta     any            `json:"meta,omitempty"`
 	Children []*TaskNode    `json:"children,omitempty"`
+	IsOwner  bool           `json:"isOwner"`
 }
 
 // TaskRef is the reference returned to the client from a handler
@@ -44,17 +45,18 @@ type CancelTaskRequest struct {
 // sharedTaskCore is the internal, non-generic core of a shared task.
 // It is stored by taskManager and holds all mutable state.
 type sharedTaskCore struct {
-	id       string
-	title    string
-	status   TaskNodeStatus
-	current  int
-	total    int
-	meta     any
-	children []*sharedTaskNode
-	mu       sync.Mutex
-	manager  *taskManager
-	cancel   context.CancelFunc
-	ctx      context.Context
+	id          string
+	title       string
+	status      TaskNodeStatus
+	current     int
+	total       int
+	meta        any
+	children    []*sharedTaskNode
+	mu          sync.Mutex
+	manager     *taskManager
+	cancel      context.CancelFunc
+	ctx         context.Context
+	ownerConnID uint64 // connection ID of the client that created this task
 }
 
 func (t *sharedTaskCore) progress(current, total int) {
@@ -136,6 +138,12 @@ func (t *sharedTaskCore) snapshot() SharedTaskState {
 	for _, child := range t.children {
 		state.Children = append(state.Children, child.snapshot())
 	}
+	return state
+}
+
+func (t *sharedTaskCore) snapshotForConn(connID uint64) SharedTaskState {
+	state := t.snapshot()
+	state.IsOwner = (t.ownerConnID == connID)
 	return state
 }
 
@@ -318,19 +326,21 @@ func (tm *taskManager) allocID() string {
 }
 
 // create creates a new sharedTaskCore and registers it.
+// connID is the connection ID of the client that created this task (0 if none).
 // The task context is derived from ctx. The caller controls whether the task
 // survives parent cancellation by passing context.WithoutCancel(ctx) if desired.
-func (tm *taskManager) create(title string, ctx context.Context) *sharedTaskCore {
+func (tm *taskManager) create(title string, connID uint64, ctx context.Context) *sharedTaskCore {
 	taskCtx, cancel := context.WithCancel(ctx)
 
 	id := tm.allocID()
 	task := &sharedTaskCore{
-		id:      id,
-		title:   title,
-		status:  TaskNodeStatusRunning,
-		manager: tm,
-		cancel:  cancel,
-		ctx:     taskCtx,
+		id:          id,
+		title:       title,
+		status:      TaskNodeStatusRunning,
+		manager:     tm,
+		cancel:      cancel,
+		ctx:         taskCtx,
+		ownerConnID: connID,
 	}
 
 	tm.mu.Lock()
@@ -390,11 +400,33 @@ func (tm *taskManager) snapshotAll() []SharedTaskState {
 	return states
 }
 
+// snapshotAllForConn returns the current state of all active tasks with
+// IsOwner set according to the given connection ID.
+func (tm *taskManager) snapshotAllForConn(connID uint64) []SharedTaskState {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	states := make([]SharedTaskState, 0, len(tm.tasks))
+	for _, task := range tm.tasks {
+		states = append(states, task.snapshotForConn(connID))
+	}
+	return states
+}
+
 // broadcastNow sends the full task state to all clients immediately.
+// Each connection receives a per-connection snapshot with the correct IsOwner flag.
 func (tm *taskManager) broadcastNow() {
-	states := tm.snapshotAll()
-	event := TaskStateEvent{Tasks: states}
-	tm.server.Broadcast(event)
+	tm.server.mu.RLock()
+	conns := make([]*Conn, 0, len(tm.server.conns))
+	for conn := range tm.server.conns {
+		conns = append(conns, conn)
+	}
+	tm.server.mu.RUnlock()
+
+	event := tm.server.registry.eventName(TaskStateEvent{})
+	for _, conn := range conns {
+		states := tm.snapshotAllForConn(conn.ID())
+		conn.push(event, TaskStateEvent{Tasks: states})
+	}
 }
 
 // flushLoop batches dirty task updates and broadcasts every 150ms.
@@ -451,7 +483,7 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 	if tm == nil {
 		return ctx, nil
 	}
-	core := tm.create(title, ctx)
+	core := tm.create(title, conn.ID(), ctx)
 
 	// Populate the task slot so handleRequest can auto-manage lifecycle.
 	if slot := taskSlotFromContext(ctx); slot != nil {
@@ -498,7 +530,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	// Create a new top-level shared task core.
 	// SharedSubTask manages its own lifecycle (calls fn synchronously then
 	// closes/fails), so detach from the request context.
-	core := tm.create(title, context.WithoutCancel(ctx))
+	core := tm.create(title, conn.ID(), context.WithoutCancel(ctx))
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 
