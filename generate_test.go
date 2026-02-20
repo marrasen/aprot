@@ -1711,3 +1711,204 @@ func TestGenerateEmbeddedStructMultiFile(t *testing.T) {
 		t.Error("EmbeddedBase should not be a separate interface in multi-file output")
 	}
 }
+
+// --- Arbitrary return type tests ---
+
+type User struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type ArbitraryReturnHandlers struct{}
+
+func (h *ArbitraryReturnHandlers) ListUsers(ctx context.Context) ([]User, error) {
+	return []User{{ID: 1, Name: "Alice"}}, nil
+}
+
+func (h *ArbitraryReturnHandlers) GetScores(ctx context.Context) (map[string]int, error) {
+	return map[string]int{"alice": 100}, nil
+}
+
+func (h *ArbitraryReturnHandlers) GetName(ctx context.Context) (string, error) {
+	return "Alice", nil
+}
+
+func (h *ArbitraryReturnHandlers) GetCount(ctx context.Context) (int, error) {
+	return 42, nil
+}
+
+func (h *ArbitraryReturnHandlers) GetActive(ctx context.Context) (bool, error) {
+	return true, nil
+}
+
+func (h *ArbitraryReturnHandlers) GetUser(ctx context.Context) (*User, error) {
+	return &User{ID: 1, Name: "Alice"}, nil
+}
+
+func TestArbitraryReturnTypeRegistration(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&ArbitraryReturnHandlers{})
+
+	tests := []struct {
+		method string
+		isVoid bool
+	}{
+		{"ArbitraryReturnHandlers.ListUsers", false},
+		{"ArbitraryReturnHandlers.GetScores", false},
+		{"ArbitraryReturnHandlers.GetName", false},
+		{"ArbitraryReturnHandlers.GetCount", false},
+		{"ArbitraryReturnHandlers.GetActive", false},
+		{"ArbitraryReturnHandlers.GetUser", false},
+	}
+
+	for _, tt := range tests {
+		info, ok := registry.Get(tt.method)
+		if !ok {
+			t.Errorf("%s not found", tt.method)
+			continue
+		}
+		if info.IsVoid != tt.isVoid {
+			t.Errorf("%s: expected IsVoid=%v, got %v", tt.method, tt.isVoid, info.IsVoid)
+		}
+	}
+}
+
+func TestArbitraryReturnTypeCall(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&ArbitraryReturnHandlers{})
+
+	t.Run("slice return", func(t *testing.T) {
+		info, _ := registry.Get("ArbitraryReturnHandlers.ListUsers")
+		result, err := info.Call(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Call failed: %v", err)
+		}
+		users, ok := result.([]User)
+		if !ok {
+			t.Fatalf("Result is not []User, got %T", result)
+		}
+		if len(users) != 1 || users[0].Name != "Alice" {
+			t.Errorf("Unexpected result: %v", users)
+		}
+	})
+
+	t.Run("map return", func(t *testing.T) {
+		info, _ := registry.Get("ArbitraryReturnHandlers.GetScores")
+		result, err := info.Call(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Call failed: %v", err)
+		}
+		scores, ok := result.(map[string]int)
+		if !ok {
+			t.Fatalf("Result is not map[string]int, got %T", result)
+		}
+		if scores["alice"] != 100 {
+			t.Errorf("Unexpected result: %v", scores)
+		}
+	})
+
+	t.Run("string return", func(t *testing.T) {
+		info, _ := registry.Get("ArbitraryReturnHandlers.GetName")
+		result, err := info.Call(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Call failed: %v", err)
+		}
+		name, ok := result.(string)
+		if !ok {
+			t.Fatalf("Result is not string, got %T", result)
+		}
+		if name != "Alice" {
+			t.Errorf("Expected Alice, got %s", name)
+		}
+	})
+
+	t.Run("int return", func(t *testing.T) {
+		info, _ := registry.Get("ArbitraryReturnHandlers.GetCount")
+		result, err := info.Call(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Call failed: %v", err)
+		}
+		count, ok := result.(int)
+		if !ok {
+			t.Fatalf("Result is not int, got %T", result)
+		}
+		if count != 42 {
+			t.Errorf("Expected 42, got %d", count)
+		}
+	})
+
+	t.Run("pointer to struct return", func(t *testing.T) {
+		info, _ := registry.Get("ArbitraryReturnHandlers.GetUser")
+		result, err := info.Call(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("Call failed: %v", err)
+		}
+		user, ok := result.(*User)
+		if !ok {
+			t.Fatalf("Result is not *User, got %T", result)
+		}
+		if user.Name != "Alice" {
+			t.Errorf("Expected Alice, got %s", user.Name)
+		}
+	})
+}
+
+func TestArbitraryReturnTypeGenerate(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&ArbitraryReturnHandlers{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	content, ok := files["arbitrary-return-handlers.ts"]
+	if !ok {
+		t.Fatalf("Expected arbitrary-return-handlers.ts, got files: %v", mapKeys(files))
+	}
+
+	t.Logf("Generated TypeScript:\n%s", content)
+
+	// Slice return → User[]
+	if !strings.Contains(content, "Promise<User[]>") {
+		t.Error("Expected Promise<User[]> for slice return type")
+	}
+
+	// Map return → Record<string, number>
+	if !strings.Contains(content, "Promise<Record<string, number>>") {
+		t.Error("Expected Promise<Record<string, number>> for map return type")
+	}
+
+	// String return → string
+	if !strings.Contains(content, "Promise<string>") {
+		t.Error("Expected Promise<string> for string return type")
+	}
+
+	// Int return → number
+	if !strings.Contains(content, "Promise<number>") {
+		t.Error("Expected Promise<number> for int return type")
+	}
+
+	// Bool return → boolean
+	if !strings.Contains(content, "Promise<boolean>") {
+		t.Error("Expected Promise<boolean> for bool return type")
+	}
+
+	// Pointer-to-struct return → User (same as before)
+	if !strings.Contains(content, "Promise<User>") {
+		t.Error("Expected Promise<User> for pointer-to-struct return type")
+	}
+
+	// User interface should be generated (used by both slice and pointer returns)
+	if !strings.Contains(content, "export interface User") {
+		t.Error("Expected User interface to be generated")
+	}
+
+	// No interface should be generated for primitive return types
+	for _, bad := range []string{"export interface string", "export interface number", "export interface boolean"} {
+		if strings.Contains(content, bad) {
+			t.Errorf("Should not generate %s", bad)
+		}
+	}
+}
