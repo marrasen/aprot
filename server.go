@@ -114,7 +114,7 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		s.taskManager = newTaskManager(s)
 		s.OnConnect(func(ctx context.Context, conn *Conn) error {
 			// Push current shared task state to newly connected clients.
-			states := s.taskManager.snapshotAll()
+			states := s.taskManager.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {
 				conn.Push(TaskStateEvent{Tasks: states})
 			}

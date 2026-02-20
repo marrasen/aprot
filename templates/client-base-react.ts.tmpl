@@ -36,6 +36,11 @@ export function useSharedTask(id: string): SharedTaskState | null {
     return tasks.find(t => t.id === id) ?? null;
 }
 
+export function useMyTasks(): SharedTaskState[] {
+    const tasks = useSharedTasks();
+    return tasks.filter(t => t.isOwner && !t.parentId);
+}
+
 export function useTaskOutput(taskId: string): { lines: string[]; clear: () => void } {
     const client = useApiClient();
     const [lines, setLines] = useState<string[]>([]);
