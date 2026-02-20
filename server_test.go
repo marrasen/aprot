@@ -1300,6 +1300,94 @@ func TestConnSetGetConcurrent(t *testing.T) {
 	}
 }
 
+// --- Arbitrary return type e2e tests ---
+
+type UserItem struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type SliceReturnHandlers struct{}
+
+func (h *SliceReturnHandlers) ListUsers(ctx context.Context) ([]UserItem, error) {
+	return []UserItem{{ID: 1, Name: "Alice"}, {ID: 2, Name: "Bob"}}, nil
+}
+
+func (h *SliceReturnHandlers) GetName(ctx context.Context) (string, error) {
+	return "hello", nil
+}
+
+func TestServerSliceReturnType(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&SliceReturnHandlers{})
+
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "SliceReturnHandlers.ListUsers",
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+
+	result, _ := json.Marshal(resp.Result)
+	resultStr := string(result)
+	if !strings.Contains(resultStr, "Alice") || !strings.Contains(resultStr, "Bob") {
+		t.Errorf("Expected Alice and Bob in result, got %s", resultStr)
+	}
+}
+
+func TestServerPrimitiveReturnType(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&SliceReturnHandlers{})
+
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "SliceReturnHandlers.GetName",
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if resp.Type != TypeResponse {
+		t.Errorf("Expected response type, got %s", resp.Type)
+	}
+
+	result, _ := json.Marshal(resp.Result)
+	if string(result) != `"hello"` {
+		t.Errorf("Expected \"hello\", got %s", string(result))
+	}
+}
+
 func TestServerOptionsDefaults(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}

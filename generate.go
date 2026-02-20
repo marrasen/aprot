@@ -227,7 +227,11 @@ func (g *Generator) Generate() (map[string]string, error) {
 			for _, param := range info.Params {
 				g.collectNestedType(param.Type)
 			}
-			g.collectType(info.ResponseType)
+			if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
+				g.collectType(info.ResponseType)
+			} else {
+				g.collectNestedType(info.ResponseType)
+			}
 		}
 		for _, event := range group.PushEvents {
 			g.collectType(event.DataType)
@@ -268,7 +272,11 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			for _, param := range info.Params {
 				g.collectNestedType(param.Type)
 			}
-			g.collectType(info.ResponseType)
+			if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
+				g.collectType(info.ResponseType)
+			} else {
+				g.collectNestedType(info.ResponseType)
+			}
 		}
 		for _, event := range group.PushEvents {
 			g.collectType(event.DataType)
@@ -313,9 +321,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		info := handlers[qualifiedName]
 		shortName := info.Name
 		isVoid := info.ResponseType == voidResponseType
-		respType := info.ResponseType.Name()
-		if isVoid {
-			respType = "void"
+		respType := "void"
+		if !isVoid {
+			respType = g.goTypeToTS(info.ResponseType)
 		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         shortName,
@@ -416,9 +424,9 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 	for _, name := range names {
 		info := group.Handlers[name]
 		isVoid := info.ResponseType == voidResponseType
-		respType := info.ResponseType.Name()
-		if isVoid {
-			respType = "void"
+		respType := "void"
+		if !isVoid {
+			respType = g.goTypeToTS(info.ResponseType)
 		}
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,

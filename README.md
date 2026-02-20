@@ -60,14 +60,17 @@ myapp/
 
 ### 1. Define handlers (api/handlers.go)
 
-Handler methods must accept `context.Context` as the first parameter (after receiver), followed by any number of additional parameters. They must return either `error` or `(*T, error)`:
+Handler methods must accept `context.Context` as the first parameter (after receiver), followed by any number of additional parameters. They must return either `error` (void) or `(T, error)` where `T` is any JSON-serializable type:
 
 ```go
-func(ctx context.Context) (*U, error)                           // No parameters
+func(ctx context.Context) (*U, error)                           // No parameters, struct response
 func(ctx context.Context) error                                 // No parameters, void
 func(ctx context.Context, req *T) (*U, error)                   // Single struct parameter
 func(ctx context.Context, name string, age int) (*U, error)     // Multiple primitives
 func(ctx context.Context, items ...string) error                // Variadic
+func(ctx context.Context) ([]User, error)                       // Slice response → User[]
+func(ctx context.Context) (map[string]int, error)               // Map response → Record<string, number>
+func(ctx context.Context) (string, error)                       // Primitive response → string
 ```
 
 Parameters are positional — each Go parameter becomes a separate argument in the TypeScript client:

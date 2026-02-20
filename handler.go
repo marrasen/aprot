@@ -511,18 +511,20 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 			handler:      handlerValue,
 		}
 	case 2:
-		// func(...) (*Resp, error)
+		// func(...) (T, error) where T is any JSON-serializable type
 		respType := mt.Out(0)
-		if respType.Kind() != reflect.Ptr || respType.Elem().Kind() != reflect.Struct {
-			return nil
-		}
 		if !mt.Out(1).Implements(errorType) {
 			return nil
+		}
+		// Unwrap pointer to store the element type
+		rt := respType
+		if rt.Kind() == reflect.Ptr {
+			rt = rt.Elem()
 		}
 		return &HandlerInfo{
 			Name:         method.Name,
 			Params:       params,
-			ResponseType: respType.Elem(),
+			ResponseType: rt,
 			StructName:   structName,
 			method:       handlerValue.Method(method.Index),
 			handler:      handlerValue,
