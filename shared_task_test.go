@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 func TestSharedTaskBasic(t *testing.T) {
@@ -1197,6 +1198,33 @@ func TestSharedTaskPushOnConnectIsOwner(t *testing.T) {
 	core.closeTask()
 }
 
+// readFirstTaskIsOwner reads messages from a WebSocket until it finds a TaskStateEvent
+// with at least one task, and returns that task's isOwner value.
+func readFirstTaskIsOwner(ws interface{ ReadMessage() (int, []byte, error) }) *bool {
+	for i := 0; i < 20; i++ {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		if !strings.Contains(string(data), "TaskStateEvent") {
+			continue
+		}
+		var msg struct {
+			Data struct {
+				Tasks []struct {
+					IsOwner bool `json:"isOwner"`
+				} `json:"tasks"`
+			} `json:"data"`
+		}
+		json.Unmarshal(data, &msg)
+		if len(msg.Data.Tasks) > 0 {
+			v := msg.Data.Tasks[0].IsOwner
+			return &v
+		}
+	}
+	return nil
+}
+
 func TestSharedSubTaskIsOwnerAlwaysFalse(t *testing.T) {
 	registry := NewRegistry()
 	handlers := &IntegrationHandlers{}
@@ -1219,68 +1247,88 @@ func TestSharedSubTaskIsOwnerAlwaysFalse(t *testing.T) {
 	// Wait for both connections to be registered.
 	time.Sleep(50 * time.Millisecond)
 
-	// Get the first connection's ID.
-	var ownerID uint64
-	server.mu.RLock()
-	for conn := range server.conns {
-		ownerID = conn.ID()
-		break
+	// Client 1 calls SharedSubTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.RunSharedSubTask",
+		Params: jsontext.Value(`[{"title":"Deploy"}]`),
 	}
-	server.mu.RUnlock()
-
-	// Create a task via SharedSubTask's code path (topLevel=false).
-	core := server.taskManager.create("Sub task", ownerID, false, context.Background())
-	core.progress(1, 10)
-
-	// Wait for batch flush.
-	time.Sleep(300 * time.Millisecond)
-
-	// Helper to read isOwner from TaskStateEvent.
-	readIsOwner := func(ws interface{ ReadMessage() (int, []byte, error) }) *bool {
-		for i := 0; i < 10; i++ {
-			_, data, err := ws.ReadMessage()
-			if err != nil {
-				break
-			}
-			s := string(data)
-			if !strings.Contains(s, "TaskStateEvent") {
-				continue
-			}
-			var msg struct {
-				Data struct {
-					Tasks []struct {
-						IsOwner bool `json:"isOwner"`
-					} `json:"tasks"`
-				} `json:"data"`
-			}
-			json.Unmarshal(data, &msg)
-			if len(msg.Data.Tasks) > 0 {
-				v := msg.Data.Tasks[0].IsOwner
-				return &v
-			}
-		}
-		return nil
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 
 	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
 	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
 
-	isOwner1 := readIsOwner(ws1)
-	isOwner2 := readIsOwner(ws2)
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
 
 	if isOwner1 == nil || isOwner2 == nil {
 		t.Fatal("expected both clients to receive TaskStateEvent")
 	}
 
-	// Both should be false since SharedSubTask tasks are not top-level.
+	// Both should be false — SharedSubTask tasks are not top-level.
 	if *isOwner1 {
-		t.Error("expected isOwner=false for client 1 (SharedSubTask tasks are not top-level)")
+		t.Error("expected isOwner=false for caller (SharedSubTask is not top-level)")
 	}
 	if *isOwner2 {
-		t.Error("expected isOwner=false for client 2 (SharedSubTask tasks are not top-level)")
+		t.Error("expected isOwner=false for observer (SharedSubTask is not top-level)")
+	}
+}
+
+func TestStartSharedTaskIsOwnerTrue(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws1 := connectWS(t, ts)
+	defer ws1.Close()
+
+	ws2 := connectWS(t, ts)
+	defer ws2.Close()
+
+	// Wait for both connections to be registered.
+	time.Sleep(50 * time.Millisecond)
+
+	// Client 1 calls StartSharedTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.RunStartSharedTask",
+		Params: jsontext.Value(`[{"title":"Build"}]`),
+	}
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
 	}
 
-	core.closeTask()
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
+
+	if isOwner1 == nil || isOwner2 == nil {
+		t.Fatal("expected both clients to receive TaskStateEvent")
+	}
+
+	// Client 1 (caller) should see isOwner=true, client 2 should see false.
+	if !*isOwner1 {
+		t.Error("expected isOwner=true for caller (StartSharedTask is top-level)")
+	}
+	if *isOwner2 {
+		t.Error("expected isOwner=false for observer")
+	}
 }
 
 func TestEnableTasksWithMeta(t *testing.T) {
