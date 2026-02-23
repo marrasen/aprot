@@ -97,7 +97,7 @@ export function {{.HookName}}(options?: { enabled?: boolean; refetchInterval?: n
         fetch();
     }, [fetch]);
 
-    const mutate = useCallback(async (action: Promise<any> | (() => Promise<any>)) => {
+    const mutate = useCallback(async (action: Promise<unknown> | (() => Promise<unknown>)) => {
         setIsLoading(true);
         setError(null);
         try {
@@ -168,6 +168,7 @@ export function {{.HookName}}(options: UseQueryOptions<[{{paramDecl .Params}}]>)
         } finally {
             setIsLoading(false);
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, options.enabled, paramsKey]);
 
     useEffect(() => {
@@ -185,7 +186,7 @@ export function {{.HookName}}(options: UseQueryOptions<[{{paramDecl .Params}}]>)
         fetch();
     }, [fetch]);
 
-    const mutate = useCallback(async (action: Promise<any> | (() => Promise<any>)) => {
+    const mutate = useCallback(async (action: Promise<unknown> | (() => Promise<unknown>)) => {
         setIsLoading(true);
         setError(null);
         try {

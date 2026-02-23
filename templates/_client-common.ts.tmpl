@@ -187,6 +187,11 @@ class WebSocketTransport implements ClientTransport {
     }
 }
 
+type ClientMessage =
+    | { type: 'request'; id: string; method: string; params: unknown[] }
+    | { type: 'cancel'; id: string }
+    | { type: 'ping' };
+
 class SSETransport implements ClientTransport {
     private eventSource: EventSource | null = null;
     private connectionId: string | null = null;
@@ -238,7 +243,7 @@ class SSETransport implements ClientTransport {
 
     send(message: object): void {
         if (!this.connectionId) return;
-        const msg = message as any;
+        const msg = message as ClientMessage;
 
         if (msg.type === 'request') {
             fetch(this.baseUrl + '/rpc', {
@@ -294,7 +299,7 @@ export class ApiClient {
     private options: ResolvedOptions;
     private requestId = 0;
     private pending = new Map<string, {
-        resolve: (value: any) => void;
+        resolve: (value: unknown) => void;
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
         onTaskProgress?: (tasks: TaskNode[]) => void;
@@ -302,12 +307,12 @@ export class ApiClient {
     }>();
     private buffer: Array<{
         method: string;
-        params: any;
+        params: unknown[];
         options?: RequestOptions;
-        resolve: (value: any) => void;
+        resolve: (value: unknown) => void;
         reject: (error: Error) => void;
     }> = [];
-    private pushHandlers = new Map<string, Set<(data: any) => void>>();
+    private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
@@ -554,14 +559,15 @@ export class ApiClient {
         }
     }
 
-    request<T>(method: string, params: any, options?: RequestOptions): Promise<T> {
+    request<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
+            const res = resolve as (value: unknown) => void;
             if (this.transport.isConnected()) {
-                this.sendRequest(method, params, options, resolve, reject);
+                this.sendRequest(method, params, options, res, reject);
                 return;
             }
             if (this.state === 'connecting' || this.state === 'reconnecting') {
-                const entry = { method, params, options, resolve, reject };
+                const entry = { method, params, options, resolve: res, reject };
                 this.buffer.push(entry);
                 if (options?.signal) {
                     if (options.signal.aborted) {
@@ -583,8 +589,8 @@ export class ApiClient {
         });
     }
 
-    private sendRequest(method: string, params: any, options: RequestOptions | undefined,
-        resolve: (value: any) => void, reject: (error: Error) => void): void {
+    private sendRequest(method: string, params: unknown[], options: RequestOptions | undefined,
+        resolve: (value: unknown) => void, reject: (error: Error) => void): void {
         const id = String(++this.requestId);
         this.pending.set(id, {
             resolve, reject,
@@ -631,9 +637,10 @@ export class ApiClient {
         if (!this.pushHandlers.has(event)) {
             this.pushHandlers.set(event, new Set());
         }
-        this.pushHandlers.get(event)!.add(handler);
+        const cb = handler as (data: unknown) => void;
+        this.pushHandlers.get(event)!.add(cb);
         return () => {
-            this.pushHandlers.get(event)?.delete(handler);
+            this.pushHandlers.get(event)?.delete(cb);
         };
     }
 }
@@ -709,7 +716,7 @@ export interface UseQueryResult<TRes> {
     error: Error | null;
     isLoading: boolean;
     refetch: () => void;
-    mutate: (action: Promise<any> | (() => Promise<any>)) => Promise<void>;
+    mutate: (action: Promise<unknown> | (() => Promise<unknown>)) => Promise<void>;
 }
 
 // Mutation hook options
@@ -718,7 +725,7 @@ export interface UseMutationOptions {
 }
 
 // Mutation hook result
-export interface UseMutationResult<TParams extends any[], TRes> {
+export interface UseMutationResult<TParams extends unknown[], TRes> {
     mutate: (...params: TParams) => Promise<TRes>;
     data: TRes | null;
     error: Error | null;
