@@ -528,9 +528,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	}
 
 	// Create a new top-level shared task core.
-	// SharedSubTask manages its own lifecycle (calls fn synchronously then
-	// closes/fails), so detach from the request context.
-	core := tm.create(title, conn.ID(), context.WithoutCancel(ctx))
+	core := tm.create(title, conn.ID(), ctx)
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 
