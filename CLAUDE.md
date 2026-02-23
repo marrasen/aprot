@@ -60,6 +60,7 @@ When adding or changing user-facing features (new types, new API patterns, new o
 
 ## Git Rules
 
+- **Never commit directly to master.** All changes must go through a GitHub issue and pull request. Create a branch, open a PR, and wait for review before merging.
 - **Never force push.** Always create new commits instead of amending + force-pushing. This applies to PR feedback, fixups, and plans — never include `--force`, `--force-with-lease`, or `git push -f` in plans or commands.
 - **Always update PRs and issues.** When pushing changes to a PR branch, update the PR description to reflect the current state. When resolving or adding to a GitHub issue, update the issue body. This keeps the historical record accurate and reviewable.
 
