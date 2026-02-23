@@ -57,6 +57,7 @@ type sharedTaskCore struct {
 	cancel      context.CancelFunc
 	ctx         context.Context
 	ownerConnID uint64 // connection ID of the client that created this task
+	topLevel    bool   // true only for StartSharedTask; gates isOwner in snapshots
 }
 
 func (t *sharedTaskCore) progress(current, total int) {
@@ -143,7 +144,7 @@ func (t *sharedTaskCore) snapshot() SharedTaskState {
 
 func (t *sharedTaskCore) snapshotForConn(connID uint64) SharedTaskState {
 	state := t.snapshot()
-	state.IsOwner = (t.ownerConnID == connID)
+	state.IsOwner = t.topLevel && (t.ownerConnID == connID)
 	return state
 }
 
@@ -327,9 +328,11 @@ func (tm *taskManager) allocID() string {
 
 // create creates a new sharedTaskCore and registers it.
 // connID is the connection ID of the client that created this task (0 if none).
+// topLevel indicates this task was created via StartSharedTask and should
+// report isOwner to the originating connection.
 // The task context is derived from ctx. The caller controls whether the task
 // survives parent cancellation by passing context.WithoutCancel(ctx) if desired.
-func (tm *taskManager) create(title string, connID uint64, ctx context.Context) *sharedTaskCore {
+func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx context.Context) *sharedTaskCore {
 	taskCtx, cancel := context.WithCancel(ctx)
 
 	id := tm.allocID()
@@ -341,6 +344,7 @@ func (tm *taskManager) create(title string, connID uint64, ctx context.Context) 
 		cancel:      cancel,
 		ctx:         taskCtx,
 		ownerConnID: connID,
+		topLevel:    topLevel,
 	}
 
 	tm.mu.Lock()
@@ -483,7 +487,7 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 	if tm == nil {
 		return ctx, nil
 	}
-	core := tm.create(title, conn.ID(), ctx)
+	core := tm.create(title, conn.ID(), true, ctx)
 
 	// Populate the task slot so handleRequest can auto-manage lifecycle.
 	if slot := taskSlotFromContext(ctx); slot != nil {
@@ -527,8 +531,8 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 		return SubTask(ctx, title, fn)
 	}
 
-	// Create a new top-level shared task core.
-	core := tm.create(title, conn.ID(), ctx)
+	// Create a new shared task core (not top-level, so isOwner stays false).
+	core := tm.create(title, conn.ID(), false, ctx)
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 func TestSharedTaskBasic(t *testing.T) {
@@ -25,7 +26,7 @@ func TestSharedTaskBasic(t *testing.T) {
 		t.Fatal("expected taskManager to be initialized")
 	}
 
-	core := tm.create("Build project", 0, context.Background())
+	core := tm.create("Build project", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 	if task.ID() == "" {
 		t.Fatal("expected non-empty task ID")
@@ -63,7 +64,7 @@ func TestSharedTaskProgress(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Upload", 0, context.Background())
+	core := tm.create("Upload", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
 	task.Progress(50, 100)
@@ -86,7 +87,7 @@ func TestSharedTaskSubTask(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Deploy", 0, context.Background())
+	core := tm.create("Deploy", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
 	sub := task.SubTask("Build image")
@@ -124,7 +125,7 @@ func TestSharedTaskCancel(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Long task", 0, context.Background())
+	core := tm.create("Long task", 0, true, context.Background())
 
 	ok := tm.cancelTask(core.id)
 	if !ok {
@@ -175,7 +176,7 @@ func TestSharedTaskBatchBroadcast(t *testing.T) {
 	tm := server.taskManager
 
 	// Create a task and update progress many times rapidly.
-	core := tm.create("Batch test", 0, context.Background())
+	core := tm.create("Batch test", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 	for i := 0; i < 100; i++ {
 		task.Progress(i, 100)
@@ -206,7 +207,7 @@ func TestSharedTaskFail(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Failing task", 0, context.Background())
+	core := tm.create("Failing task", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
 	task.Fail()
@@ -267,7 +268,7 @@ func TestSharedTaskBroadcastOverWebSocket(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Create a shared task directly on the server's task manager
-	core := server.taskManager.create("Test task", 0, context.Background())
+	core := server.taskManager.create("Test task", 0, true, context.Background())
 	core.progress(1, 10)
 
 	// Wait for batch flush
@@ -309,7 +310,7 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 	defer ts.Close()
 
 	// Create a shared task before any client connects
-	core := server.taskManager.create("Existing task", 0, context.Background())
+	core := server.taskManager.create("Existing task", 0, true, context.Background())
 	core.progress(5, 10)
 
 	// Now connect a client
@@ -351,7 +352,7 @@ func TestSharedTaskSetMeta(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Meta task", 0, context.Background())
+	core := tm.create("Meta task", 0, true, context.Background())
 
 	type Meta struct {
 		UserName string `json:"userName"`
@@ -385,7 +386,7 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Parent", 0, context.Background())
+	core := tm.create("Parent", 0, true, context.Background())
 
 	type SubMeta struct {
 		Key string `json:"key"`
@@ -418,7 +419,7 @@ func TestSharedTaskSubSubTask(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Root", 0, context.Background())
+	core := tm.create("Root", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
 	sub := task.SubTask("Level 1")
@@ -487,7 +488,7 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
 
 	// Create a shared task and attach its context.
-	core := tm.create("Shared parent", 0, context.Background())
+	core := tm.create("Shared parent", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -528,7 +529,7 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 func TestTaskProgressDualSend(t *testing.T) {
 	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Dual progress", 0, context.Background())
+	core := tm.create("Dual progress", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -568,7 +569,7 @@ func TestTaskProgressDualSend(t *testing.T) {
 func TestStepTaskProgressDualSend(t *testing.T) {
 	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Dual step", 0, context.Background())
+	core := tm.create("Dual step", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -601,7 +602,7 @@ func TestStepTaskProgressDualSend(t *testing.T) {
 func TestSubTaskWithSharedContextNested(t *testing.T) {
 	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Root shared", 0, context.Background())
+	core := tm.create("Root shared", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -645,7 +646,7 @@ func TestSubTaskWithSharedContextNested(t *testing.T) {
 func TestSubTaskWithSharedContextError(t *testing.T) {
 	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Error test", 0, context.Background())
+	core := tm.create("Error test", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -835,7 +836,7 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	baseCtx := withTaskTree(context.Background(), tree)
 	baseCtx = withConnection(baseCtx, conn)
 
-	core := tm.create("Background job", 0, baseCtx)
+	core := tm.create("Background job", 0, true, baseCtx)
 	task := &SharedTask[struct{}]{core: core}
 
 	done := make(chan struct{})
@@ -905,7 +906,7 @@ func TestOutputDualSend(t *testing.T) {
 
 	ctx := withTaskTree(context.Background(), tree)
 
-	core := tm.create("Output test", 0, context.Background())
+	core := tm.create("Output test", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -934,7 +935,7 @@ func TestSharedTaskNodeSubTaskRefactor(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Root", 0, context.Background())
+	core := tm.create("Root", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
 	// Create sub-task via the refactored SharedTaskSub.SubTask()
@@ -979,7 +980,7 @@ func TestSharedTaskSnapshotForConn(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core := tm.create("Owned task", 42, context.Background())
+	core := tm.create("Owned task", 42, true, context.Background())
 
 	// Snapshot for the owner connection.
 	state := core.snapshotForConn(42)
@@ -1012,8 +1013,8 @@ func TestSharedTaskSnapshotAllForConn(t *testing.T) {
 	defer server.Stop(context.Background())
 
 	tm := server.taskManager
-	core1 := tm.create("Task A", 10, context.Background())
-	core2 := tm.create("Task B", 20, context.Background())
+	core1 := tm.create("Task A", 10, true, context.Background())
+	core2 := tm.create("Task B", 20, true, context.Background())
 
 	// From conn 10's perspective: Task A is owned, Task B is not.
 	states := tm.snapshotAllForConn(10)
@@ -1088,7 +1089,7 @@ func TestSharedTaskIsOwnerBroadcast(t *testing.T) {
 
 	// Create a task owned by the first connection ID.
 	ownerID := connIDs[0]
-	core := server.taskManager.create("Owner test", ownerID, context.Background())
+	core := server.taskManager.create("Owner test", ownerID, true, context.Background())
 	core.progress(1, 10)
 
 	// Wait for batch flush.
@@ -1155,7 +1156,7 @@ func TestSharedTaskPushOnConnectIsOwner(t *testing.T) {
 	defer ts.Close()
 
 	// Create a task with a specific owner before any client connects.
-	core := server.taskManager.create("Existing task", 42, context.Background())
+	core := server.taskManager.create("Existing task", 42, true, context.Background())
 	core.progress(5, 10)
 
 	// Now connect a client (its conn ID will NOT be 42).
@@ -1195,6 +1196,139 @@ func TestSharedTaskPushOnConnectIsOwner(t *testing.T) {
 	}
 
 	core.closeTask()
+}
+
+// readFirstTaskIsOwner reads messages from a WebSocket until it finds a TaskStateEvent
+// with at least one task, and returns that task's isOwner value.
+func readFirstTaskIsOwner(ws interface{ ReadMessage() (int, []byte, error) }) *bool {
+	for i := 0; i < 20; i++ {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		if !strings.Contains(string(data), "TaskStateEvent") {
+			continue
+		}
+		var msg struct {
+			Data struct {
+				Tasks []struct {
+					IsOwner bool `json:"isOwner"`
+				} `json:"tasks"`
+			} `json:"data"`
+		}
+		json.Unmarshal(data, &msg)
+		if len(msg.Data.Tasks) > 0 {
+			v := msg.Data.Tasks[0].IsOwner
+			return &v
+		}
+	}
+	return nil
+}
+
+func TestSharedSubTaskIsOwnerAlwaysFalse(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws1 := connectWS(t, ts)
+	defer ws1.Close()
+
+	ws2 := connectWS(t, ts)
+	defer ws2.Close()
+
+	// Wait for both connections to be registered.
+	time.Sleep(50 * time.Millisecond)
+
+	// Client 1 calls SharedSubTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.RunSharedSubTask",
+		Params: jsontext.Value(`[{"title":"Deploy"}]`),
+	}
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
+
+	if isOwner1 == nil || isOwner2 == nil {
+		t.Fatal("expected both clients to receive TaskStateEvent")
+	}
+
+	// Both should be false — SharedSubTask tasks are not top-level.
+	if *isOwner1 {
+		t.Error("expected isOwner=false for caller (SharedSubTask is not top-level)")
+	}
+	if *isOwner2 {
+		t.Error("expected isOwner=false for observer (SharedSubTask is not top-level)")
+	}
+}
+
+func TestStartSharedTaskIsOwnerTrue(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{}
+	registry.Register(handlers)
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws1 := connectWS(t, ts)
+	defer ws1.Close()
+
+	ws2 := connectWS(t, ts)
+	defer ws2.Close()
+
+	// Wait for both connections to be registered.
+	time.Sleep(50 * time.Millisecond)
+
+	// Client 1 calls StartSharedTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.RunStartSharedTask",
+		Params: jsontext.Value(`[{"title":"Build"}]`),
+	}
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
+
+	if isOwner1 == nil || isOwner2 == nil {
+		t.Fatal("expected both clients to receive TaskStateEvent")
+	}
+
+	// Client 1 (caller) should see isOwner=true, client 2 should see false.
+	if !*isOwner1 {
+		t.Error("expected isOwner=true for caller (StartSharedTask is top-level)")
+	}
+	if *isOwner2 {
+		t.Error("expected isOwner=false for observer")
+	}
 }
 
 func TestEnableTasksWithMeta(t *testing.T) {
