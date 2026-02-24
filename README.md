@@ -312,7 +312,17 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 }
 ```
 
-The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (`running`/`completed`/`failed`), optional `error` message (populated on failure), and optional `current`/`total` progress.
+The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (a `TaskNodeStatusType`), optional `error` message (populated on failure), and optional `current`/`total` progress.
+
+`TaskNodeStatus` is exported as a TypeScript const enum, so you can use `TaskNodeStatus.Running`, `TaskNodeStatus.Completed`, and `TaskNodeStatus.Failed` instead of raw string literals:
+
+```typescript
+import { TaskNodeStatus } from './api/client';
+
+if (task.status === TaskNodeStatus.Completed) {
+    console.log('Task finished!');
+}
+```
 
 **Task progress** — report numeric progress (current/total) on a sub-task from inside the callback:
 

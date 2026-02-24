@@ -53,10 +53,17 @@ export interface {{.Name}} {
 }
 
 {{end -}}
+export const TaskNodeStatus = {
+    Running: "running",
+    Completed: "completed",
+    Failed: "failed",
+} as const;
+export type TaskNodeStatusType = typeof TaskNodeStatus[keyof typeof TaskNodeStatus];
+
 export interface TaskNode {
     id: string;
     title: string;
-    status: 'running' | 'completed' | 'failed';
+    status: TaskNodeStatusType;
     error?: string;
     current?: number;
     total?: number;
@@ -78,7 +85,7 @@ export interface SharedTaskState {
     id: string;
     parentId?: string;
     title: string;
-    status: 'running' | 'completed' | 'failed';
+    status: TaskNodeStatusType;
     error?: string;
     current?: number;
     total?: number;
