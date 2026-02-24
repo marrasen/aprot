@@ -334,8 +334,10 @@ func (c *Conn) finalizeTaskSlot(slot *taskSlot, ctx context.Context, handlerErr 
 
 	// Finalize shared task.
 	if core := slot.sharedCore; core != nil {
-		if canceled || handlerErr != nil {
-			core.fail()
+		if handlerErr != nil {
+			core.fail(handlerErr.Error())
+		} else if canceled {
+			core.fail("canceled")
 		} else {
 			core.closeTask()
 		}
@@ -343,8 +345,10 @@ func (c *Conn) finalizeTaskSlot(slot *taskSlot, ctx context.Context, handlerErr 
 
 	// Finalize request-scoped task.
 	if node := slot.taskNode; node != nil {
-		if canceled || handlerErr != nil {
-			node.setStatus(TaskNodeStatusFailed)
+		if handlerErr != nil {
+			node.setFailed(handlerErr.Error())
+		} else if canceled {
+			node.setFailed("canceled")
 		} else {
 			node.setStatus(TaskNodeStatusCompleted)
 		}

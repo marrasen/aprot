@@ -22,6 +22,7 @@ type TaskNode struct {
 	ID       string         `json:"id"`
 	Title    string         `json:"title"`
 	Status   TaskNodeStatus `json:"status"`
+	Error    string         `json:"error,omitempty"`
 	Current  int            `json:"current,omitempty"`
 	Total    int            `json:"total,omitempty"`
 	Meta     any            `json:"meta,omitempty"`
@@ -89,6 +90,7 @@ type taskNode struct {
 	id       string
 	title    string
 	status   TaskNodeStatus
+	error    string
 	current  int
 	total    int
 	meta     any
@@ -103,6 +105,7 @@ func (n *taskNode) snapshot() *TaskNode {
 		ID:      n.id,
 		Title:   n.title,
 		Status:  n.status,
+		Error:   n.error,
 		Current: n.current,
 		Total:   n.total,
 		Meta:    n.meta,
@@ -133,6 +136,13 @@ func (n *taskNode) setStatus(s TaskNodeStatus) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.status = s
+}
+
+func (n *taskNode) setFailed(msg string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.status = TaskNodeStatusFailed
+	n.error = msg
 }
 
 func (n *taskNode) setProgress(current, total int) {
@@ -226,7 +236,7 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 	// --- finalize request-scoped node ---
 	if child != nil {
 		if err != nil {
-			child.setStatus(TaskNodeStatusFailed)
+			child.setFailed(err.Error())
 		} else {
 			child.setStatus(TaskNodeStatusCompleted)
 		}
@@ -238,6 +248,7 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 		sharedNode.mu.Lock()
 		if err != nil {
 			sharedNode.status = TaskNodeStatusFailed
+			sharedNode.error = err.Error()
 		} else {
 			sharedNode.status = TaskNodeStatusCompleted
 		}
@@ -460,10 +471,19 @@ func (t *Task[M]) Close() {
 	t.node.tree.send()
 }
 
-// Fail marks the task as failed.
-func (t *Task[M]) Fail() {
-	t.node.setStatus(TaskNodeStatusFailed)
+// Fail marks the task as failed with the given error message.
+func (t *Task[M]) Fail(message string) {
+	t.node.setFailed(message)
 	t.node.tree.send()
+}
+
+// Err fails the task with err.Error() if err is non-nil, or completes it if nil.
+func (t *Task[M]) Err(err error) {
+	if err != nil {
+		t.Fail(err.Error())
+	} else {
+		t.Close()
+	}
 }
 
 // StartTask creates a request-scoped task visible to the calling client via

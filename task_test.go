@@ -88,13 +88,16 @@ func TestSubTaskError(t *testing.T) {
 		t.Fatalf("expected testErr, got %v", err)
 	}
 
-	// Check that the task was marked as failed
+	// Check that the task was marked as failed with the error message
 	snap := tree.snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(snap))
 	}
 	if snap[0].Status != TaskNodeStatusFailed {
 		t.Errorf("expected failed status, got %s", snap[0].Status)
+	}
+	if snap[0].Error != "test failure" {
+		t.Errorf("expected error 'test failure', got %q", snap[0].Error)
 	}
 }
 
@@ -267,6 +270,57 @@ func TestWriterProgressWithoutTree(t *testing.T) {
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("unexpected close error: %v", err)
+	}
+}
+
+func TestTaskErr(t *testing.T) {
+	conn := &Conn{
+		transport: &mockTransport{sendFn: func(data []byte) error { return nil }},
+	}
+	reporter := newProgressReporter(conn, "req-1")
+	tree := newTaskTree(reporter)
+	ctx := withTaskTree(context.Background(), tree)
+
+	// Err(nil) should complete the task.
+	ctx1, task1 := StartTask[struct{}](ctx, "Task OK")
+	_ = ctx1
+	task1.Err(nil)
+
+	snap := tree.snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(snap))
+	}
+	if snap[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed, got %s", snap[0].Status)
+	}
+	if snap[0].Error != "" {
+		t.Errorf("expected no error, got %q", snap[0].Error)
+	}
+
+	// Err(error) should fail the task with the error message.
+	ctx2, task2 := StartTask[struct{}](ctx, "Task Fail")
+	_ = ctx2
+	task2.Err(errors.New("something broke"))
+
+	snap = tree.snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(snap))
+	}
+	// Find the failed task.
+	var failed *TaskNode
+	for _, n := range snap {
+		if n.Title == "Task Fail" {
+			failed = n
+		}
+	}
+	if failed == nil {
+		t.Fatal("expected to find 'Task Fail' node")
+	}
+	if failed.Status != TaskNodeStatusFailed {
+		t.Errorf("expected failed, got %s", failed.Status)
+	}
+	if failed.Error != "something broke" {
+		t.Errorf("expected error 'something broke', got %q", failed.Error)
 	}
 }
 

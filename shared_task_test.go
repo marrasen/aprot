@@ -210,7 +210,7 @@ func TestSharedTaskFail(t *testing.T) {
 	core := tm.create("Failing task", 0, true, context.Background())
 	task := &SharedTask[struct{}]{core: core}
 
-	task.Fail()
+	task.Fail("something went wrong")
 
 	states := tm.snapshotAll()
 	if len(states) != 1 {
@@ -219,6 +219,112 @@ func TestSharedTaskFail(t *testing.T) {
 	if states[0].Status != TaskNodeStatusFailed {
 		t.Errorf("expected failed status, got %s", states[0].Status)
 	}
+	if states[0].Error != "something went wrong" {
+		t.Errorf("expected error 'something went wrong', got %q", states[0].Error)
+	}
+}
+
+func TestSharedTaskErr(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+
+	// Err(nil) should complete the task.
+	core1 := tm.create("Task OK", 0, true, context.Background())
+	task1 := &SharedTask[struct{}]{core: core1}
+	task1.Err(nil)
+
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(states))
+	}
+	if states[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed, got %s", states[0].Status)
+	}
+	if states[0].Error != "" {
+		t.Errorf("expected no error, got %q", states[0].Error)
+	}
+
+	// Wait for deferred removal.
+	time.Sleep(300 * time.Millisecond)
+
+	// Err(error) should fail the task with the error message.
+	core2 := tm.create("Task Fail", 0, true, context.Background())
+	task2 := &SharedTask[struct{}]{core: core2}
+	task2.Err(errors.New("deploy failed"))
+
+	states = tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(states))
+	}
+	if states[0].Status != TaskNodeStatusFailed {
+		t.Errorf("expected failed, got %s", states[0].Status)
+	}
+	if states[0].Error != "deploy failed" {
+		t.Errorf("expected error 'deploy failed', got %q", states[0].Error)
+	}
+}
+
+func TestSharedTaskSubErr(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
+	registry.EnableTasks()
+
+	server := NewServer(registry)
+	defer server.Stop(context.Background())
+
+	tm := server.taskManager
+	core := tm.create("Parent", 0, true, context.Background())
+	task := &SharedTask[struct{}]{core: core}
+
+	// Err(nil) should complete the sub-task.
+	sub1 := task.SubTask("Sub OK")
+	sub1.Err(nil)
+
+	states := tm.snapshotAll()
+	if len(states[0].Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(states[0].Children))
+	}
+	if states[0].Children[0].Status != TaskNodeStatusCompleted {
+		t.Errorf("expected completed, got %s", states[0].Children[0].Status)
+	}
+	if states[0].Children[0].Error != "" {
+		t.Errorf("expected no error, got %q", states[0].Children[0].Error)
+	}
+
+	// Err(error) should fail the sub-task with the error message.
+	sub2 := task.SubTask("Sub Fail")
+	sub2.Err(errors.New("step failed"))
+
+	states = tm.snapshotAll()
+	if len(states[0].Children) != 2 {
+		t.Fatalf("expected 2 children, got %d", len(states[0].Children))
+	}
+	// Find the failed child.
+	var failed *TaskNode
+	for _, child := range states[0].Children {
+		if child.Title == "Sub Fail" {
+			failed = child
+		}
+	}
+	if failed == nil {
+		t.Fatal("expected to find 'Sub Fail' child")
+	}
+	if failed.Status != TaskNodeStatusFailed {
+		t.Errorf("expected failed, got %s", failed.Status)
+	}
+	if failed.Error != "step failed" {
+		t.Errorf("expected error 'step failed', got %q", failed.Error)
+	}
+
+	task.Close()
 }
 
 // Test that EnableTasks registers the CancelTask handler.
