@@ -312,7 +312,7 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 }
 ```
 
-The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (`running`/`completed`/`failed`), and optional `current`/`total` progress.
+The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (`running`/`completed`/`failed`), optional `error` message (populated on failure), and optional `current`/`total` progress.
 
 **Task progress** — report numeric progress (current/total) on a sub-task from inside the callback:
 
@@ -439,13 +439,17 @@ Key methods on `SharedTask[M]`:
 - `Output(msg)` — sends output text to all clients
 - `SubTask(title)` — creates a child node (`*SharedTaskSub[M]`)
 - `SetMeta(v M)` — sets typed metadata broadcast to all clients
-- `Close()` / `Fail()` — marks as completed/failed (automatic when used inline)
+- `Close()` — marks as completed (automatic when handler returns nil)
+- `Fail(message)` — marks as failed with an error message (automatic when handler returns error)
+- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
 - `ID()` — returns the task's unique identifier
 - `Context()` — returns the task's cancellation context
 - `WithContext(ctx)` — returns a context carrying this task's shared context
 
 Key methods on `SharedTaskSub[M]` (child nodes):
-- `Complete()` / `Fail()` — marks as completed/failed
+- `Complete()` — marks as completed
+- `Fail(message)` — marks as failed with an error message
+- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
 - `Progress(current, total)` — updates progress
 - `SetMeta(v M)` — sets typed metadata on this sub-task
 - `SubTask(title)` — creates a nested child node
@@ -472,7 +476,34 @@ func (h *Handlers) ProcessData(ctx context.Context, req *ProcessRequest) error {
 }
 ```
 
+Key methods on `Task[M]`:
+- `Progress(current, total)` — updates progress
+- `SetMeta(v M)` — sets typed metadata
+- `Close()` — marks as completed (automatic when handler returns nil)
+- `Fail(message)` — marks as failed with an error message (automatic when handler returns error)
+- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
+- `ID()` — returns the task's unique identifier
+
 The client receives the task tree via the `onTaskProgress` callback in `RequestOptions`.
+
+#### Error Messages
+
+When a task fails — whether via `Fail(message)`, `Err(err)`, or automatically from a returned error — the error message is included in the `TaskNode` and `SharedTaskState` snapshots sent to clients:
+
+```go
+// Explicit failure with a message
+task.Fail("deployment timed out")
+
+// Convenience: fail if err != nil, complete if nil
+task.Err(doWork())
+
+// Sub-tasks: same pattern
+sub := task.SubTask("Build")
+sub.Fail("compilation error")
+sub.Err(build())
+```
+
+The error is available on the TypeScript side as `TaskNode.error` and `SharedTaskState.error` (both `string | undefined`). Automatic failure paths (`SubTask` returning an error, handler auto-finalization) populate the error from `err.Error()`. Canceled tasks get the error `"canceled"`.
 
 #### TypeScript (React)
 
