@@ -24,6 +24,7 @@ type SharedTaskState struct {
 	ParentID string         `json:"parentId,omitempty"`
 	Title    string         `json:"title"`
 	Status   TaskNodeStatus `json:"status"`
+	Error    string         `json:"error,omitempty"`
 	Current  int            `json:"current,omitempty"`
 	Total    int            `json:"total,omitempty"`
 	Meta     any            `json:"meta,omitempty"`
@@ -48,6 +49,7 @@ type sharedTaskCore struct {
 	id          string
 	title       string
 	status      TaskNodeStatus
+	error       string
 	current     int
 	total       int
 	meta        any
@@ -96,13 +98,14 @@ func (t *sharedTaskCore) closeTask() {
 	}()
 }
 
-func (t *sharedTaskCore) fail() {
+func (t *sharedTaskCore) fail(msg string) {
 	t.mu.Lock()
 	if t.status != TaskNodeStatusRunning {
 		t.mu.Unlock()
 		return
 	}
 	t.status = TaskNodeStatusFailed
+	t.error = msg
 	t.mu.Unlock()
 	t.cancel()
 	t.manager.markDirty(t.id)
@@ -132,6 +135,7 @@ func (t *sharedTaskCore) snapshot() SharedTaskState {
 		ID:      t.id,
 		Title:   t.title,
 		Status:  t.status,
+		Error:   t.error,
 		Current: t.current,
 		Total:   t.total,
 		Meta:    t.meta,
@@ -180,9 +184,18 @@ func (t *SharedTask[M]) Close() {
 	t.core.closeTask()
 }
 
-// Fail marks the task as failed.
-func (t *SharedTask[M]) Fail() {
-	t.core.fail()
+// Fail marks the task as failed with the given error message.
+func (t *SharedTask[M]) Fail(message string) {
+	t.core.fail(message)
+}
+
+// Err fails the task with err.Error() if err is non-nil, or completes it if nil.
+func (t *SharedTask[M]) Err(err error) {
+	if err != nil {
+		t.Fail(err.Error())
+	} else {
+		t.Close()
+	}
 }
 
 // SubTask creates a child node under this shared task.
@@ -218,12 +231,22 @@ func (s *SharedTaskSub[M]) Complete() {
 	s.core.manager.markDirty(s.core.id)
 }
 
-// Fail marks this sub-task as failed.
-func (s *SharedTaskSub[M]) Fail() {
+// Fail marks this sub-task as failed with the given error message.
+func (s *SharedTaskSub[M]) Fail(message string) {
 	s.node.mu.Lock()
 	s.node.status = TaskNodeStatusFailed
+	s.node.error = message
 	s.node.mu.Unlock()
 	s.core.manager.markDirty(s.core.id)
+}
+
+// Err fails the sub-task with err.Error() if err is non-nil, or completes it if nil.
+func (s *SharedTaskSub[M]) Err(err error) {
+	if err != nil {
+		s.Fail(err.Error())
+	} else {
+		s.Complete()
+	}
 }
 
 // SetMeta sets typed metadata on this sub-task node.
@@ -261,6 +284,7 @@ type sharedTaskNode struct {
 	id       string
 	title    string
 	status   TaskNodeStatus
+	error    string
 	current  int
 	total    int
 	meta     any
@@ -288,6 +312,7 @@ func (n *sharedTaskNode) snapshot() *TaskNode {
 		ID:      n.id,
 		Title:   n.title,
 		Status:  n.status,
+		Error:   n.error,
 		Current: n.current,
 		Total:   n.total,
 		Meta:    n.meta,
@@ -389,7 +414,7 @@ func (tm *taskManager) cancelTask(id string) bool {
 	if !ok {
 		return false
 	}
-	task.fail()
+	task.fail("canceled")
 	return true
 }
 
@@ -540,7 +565,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 
 	// Close or fail the shared task core based on the result.
 	if err != nil {
-		core.fail()
+		core.fail(err.Error())
 	} else {
 		core.closeTask()
 	}

@@ -57,6 +57,7 @@ export interface TaskNode {
     id: string;
     title: string;
     status: 'running' | 'completed' | 'failed';
+    error?: string;
     current?: number;
     total?: number;
 {{- if .TaskMetaType}}
@@ -78,6 +79,7 @@ export interface SharedTaskState {
     parentId?: string;
     title: string;
     status: 'running' | 'completed' | 'failed';
+    error?: string;
     current?: number;
     total?: number;
     isOwner: boolean;
