@@ -3,7 +3,7 @@ import { wsUrl } from './helpers';
 import { ApiClient, cancelSharedTask } from '../api/client';
 import type { TaskNode, SharedTaskState } from '../api/client';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
-import { onTaskStateEvent, onTaskOutputEvent } from '../api/task-cancel-handler';
+import { onTaskStateEvent, onTaskUpdateEvent } from '../api/task-cancel-handler';
 
 describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
@@ -51,25 +51,43 @@ describe('SubTask (WebSocket)', () => {
         expect(titles).toContain('Deploy');
     });
 
-    test('processWithSubTasks receives output via onOutput', async () => {
-        const outputs: string[] = [];
+    test('processWithSubTasks receives output with task IDs via onOutput', async () => {
+        const outputs: { output: string; taskId?: string }[] = [];
+        const taskNodes: TaskNode[] = [];
 
         const res = await processWithSubTasks(
             client,
             { steps: ['Alpha', 'Beta'], delay: 50 },
             {
-                onOutput: (output) => {
-                    outputs.push(output);
+                onOutput: (output, taskId) => {
+                    outputs.push({ output, taskId });
+                },
+                onTaskProgress: (tasks) => {
+                    // Keep the latest snapshot
+                    taskNodes.length = 0;
+                    taskNodes.push(...tasks);
                 },
             },
         );
 
         expect(res.completed).toBe(2);
 
-        // Should have received output messages (2 steps * 2 outputs each = 4)
+        // Should have received output messages
         expect(outputs.length).toBeGreaterThanOrEqual(2);
-        expect(outputs.some(o => o.includes('Alpha'))).toBe(true);
-        expect(outputs.some(o => o.includes('Beta'))).toBe(true);
+        expect(outputs.some(o => o.output.includes('Alpha'))).toBe(true);
+        expect(outputs.some(o => o.output.includes('Beta'))).toBe(true);
+
+        // Every output message should carry a task ID
+        for (const o of outputs) {
+            expect(o.taskId).toBeDefined();
+            expect(o.taskId).not.toBe('');
+        }
+
+        // Task IDs in output should match actual task node IDs
+        const nodeIds = new Set(taskNodes.map(t => t.id));
+        for (const o of outputs) {
+            expect(nodeIds.has(o.taskId!)).toBe(true);
+        }
     });
 });
 
@@ -148,10 +166,24 @@ describe('SharedTask (WebSocket)', () => {
         }
     });
 
-    test('shared task sends TaskOutputEvent', async () => {
-        const outputs: { taskId: string; output: string }[] = [];
-        const unsubscribe = onTaskOutputEvent(client, (event) => {
-            outputs.push(event);
+    test('shared task sends TaskUpdateEvent with valid task IDs', async () => {
+        const updates: { taskId: string; output?: string }[] = [];
+        const taskIds = new Set<string>();
+
+        const unsubUpdate = onTaskUpdateEvent(client, (event) => {
+            updates.push(event);
+        });
+
+        // Also capture task IDs from TaskStateEvent so we can cross-reference
+        const unsubState = onTaskStateEvent(client, (event) => {
+            for (const t of event.tasks) {
+                taskIds.add(t.id);
+                if (t.children) {
+                    for (const c of t.children) {
+                        taskIds.add(c.id);
+                    }
+                }
+            }
         });
 
         try {
@@ -165,11 +197,23 @@ describe('SharedTask (WebSocket)', () => {
             // Wait for any remaining events
             await new Promise(resolve => setTimeout(resolve, 200));
 
-            // Should have received output events
-            expect(outputs.length).toBeGreaterThanOrEqual(1);
-            expect(outputs.some(o => o.output.includes('X'))).toBe(true);
+            // Should have received update events (output and/or progress)
+            expect(updates.length).toBeGreaterThanOrEqual(1);
+
+            // Filter to output events
+            const outputEvents = updates.filter(o => o.output != null);
+            expect(outputEvents.length).toBeGreaterThanOrEqual(1);
+            expect(outputEvents.some(o => o.output?.includes('X'))).toBe(true);
+
+            // Every update event should have a non-empty taskId that matches a known task
+            for (const u of updates) {
+                expect(u.taskId).toBeDefined();
+                expect(u.taskId).not.toBe('');
+                expect(taskIds.has(u.taskId)).toBe(true);
+            }
         } finally {
-            unsubscribe();
+            unsubUpdate();
+            unsubState();
         }
     });
 

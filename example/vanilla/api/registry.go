@@ -26,7 +26,7 @@ func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Reg
 	registry.RegisterPushEventFor(protectedHandlers, DirectMessageEvent{})
 
 	// Enable shared tasks with typed metadata
-	// (registers TaskStateEvent, TaskOutputEvent, CancelTask handler)
+	// (registers TaskStateEvent, TaskUpdateEvent, CancelTask handler)
 	aprot.EnableTasksWithMeta[TaskMeta](registry)
 
 	return registry

@@ -356,10 +356,10 @@ pw.Close()
 ```typescript
 const result = await deploy(client, req, {
     onTaskProgress: (tasks) => {
-        // tasks is TaskNode[] — render a progress tree
+        // tasks is TaskNode[] — render a progress tree (structural changes)
     },
-    onOutput: (output) => {
-        // Append to a log view
+    onOutput: (output, taskId) => {
+        // output text, taskId identifies which task node produced it
     },
 });
 ```
@@ -375,7 +375,7 @@ Enable shared tasks in the registry:
 ```go
 registry := aprot.NewRegistry()
 registry.Register(&Handlers{})
-registry.EnableTasks()  // Registers TaskStateEvent, TaskOutputEvent push events + CancelTask handler
+registry.EnableTasks()  // Registers TaskStateEvent, TaskUpdateEvent push events + CancelTask handler
 ```
 
 To attach typed metadata to tasks, use `EnableTasksWithMeta` instead. This is a free function (not a method) because Go does not allow generic methods on non-generic types:
@@ -556,8 +556,10 @@ client.onPush<{ tasks: SharedTaskState[] }>('TaskStateEvent', (event) => {
     const myTasks = event.tasks.filter(t => t.isOwner && !t.parentId);
 });
 
-client.onPush<{ taskId: string; output: string }>('TaskOutputEvent', (event) => {
-    console.log(`[${event.taskId}] ${event.output}`);
+client.onPush<{ taskId: string; output?: string; current?: number; total?: number }>('TaskUpdateEvent', (event) => {
+    if (event.output != null) {
+        console.log(`[${event.taskId}] ${event.output}`);
+    }
 });
 
 // Cancel a shared task
@@ -566,7 +568,7 @@ await cancelSharedTask(client, taskId);
 
 ### SharedSubTask (Bridging Request-Scoped and Shared Tasks)
 
-`SharedSubTask` bridges both task systems: it creates a node in the request-scoped task tree (progress to the requester) **and** a top-level shared task (broadcast to all clients). Nested `SubTask` calls inside it automatically mirror to the shared tree.
+`SharedSubTask` bridges both task systems: it creates a top-level shared task (broadcast to all clients) and routes all nested `SubTask`, `Output`, and `TaskProgress` calls through the shared task system exclusively.
 
 ```go
 func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
@@ -593,18 +595,18 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 - If called with no existing shared context, `SharedSubTask` creates a new shared task core. On return, the core is auto-closed (or marked failed on error).
 - If nested inside another `SharedSubTask`, it delegates to `SubTask` — no new core is created, just a child node.
 - If no connection or `taskManager` is available, it falls back to plain `SubTask`.
-- `Output(ctx, msg)` inside a shared context sends to both the requester and all clients.
+- `Output(ctx, msg)` inside a shared context broadcasts to all clients via the shared task system.
 
-**`SharedTask.WithContext()`** — for goroutines that should also dual-send:
+**`SharedTask.WithContext()`** — for goroutines that should route through the shared task system:
 
 ```go
 ctx, task := aprot.StartSharedTask[struct{}](ctx, "Background job")
 go func() {
-    // Attach the shared context so SubTask calls dual-send.
+    // Attach the shared context so SubTask/Output/TaskProgress route through the shared system.
     ctx := task.WithContext(context.Background())
 
     aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
-        // This creates a child in the shared task tree.
+        // This creates a child in the shared task tree (broadcast to all clients).
         return nil
     })
 }()

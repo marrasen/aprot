@@ -159,8 +159,12 @@ func TestOutput(t *testing.T) {
 	if len(captured) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(captured))
 	}
-	if captured[0].Output != "hello output" {
-		t.Errorf("expected 'hello output', got %s", captured[0].Output)
+	if captured[0].Output == nil || *captured[0].Output != "hello output" {
+		t.Errorf("expected 'hello output', got %v", captured[0].Output)
+	}
+	// Output without a task node should have empty TaskID
+	if captured[0].TaskID != "" {
+		t.Errorf("expected empty taskID, got %s", captured[0].TaskID)
 	}
 }
 
@@ -190,12 +194,14 @@ func TestOutputWriter(t *testing.T) {
 	w.Write([]byte("line 2\n"))
 	w.Close()
 
-	// Should have task updates + output messages
+	// Should have task updates + output messages with task IDs
 	hasOutput := false
 	hasCompleted := false
+	var outputTaskID string
 	for _, msg := range captured {
-		if msg.Output != "" {
+		if msg.Output != nil {
 			hasOutput = true
+			outputTaskID = msg.TaskID
 		}
 		if len(msg.Tasks) > 0 && msg.Tasks[0].Status == TaskNodeStatusCompleted {
 			hasCompleted = true
@@ -206,6 +212,10 @@ func TestOutputWriter(t *testing.T) {
 	}
 	if !hasCompleted {
 		t.Error("expected completed task status")
+	}
+	// Output messages should carry the task node ID
+	if outputTaskID == "" {
+		t.Error("expected non-empty taskID on output messages")
 	}
 }
 

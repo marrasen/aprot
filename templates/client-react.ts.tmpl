@@ -696,9 +696,9 @@ export function useTaskOutput(taskId: string): { lines: string[]; clear: () => v
     const [lines, setLines] = useState<string[]>([]);
 
     useEffect(() => {
-        return client.onPush<{ taskId: string; output: string }>('TaskOutputEvent', (event) => {
-            if (event.taskId === taskId) {
-                setLines((prev) => [...prev, event.output]);
+        return client.onPush<{ taskId: string; output?: string }>('TaskUpdateEvent', (event) => {
+            if (event.taskId === taskId && event.output != null) {
+                setLines((prev) => [...prev, event.output!]);
             }
         });
     }, [client, taskId]);
