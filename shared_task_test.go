@@ -348,8 +348,8 @@ func TestEnableTasksRegistersHandler(t *testing.T) {
 	if !found["TaskStateEvent"] {
 		t.Error("expected TaskStateEvent push event")
 	}
-	if !found["TaskOutputEvent"] {
-		t.Error("expected TaskOutputEvent push event")
+	if !found["TaskUpdateEvent"] {
+		t.Error("expected TaskUpdateEvent push event")
 	}
 }
 
@@ -591,7 +591,7 @@ func setupSharedSubTaskEnv(t *testing.T) (context.Context, *taskTree, *taskManag
 }
 
 func TestSubTaskWithSharedContext(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
 	// Create a shared task and attach its context.
 	core := tm.create("Shared parent", 0, true, context.Background())
@@ -605,16 +605,8 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Request-scoped tree should have the node.
-	snap := tree.snapshot()
-	if len(snap) != 1 || snap[0].Title != "Step A" {
-		t.Fatalf("expected request-scoped node 'Step A', got %+v", snap)
-	}
-	if snap[0].Status != TaskNodeStatusCompleted {
-		t.Errorf("expected completed, got %s", snap[0].Status)
-	}
-
-	// Shared task should also have a child node.
+	// With shared context present, SubTask routes exclusively through the shared
+	// task system. Only verify the shared task child node.
 	states := tm.snapshotAll()
 	if len(states) != 1 {
 		t.Fatalf("expected 1 shared task, got %d", len(states))
@@ -632,10 +624,10 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 	core.closeTask()
 }
 
-func TestTaskProgressDualSend(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+func TestTaskProgressSharedContext(t *testing.T) {
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Dual progress", 0, true, context.Background())
+	core := tm.create("Shared progress", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -647,16 +639,8 @@ func TestTaskProgressDualSend(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Request-scoped snapshot should have progress.
-	snap := tree.snapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected 1 task, got %d", len(snap))
-	}
-	if snap[0].Current != 7 || snap[0].Total != 20 {
-		t.Errorf("request-scoped: expected 7/20, got %d/%d", snap[0].Current, snap[0].Total)
-	}
-
-	// Shared snapshot should also have progress.
+	// With shared context present, all updates route exclusively through the
+	// shared task system. Verify the shared child has progress 7/20.
 	states := tm.snapshotAll()
 	if len(states) != 1 {
 		t.Fatalf("expected 1 shared task, got %d", len(states))
@@ -672,10 +656,10 @@ func TestTaskProgressDualSend(t *testing.T) {
 	core.closeTask()
 }
 
-func TestStepTaskProgressDualSend(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+func TestStepTaskProgressSharedContext(t *testing.T) {
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
-	core := tm.create("Dual step", 0, true, context.Background())
+	core := tm.create("Shared step", 0, true, context.Background())
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
@@ -689,13 +673,8 @@ func TestStepTaskProgressDualSend(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Request-scoped.
-	snap := tree.snapshot()
-	if snap[0].Current != 2 || snap[0].Total != 5 {
-		t.Errorf("request-scoped: expected 2/5, got %d/%d", snap[0].Current, snap[0].Total)
-	}
-
-	// Shared.
+	// With shared context present, all updates route exclusively through the
+	// shared task system. Verify the shared child has 2/5.
 	states := tm.snapshotAll()
 	child := states[0].Children[0]
 	if child.Current != 2 || child.Total != 5 {
@@ -706,7 +685,7 @@ func TestStepTaskProgressDualSend(t *testing.T) {
 }
 
 func TestSubTaskWithSharedContextNested(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
 	core := tm.create("Root shared", 0, true, context.Background())
 	sc := &sharedContext{core: core}
@@ -721,16 +700,8 @@ func TestSubTaskWithSharedContextNested(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify request-scoped hierarchy.
-	snap := tree.snapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected 1 top-level, got %d", len(snap))
-	}
-	if len(snap[0].Children) != 1 || snap[0].Children[0].Title != "Child" {
-		t.Fatalf("expected nested child 'Child', got %+v", snap[0].Children)
-	}
-
-	// Verify shared hierarchy mirrors it.
+	// With shared context present, all nodes route exclusively through the
+	// shared task system. Verify the shared hierarchy: core > "Parent" > "Child".
 	states := tm.snapshotAll()
 	if len(states[0].Children) != 1 {
 		t.Fatalf("expected 1 shared child, got %d", len(states[0].Children))
@@ -776,10 +747,10 @@ func TestSubTaskWithSharedContextError(t *testing.T) {
 }
 
 func TestSharedSubTaskStandalone(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
 	err := SharedSubTask(ctx, "Deploy", func(ctx context.Context) error {
-		// Inside, SubTask should dual-send.
+		// Inside, SubTask exclusively uses the shared path (shared context present).
 		return SubTask(ctx, "Build", func(ctx context.Context) error {
 			return nil
 		})
@@ -788,16 +759,8 @@ func TestSharedSubTaskStandalone(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Request-scoped tree should have Deploy > Build.
-	snap := tree.snapshot()
-	if len(snap) != 1 || snap[0].Title != "Deploy" {
-		t.Fatalf("expected 'Deploy', got %+v", snap)
-	}
-	if len(snap[0].Children) != 1 || snap[0].Children[0].Title != "Build" {
-		t.Fatalf("expected child 'Build', got %+v", snap[0].Children)
-	}
-
 	// The shared task core should have been created and auto-closed.
+	// The request-scoped tree is empty because shared context was present.
 	// Wait for deferred removal.
 	time.Sleep(300 * time.Millisecond)
 	states := tm.snapshotAll()
@@ -807,11 +770,11 @@ func TestSharedSubTaskStandalone(t *testing.T) {
 }
 
 func TestSharedSubTaskNested(t *testing.T) {
-	ctx, tree, tm, _ := setupSharedSubTaskEnv(t)
+	ctx, _, tm, _ := setupSharedSubTaskEnv(t)
 
 	err := SharedSubTask(ctx, "Outer", func(ctx context.Context) error {
-		// Nested SharedSubTask should detect existing sharedContext
-		// and delegate to SubTask (not create a new core).
+		// Nested SharedSubTask detects existing sharedContext and delegates to
+		// SubTask, which routes exclusively through the shared task system.
 		return SharedSubTask(ctx, "Inner", func(ctx context.Context) error {
 			return nil
 		})
@@ -820,15 +783,7 @@ func TestSharedSubTaskNested(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Request-scoped tree: Outer > Inner.
-	snap := tree.snapshot()
-	if len(snap) != 1 || snap[0].Title != "Outer" {
-		t.Fatalf("expected 'Outer', got %+v", snap)
-	}
-	if len(snap[0].Children) != 1 || snap[0].Children[0].Title != "Inner" {
-		t.Fatalf("expected child 'Inner', got %+v", snap[0].Children)
-	}
-
+	// The request-scoped tree is empty because shared context was present.
 	// Wait for core removal.
 	time.Sleep(300 * time.Millisecond)
 	states := tm.snapshotAll()
@@ -922,6 +877,8 @@ func TestSharedSubTaskWithoutConnection(t *testing.T) {
 
 func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	// Test SharedTask.WithContext() + SubTask inside a goroutine.
+	// WithContext attaches a sharedContext, so SubTask routes exclusively
+	// through the shared task system (no request-scoped tree entry).
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
@@ -936,11 +893,8 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 		transport: &mockTransport{sendFn: func(data []byte) error { return nil }},
 		server:    server,
 	}
-	reporter := newProgressReporter(conn, "req-1")
-	tree := newTaskTree(reporter)
 
-	baseCtx := withTaskTree(context.Background(), tree)
-	baseCtx = withConnection(baseCtx, conn)
+	baseCtx := withConnection(context.Background(), conn)
 
 	core := tm.create("Background job", 0, true, baseCtx)
 	task := &SharedTask[struct{}]{core: core}
@@ -948,10 +902,8 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Attach shared context for SubTask dual-send.
+		// WithContext attaches a sharedContext; SubTask routes exclusively through shared.
 		ctx := task.WithContext(context.Background())
-		// Also attach the task tree from the original request.
-		ctx = withTaskTree(ctx, tree)
 
 		err := SubTask(ctx, "Step in goroutine", func(ctx context.Context) error {
 			return nil
@@ -967,24 +919,28 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 		t.Fatal("timed out")
 	}
 
-	snap := tree.snapshot()
+	// Verify the shared task child was created and completed.
+	states := tm.snapshotAll()
+	if len(states) != 1 {
+		t.Fatalf("expected 1 shared task, got %d", len(states))
+	}
 	found := false
-	for _, n := range snap {
-		if n.Title == "Step in goroutine" {
+	for _, child := range states[0].Children {
+		if child.Title == "Step in goroutine" {
 			found = true
-			if n.Status != TaskNodeStatusCompleted {
-				t.Errorf("expected completed, got %s", n.Status)
+			if child.Status != TaskNodeStatusCompleted {
+				t.Errorf("expected completed, got %s", child.Status)
 			}
 		}
 	}
 	if !found {
-		t.Error("expected 'Step in goroutine' in request-scoped tree")
+		t.Error("expected 'Step in goroutine' in shared task children")
 	}
 
 	core.closeTask()
 }
 
-func TestOutputDualSend(t *testing.T) {
+func TestOutputSharedContextRoutesExclusively(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
@@ -1016,16 +972,14 @@ func TestOutputDualSend(t *testing.T) {
 	sc := &sharedContext{core: core}
 	ctx = withSharedContext(ctx, sc)
 
-	Output(ctx, "hello dual")
+	Output(ctx, "hello shared")
 
-	// Request-scoped: should have received the output.
-	if len(captured) != 1 || captured[0].Output != "hello dual" {
-		t.Errorf("expected request-scoped output 'hello dual', got %+v", captured)
+	// When shared context is present, output should NOT go through
+	// the request-scoped progress channel — only through the shared
+	// task system (Broadcast). So captured should be empty.
+	if len(captured) != 0 {
+		t.Errorf("expected no request-scoped messages when shared context present, got %d", len(captured))
 	}
-
-	// Shared: output is sent via sendOutput which calls Broadcast.
-	// We can't easily capture that without a connected client, but we verified
-	// it doesn't panic and the code path is exercised.
 
 	core.closeTask()
 }

@@ -3,7 +3,7 @@ import { wsUrl } from './helpers';
 import { ApiClient, cancelSharedTask } from '../api/client';
 import type { TaskNode, SharedTaskState } from '../api/client';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
-import { onTaskStateEvent, onTaskOutputEvent } from '../api/task-cancel-handler';
+import { onTaskStateEvent, onTaskUpdateEvent } from '../api/task-cancel-handler';
 
 describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
@@ -148,10 +148,12 @@ describe('SharedTask (WebSocket)', () => {
         }
     });
 
-    test('shared task sends TaskOutputEvent', async () => {
-        const outputs: { taskId: string; output: string }[] = [];
-        const unsubscribe = onTaskOutputEvent(client, (event) => {
-            outputs.push(event);
+    test('shared task sends TaskUpdateEvent', async () => {
+        const outputs: { taskId: string; output?: string }[] = [];
+        const unsubscribe = onTaskUpdateEvent(client, (event) => {
+            if (event.output != null) {
+                outputs.push(event);
+            }
         });
 
         try {
@@ -167,7 +169,7 @@ describe('SharedTask (WebSocket)', () => {
 
             // Should have received output events
             expect(outputs.length).toBeGreaterThanOrEqual(1);
-            expect(outputs.some(o => o.output.includes('X'))).toBe(true);
+            expect(outputs.some(o => o.output?.includes('X'))).toBe(true);
         } finally {
             unsubscribe();
         }

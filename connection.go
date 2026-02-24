@@ -203,8 +203,8 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 	msg := ProgressMessage{
 		Type:    TypeProgress,
 		ID:      id,
-		Current: current,
-		Total:   total,
+		Current: &current,
+		Total:   &total,
 		Message: message,
 	}
 	c.sendJSON(msg)

@@ -70,7 +70,7 @@ export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
     onTaskProgress?: (tasks: TaskNode[]) => void;
-    onOutput?: (output: string) => void;
+    onOutput?: (output: string, taskId?: string) => void;
 }
 {{- if .HasTasks}}
 
@@ -305,7 +305,7 @@ export class ApiClient {
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
         onTaskProgress?: (tasks: TaskNode[]) => void;
-        onOutput?: (output: string) => void;
+        onOutput?: (output: string, taskId?: string) => void;
     }>();
     private buffer: Array<{
         method: string;
@@ -511,11 +511,11 @@ export class ApiClient {
                     if (msg.tasks && p.onTaskProgress) {
                         p.onTaskProgress(msg.tasks);
                     }
-                    if (msg.output && p.onOutput) {
-                        p.onOutput(msg.output);
+                    if (msg.output != null && p.onOutput) {
+                        p.onOutput(msg.output, msg.taskId);
                     }
-                    if (p.onProgress && (msg.current || msg.total || msg.message)) {
-                        p.onProgress(msg.current, msg.total, msg.message);
+                    if (p.onProgress && (msg.current != null || msg.total != null || msg.message)) {
+                        p.onProgress(msg.current ?? 0, msg.total ?? 0, msg.message ?? '');
                     }
                 }
                 break;

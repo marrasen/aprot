@@ -33,7 +33,16 @@ func (p *progressReporter) updateTasks(tasks []*TaskNode) {
 	p.conn.sendJSON(msg)
 }
 
-func (p *progressReporter) sendOutput(output string) {
-	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Output: output}
+// sendNodeUpdate sends a targeted per-node update (output and/or progress)
+// for a specific task node within this request.
+func (p *progressReporter) sendNodeUpdate(taskID string, output *string, current, total *int) {
+	msg := ProgressMessage{
+		Type:    TypeProgress,
+		ID:      p.requestID,
+		TaskID:  taskID,
+		Output:  output,
+		Current: current,
+		Total:   total,
+	}
 	p.conn.sendJSON(msg)
 }

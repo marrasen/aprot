@@ -355,14 +355,14 @@ func (r *Registry) Enums() []EnumInfo {
 }
 
 // EnableTasks enables the shared task system.
-// It registers a CancelTask handler and the TaskStateEvent and TaskOutputEvent
+// It registers a CancelTask handler and the TaskStateEvent and TaskUpdateEvent
 // push events. Call this before creating the Server.
 func (r *Registry) EnableTasks() {
 	r.tasksEnabled = true
 	handler := &taskCancelHandler{}
 	r.Register(handler)
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
-	r.RegisterPushEventFor(handler, TaskOutputEvent{})
+	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
 }
 
 // EnableTasksWithMeta enables the shared task system with a typed metadata struct.

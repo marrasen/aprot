@@ -12,10 +12,14 @@ type TaskStateEvent struct {
 	Tasks []SharedTaskState `json:"tasks"`
 }
 
-// TaskOutputEvent is the push event for shared task output lines.
-type TaskOutputEvent struct {
-	TaskID string `json:"taskId"`
-	Output string `json:"output"`
+// TaskUpdateEvent is the push event for per-node output and progress updates
+// on shared tasks. It replaces the former TaskOutputEvent with additional
+// progress fields.
+type TaskUpdateEvent struct {
+	TaskID  string  `json:"taskId"`
+	Output  *string `json:"output,omitempty"`
+	Current *int    `json:"current,omitempty"`
+	Total   *int    `json:"total,omitempty"`
 }
 
 // SharedTaskState is the wire representation of a shared task.
@@ -67,7 +71,7 @@ func (t *sharedTaskCore) progress(current, total int) {
 	t.current = current
 	t.total = total
 	t.mu.Unlock()
-	t.manager.markDirty(t.id)
+	t.manager.sendUpdate(t.id, nil, &current, &total)
 }
 
 func (t *sharedTaskCore) setMeta(v any) {
@@ -78,7 +82,7 @@ func (t *sharedTaskCore) setMeta(v any) {
 }
 
 func (t *sharedTaskCore) output(msg string) {
-	t.manager.sendOutput(t.id, msg)
+	t.manager.sendUpdate(t.id, &msg, nil, nil)
 }
 
 func (t *sharedTaskCore) closeTask() {
@@ -269,11 +273,12 @@ func (s *SharedTaskSub[M]) Progress(current, total int) {
 	s.node.current = current
 	s.node.total = total
 	s.node.mu.Unlock()
-	s.core.manager.markDirty(s.core.id)
+	s.core.manager.sendUpdate(s.node.id, nil, &current, &total)
 }
 
-// sharedContext is propagated through the context to bridge SubTask with the shared task system.
-// When SubTask detects it, it creates mirrored shared task nodes.
+// sharedContext is propagated through the context to route task operations
+// through the shared task system. When present, SubTask, Output, TaskProgress
+// etc. use the shared path (broadcast) instead of the request-scoped path.
 type sharedContext struct {
 	core *sharedTaskCore
 	node *sharedTaskNode // nil = at core level
@@ -397,11 +402,14 @@ func (tm *taskManager) markDirty(id string) {
 	tm.mu.Unlock()
 }
 
-// sendOutput broadcasts a task output event immediately.
-func (tm *taskManager) sendOutput(taskID, output string) {
-	event := TaskOutputEvent{
-		TaskID: taskID,
-		Output: output,
+// sendUpdate broadcasts a per-node update event immediately.
+// Used for output and progress updates on shared task nodes.
+func (tm *taskManager) sendUpdate(taskID string, output *string, current, total *int) {
+	event := TaskUpdateEvent{
+		TaskID:  taskID,
+		Output:  output,
+		Current: current,
+		Total:   total,
 	}
 	tm.server.Broadcast(event)
 }
@@ -494,8 +502,8 @@ func (tm *taskManager) stop() {
 
 // StartSharedTask creates a new shared task visible to all clients.
 // The returned context carries the shared task so that SubTask, Output,
-// and TaskProgress calls on it automatically create mirrored nodes in
-// the shared task system (dual-send to the requesting client and broadcast).
+// and TaskProgress calls on it route through the shared task system
+// (broadcast to all clients via push events).
 //
 // The task uses the provided context for cancellation. If the client
 // disconnects and the request context is canceled, the task is canceled too.
@@ -526,15 +534,11 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 }
 
 // SharedSubTask bridges the request-scoped (SubTask) and shared task systems.
-// It creates a node in the request-scoped task tree (progress to the requester)
-// AND in the shared task system (broadcast to all clients).
+// When a sharedContext already exists on ctx, it delegates to SubTask which
+// routes through the shared task system.
 //
-// If a sharedContext already exists on ctx (e.g. from a parent SharedSubTask or
-// SharedTask.WithContext), it delegates to SubTask which handles dual-send.
-//
-// Otherwise, it creates a new sharedTaskCore (top-level shared task), attaches
-// a sharedContext to the context, runs fn, and then closes or fails the core
-// on return.
+// Otherwise, it creates a new sharedTaskCore, attaches a sharedContext to the
+// context, runs fn, and then closes or fails the core on return.
 //
 // If no connection or taskManager is available, it falls back to SubTask.
 func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Context) error) error {
