@@ -17,6 +17,15 @@ const (
 	TaskNodeStatusFailed    TaskNodeStatus = "failed"
 )
 
+// TaskNodeStatusValues returns all possible TaskNodeStatus values.
+func TaskNodeStatusValues() []TaskNodeStatus {
+	return []TaskNodeStatus{
+		TaskNodeStatusRunning,
+		TaskNodeStatusCompleted,
+		TaskNodeStatusFailed,
+	}
+}
+
 // TaskNode is the JSON-serializable snapshot of a task sent to the client.
 type TaskNode struct {
 	ID       string         `json:"id"`

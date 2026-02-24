@@ -359,6 +359,7 @@ func (r *Registry) Enums() []EnumInfo {
 // push events. Call this before creating the Server.
 func (r *Registry) EnableTasks() {
 	r.tasksEnabled = true
+	r.RegisterEnum(TaskNodeStatusValues())
 	handler := &taskCancelHandler{}
 	r.Register(handler)
 	r.RegisterPushEventFor(handler, TaskStateEvent{})

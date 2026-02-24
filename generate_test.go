@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1076,9 +1077,24 @@ func TestGenerateTaskNodeInterface(t *testing.T) {
 
 	output := buf.String()
 
+	// TaskNodeStatus enum should always be present
+	if !strings.Contains(output, "export const TaskNodeStatus = {") {
+		t.Error("Missing TaskNodeStatus enum const")
+	}
+	if !strings.Contains(output, "export type TaskNodeStatusType") {
+		t.Error("Missing TaskNodeStatusType type")
+	}
+
 	// TaskNode should always be present (used by SubTask progress)
 	if !strings.Contains(output, "export interface TaskNode") {
 		t.Error("Missing TaskNode interface")
+	}
+	// TaskNode.status should use the enum type, not a hardcoded union
+	if !strings.Contains(output, "status: TaskNodeStatusType") {
+		t.Error("TaskNode.status should use TaskNodeStatusType")
+	}
+	if strings.Contains(output, "'running' | 'completed' | 'failed'") {
+		t.Error("Should not have hardcoded status union — use TaskNodeStatusType instead")
 	}
 	if !strings.Contains(output, "onTaskProgress?: (tasks: TaskNode[]) => void") {
 		t.Error("Missing onTaskProgress in RequestOptions")
@@ -1115,6 +1131,17 @@ func TestGenerateWithTasks(t *testing.T) {
 
 	output := buf.String()
 
+	// TaskNodeStatus enum
+	if !strings.Contains(output, "export const TaskNodeStatus = {") {
+		t.Error("Missing TaskNodeStatus enum const")
+	}
+	if !strings.Contains(output, "export type TaskNodeStatusType") {
+		t.Error("Missing TaskNodeStatusType type")
+	}
+	if strings.Contains(output, "'running' | 'completed' | 'failed'") {
+		t.Error("Should not have hardcoded status union — use TaskNodeStatusType instead")
+	}
+
 	// TaskNode always present
 	if !strings.Contains(output, "export interface TaskNode") {
 		t.Error("Missing TaskNode interface")
@@ -1129,6 +1156,11 @@ func TestGenerateWithTasks(t *testing.T) {
 	}
 	if !strings.Contains(output, "cancelSharedTask") {
 		t.Error("Missing cancelSharedTask function")
+	}
+
+	// TaskNodeStatus should NOT appear as a duplicated enum in the handler section
+	if strings.Count(output, "export const TaskNodeStatus") > 1 {
+		t.Error("TaskNodeStatus should only appear once (in the types block), not duplicated")
 	}
 }
 
@@ -1149,6 +1181,17 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 		t.Fatalf("Expected client.ts, got files: %v", mapKeys(files))
 	}
 
+	// TaskNodeStatus enum in base client
+	if !strings.Contains(baseContent, "export const TaskNodeStatus = {") {
+		t.Error("Missing TaskNodeStatus enum const in client.ts")
+	}
+	if !strings.Contains(baseContent, "export type TaskNodeStatusType") {
+		t.Error("Missing TaskNodeStatusType type in client.ts")
+	}
+	if strings.Contains(baseContent, "'running' | 'completed' | 'failed'") {
+		t.Error("Should not have hardcoded status union in client.ts")
+	}
+
 	if !strings.Contains(baseContent, "export interface SharedTaskState") {
 		t.Error("Missing SharedTaskState in client.ts")
 	}
@@ -1158,6 +1201,7 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 	if !strings.Contains(baseContent, "cancelSharedTask") {
 		t.Error("Missing cancelSharedTask in client.ts")
 	}
+
 }
 
 func TestGenerateWithTasksReact(t *testing.T) {
@@ -1190,6 +1234,17 @@ func TestGenerateWithTasksReact(t *testing.T) {
 	}
 	if !strings.Contains(output, "export function cancelSharedTask") {
 		t.Error("Missing cancelSharedTask function")
+	}
+
+	// TaskNodeStatus enum
+	if !strings.Contains(output, "export const TaskNodeStatus = {") {
+		t.Error("Missing TaskNodeStatus enum const")
+	}
+	if !strings.Contains(output, "export type TaskNodeStatusType") {
+		t.Error("Missing TaskNodeStatusType type")
+	}
+	if strings.Contains(output, "'running' | 'completed' | 'failed'") {
+		t.Error("Should not have hardcoded status union — use TaskNodeStatusType instead")
 	}
 
 	// Shared task types
@@ -1229,6 +1284,13 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 	}
 	if !strings.Contains(baseContent, "cancelSharedTask") {
 		t.Error("Missing cancelSharedTask in client.ts")
+	}
+	// TaskNodeStatus enum in base client
+	if !strings.Contains(baseContent, "export const TaskNodeStatus = {") {
+		t.Error("Missing TaskNodeStatus enum const in client.ts")
+	}
+	if strings.Contains(baseContent, "'running' | 'completed' | 'failed'") {
+		t.Error("Should not have hardcoded status union in client.ts")
 	}
 }
 
@@ -1324,6 +1386,22 @@ func TestGenerateWithoutMetaNoMetaField(t *testing.T) {
 	}
 	if strings.Contains(output, "export interface TaskMeta") {
 		t.Error("Should not have TaskMeta interface without EnableTasksWithMeta")
+	}
+}
+
+func TestEnableTasksRegistersEnum(t *testing.T) {
+	registry := NewRegistry()
+	registry.EnableTasks()
+
+	enumInfo := registry.GetEnum(reflect.TypeOf(TaskNodeStatus("")))
+	if enumInfo == nil {
+		t.Fatal("EnableTasks() should register TaskNodeStatus as an enum")
+	}
+	if enumInfo.Name != "TaskNodeStatus" {
+		t.Errorf("Expected enum name TaskNodeStatus, got %s", enumInfo.Name)
+	}
+	if len(enumInfo.Values) != 3 {
+		t.Errorf("Expected 3 enum values, got %d", len(enumInfo.Values))
 	}
 }
 

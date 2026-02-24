@@ -283,6 +283,10 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		}
 	}
 
+	// TaskNodeStatus is rendered in the base types template block,
+	// so remove it from collectedEnums to avoid duplication.
+	delete(g.collectedEnums, reflect.TypeOf(TaskNodeStatus("")))
+
 	// Extract param names from AST
 	paramNames := g.extractAllParamNames()
 
