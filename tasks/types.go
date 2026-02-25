@@ -56,8 +56,3 @@ type SharedTaskState struct {
 type TaskRef struct {
 	TaskID string `json:"taskId"`
 }
-
-// CancelTaskRequest is the request payload for canceling a shared task.
-type CancelTaskRequest struct {
-	TaskID string `json:"taskId"`
-}

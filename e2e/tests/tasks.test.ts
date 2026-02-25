@@ -2,8 +2,8 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
 import { ApiClient } from '../api/client';
 import type { TaskNode } from '../api/client';
-import type { SharedTaskState } from '../api/task-cancel-handler';
-import { onTaskStateEvent, onTaskUpdateEvent } from '../api/task-cancel-handler';
+import type { SharedTaskState } from '../api/tasks-handler';
+import { onTaskStateEvent, onTaskUpdateEvent } from '../api/tasks-handler';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
 import { cancelSharedTask } from '../api/tasks';
 

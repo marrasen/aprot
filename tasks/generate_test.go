@@ -86,7 +86,7 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 	}{
 		{"cancelSharedTask function", "export function cancelSharedTask"},
 		{"import from ./client", "from './client'"},
-		{"import from ./task-cancel-handler", "from './task-cancel-handler'"},
+		{"import from ./tasks-handler", "from './tasks-handler'"},
 	}
 	for _, tc := range mustContain {
 		if !strings.Contains(tasksCode, tc.want) {

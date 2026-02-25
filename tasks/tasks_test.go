@@ -66,7 +66,7 @@ func TestAppendTaskConvenienceCode_SingleFileReact(t *testing.T) {
 func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 	results := map[string]string{
 		"client.ts":              "// base\n",
-		"task-cancel-handler.ts": "// handler\n",
+		"tasks-handler.ts": "// handler\n",
 	}
 	appendTaskConvenienceCode(results, aprot.OutputVanilla, nil)
 
@@ -80,7 +80,7 @@ func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 	if !strings.Contains(tasksCode, "import type { ApiClient } from './client'") {
 		t.Error("missing ApiClient import")
 	}
-	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './task-cancel-handler'") {
+	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler'") {
 		t.Error("missing handler type imports")
 	}
 	if !strings.Contains(tasksCode, "export function cancelSharedTask") {
@@ -98,7 +98,7 @@ func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 func TestAppendTaskConvenienceCode_MultiFileReact(t *testing.T) {
 	results := map[string]string{
 		"client.ts":              "// base\n",
-		"task-cancel-handler.ts": "// handler\n",
+		"tasks-handler.ts": "// handler\n",
 	}
 	appendTaskConvenienceCode(results, aprot.OutputReact, nil)
 

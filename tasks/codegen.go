@@ -38,7 +38,7 @@ type metaFieldData struct {
 
 // appendTaskConvenienceCode generates convenience TypeScript code for the task system.
 func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode, metaType reflect.Type) {
-	_, hasHandlerFile := results["task-cancel-handler.ts"]
+	_, hasHandlerFile := results["tasks-handler.ts"]
 	isMultiFile := hasHandlerFile
 
 	data := taskTemplateData{

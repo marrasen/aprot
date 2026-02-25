@@ -5,15 +5,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ApiClient } from './client';
 import { useApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './task-cancel-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
 {{- else -}}
 import type { ApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './task-cancel-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
 {{- end}}
 
 {{end -}}
 export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
-    return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
+    return client.request<void>('tasksHandler.CancelTask', [taskId]);
 }
 {{- if .IsReact}}
 {{template "react-hooks" .}}

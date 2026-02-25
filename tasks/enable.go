@@ -7,17 +7,17 @@ import (
 	"github.com/marrasen/aprot"
 )
 
-// taskCancelHandler is the handler struct for task cancellation.
-type taskCancelHandler struct{}
+// tasksHandler is the handler struct for client-facing task operations.
+type tasksHandler struct{}
 
-func (h *taskCancelHandler) CancelTask(ctx context.Context, req *CancelTaskRequest) error {
-	return CancelSharedTask(ctx, req.TaskID)
+func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
+	return CancelSharedTask(ctx, taskId)
 }
 
 // Enable registers the shared task system with the registry.
 func Enable(r *aprot.Registry) {
 	r.RegisterEnum(TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
+	handler := &tasksHandler{}
 	r.Register(handler)
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
@@ -42,7 +42,7 @@ func Enable(r *aprot.Registry) {
 func EnableWithMeta[M any](r *aprot.Registry) {
 	metaType := reflect.TypeFor[M]()
 	r.RegisterEnum(TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
+	handler := &tasksHandler{}
 	r.Register(handler)
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
