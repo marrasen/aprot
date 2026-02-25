@@ -16,9 +16,9 @@ func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
 
 // Enable registers the shared task system with the registry.
 func Enable(r *aprot.Registry) {
-	r.RegisterEnum(TaskNodeStatusValues())
 	handler := &tasksHandler{}
 	r.Register(handler)
+	r.RegisterEnumFor(handler, TaskNodeStatusValues())
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
@@ -41,9 +41,9 @@ func Enable(r *aprot.Registry) {
 // EnableWithMeta registers the shared task system with typed metadata.
 func EnableWithMeta[M any](r *aprot.Registry) {
 	metaType := reflect.TypeFor[M]()
-	r.RegisterEnum(TaskNodeStatusValues())
 	handler := &tasksHandler{}
 	r.Register(handler)
+	r.RegisterEnumFor(handler, TaskNodeStatusValues())
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {

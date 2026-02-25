@@ -6,12 +6,12 @@ import "github.com/marrasen/aprot"
 func NewRegistry() *aprot.Registry {
 	registry := aprot.NewRegistry()
 
-	// Register enums
-	registry.RegisterEnum(TaskStatusValues())
-
 	// Register handlers
 	handlers := &Handlers{}
 	registry.Register(handlers)
+
+	// Register enums
+	registry.RegisterEnumFor(handlers, TaskStatusValues())
 
 	// Register push events
 	registry.RegisterPushEventFor(handlers, UserCreatedEvent{})
