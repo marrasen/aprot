@@ -1,85 +1,34 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Build and Test Commands
 
 ```bash
-# Run all tests
 go test ./...
-
-# Run a single test
 go test -run TestName ./...
+```
 
-# Generate TypeScript clients for examples
+### Generate & verify TypeScript clients after template changes
+
+```bash
 cd example/vanilla/tools/generate && go run main.go
 cd example/react/tools/generate && go run main.go
+cd example/react/client && npx tsc --noEmit
+```
 
-# Run vanilla example server
+### Run examples
+
+```bash
+# Vanilla
 cd example/vanilla/server && go run .
 
-# Run react example (needs both server and client)
+# React (both needed)
 cd example/react/server && go run .
 cd example/react/client && npm run dev
 ```
 
-## Architecture Overview
+## Rules
 
-aprot is a Go library that generates type-safe TypeScript WebSocket clients from Go handler structs. The core flow:
-
-1. **Handler Registration** (`handler.go`): Go structs with methods matching `func(ctx, *Req) (*Resp, error)` or `func(ctx, *Req) error` (void) are registered via `Registry.Register()`. Methods are validated via reflection and stored as `HandlerInfo`.
-
-2. **Code Generation** (`generate.go`): `Generator` uses reflection to extract types from registered handlers, converts Go types to TypeScript, and executes embedded templates (`templates/*.tmpl`) to produce client code.
-
-3. **WebSocket Server** (`server.go`, `connection.go`): `Server` manages WebSocket connections via gorilla/websocket. Each connection runs read/write pumps. Incoming messages are dispatched to handlers through the middleware chain.
-
-4. **Protocol** (`protocol.go`): JSON-RPC style messages with types: `request`, `response`, `error`, `progress`, `push`, `ping`, `pong`, `cancel`.
-
-### Key Design Patterns
-
-- **Per-handler middleware**: Middleware is passed to `Register()` and stored per handler group, enabling different auth requirements for different handler structs
-- **Module augmentation**: Generated TypeScript uses `declare module './client'` to extend `ApiClient` with handler-specific methods
-- **Split output**: `Generate()` produces separate files: `client.ts` (base) + `{handler}.ts` per handler group
-
-### Template System
-
-Templates use Go's `text/template` with shared blocks in `_client-common.ts.tmpl`:
-- `error-codes`, `api-error`, `types` - Core TypeScript types
-- `api-client-class` - WebSocket client with auto-reconnect/heartbeat
-- `react-context`, `react-hook-types` - React-specific code
-
-### Type Flow
-
-Go types → `collectType()` extracts struct fields → `goTypeToTS()` maps to TS → Templates render interfaces/methods
-
-Enums: Registered via `RegisterEnum(Values())` → detected in `collectType()` → rendered as `const {...} as const` with companion type
-
-## Important: Always Update README
-
-When adding or changing user-facing features (new types, new API patterns, new options, etc.), **always update `README.md`** to document the change. This is a required step for every feature PR — do not skip it.
-
-## Git Rules
-
-- **Never commit directly to master.** All changes must go through a GitHub issue and pull request. Create a branch, open a PR, and wait for review before merging.
-- **Never force push.** Always create new commits instead of amending + force-pushing. This applies to PR feedback, fixups, and plans — never include `--force`, `--force-with-lease`, or `git push -f` in plans or commands.
-- **Always update PRs and issues.** When pushing changes to a PR branch, update the PR description to reflect the current state. When resolving or adding to a GitHub issue, update the issue body. This keeps the historical record accurate and reviewable.
-
-## Common Patterns
-
-### Adding a new protocol message type
-
-1. Add constant to `protocol.go` (e.g., `TypeFoo`)
-2. Add struct for the message
-3. Handle in `connection.go` `handleMessage()` for incoming, or add send method for outgoing
-4. Update client templates if needed
-
-### Modifying generated TypeScript
-
-1. Edit templates in `templates/` directory
-2. Shared code goes in `_client-common.ts.tmpl` as `{{define "block-name"}}`
-3. **Always** regenerate and verify TypeScript compiles after template changes:
-   ```bash
-   cd example/vanilla/tools/generate && go run main.go
-   cd example/react/tools/generate && go run main.go
-   cd example/react/client && npx tsc --noEmit
-   ```
+- **Never commit directly to master.** Always use a branch + PR.
+- **Never force push.** Always create new commits instead of amending.
+- **Always update PRs and issues** when pushing changes — keep descriptions current.
+- **Always update `README.md`** when adding or changing user-facing features.
