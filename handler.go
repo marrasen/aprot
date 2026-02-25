@@ -75,6 +75,7 @@ type HandlerGroup struct {
 	Name       string
 	Handlers   map[string]*HandlerInfo
 	PushEvents []PushEventInfo
+	Internal   bool // true for built-in groups (e.g., taskCancelHandler)
 	middleware []Middleware
 	sourceDir  string // directory containing handler source files (auto-detected)
 }
@@ -362,6 +363,7 @@ func (r *Registry) EnableTasks() {
 	r.RegisterEnum(TaskNodeStatusValues())
 	handler := &taskCancelHandler{}
 	r.Register(handler)
+	r.groups["taskCancelHandler"].Internal = true
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
 }

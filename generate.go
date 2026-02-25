@@ -219,6 +219,9 @@ func (g *Generator) Generate() (map[string]string, error) {
 	paramNames := g.extractAllParamNames()
 
 	for _, group := range g.registry.Groups() {
+		if group.Internal {
+			continue
+		}
 		g.types = make(map[reflect.Type]string)           // Reset types per group
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo) // Reset enums per group
 
@@ -323,6 +326,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	for _, qualifiedName := range names {
 		info := handlers[qualifiedName]
+		if grp, ok := g.registry.Groups()[info.StructName]; ok && grp.Internal {
+			continue
+		}
 		shortName := info.Name
 		isVoid := info.ResponseType == voidResponseType
 		respType := "void"
@@ -342,6 +348,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	// Build push events from all groups
 	for _, event := range g.registry.PushEvents() {
+		if grp, ok := g.registry.Groups()[event.StructName]; ok && grp.Internal {
+			continue
+		}
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
 			HandlerName: "on" + event.Name,

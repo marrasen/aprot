@@ -1162,6 +1162,32 @@ func TestGenerateWithTasks(t *testing.T) {
 	if strings.Count(output, "export const TaskNodeStatus") > 1 {
 		t.Error("TaskNodeStatus should only appear once (in the types block), not duplicated")
 	}
+
+	// Task push event handlers should be present
+	if !strings.Contains(output, "onTaskStateEvent") {
+		t.Error("Missing onTaskStateEvent function")
+	}
+	if !strings.Contains(output, "onTaskUpdateEvent") {
+		t.Error("Missing onTaskUpdateEvent function")
+	}
+
+	// TaskStateEvent/TaskUpdateEvent interfaces should be present
+	if !strings.Contains(output, "export interface TaskStateEvent") {
+		t.Error("Missing TaskStateEvent interface")
+	}
+	if !strings.Contains(output, "export interface TaskUpdateEvent") {
+		t.Error("Missing TaskUpdateEvent interface")
+	}
+
+	// Internal handler methods should not leak into output
+	if strings.Contains(output, "cancelTask(client") {
+		t.Error("Internal cancelTask method should not appear as a standalone function")
+	}
+
+	// onTaskStateEvent should not be duplicated (once from tasks block is enough)
+	if strings.Count(output, "function onTaskStateEvent") > 1 {
+		t.Error("onTaskStateEvent should only appear once")
+	}
 }
 
 func TestGenerateWithTasksMultiFile(t *testing.T) {
@@ -1202,6 +1228,26 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 		t.Error("Missing cancelSharedTask in client.ts")
 	}
 
+	// Task push event handlers in client.ts
+	if !strings.Contains(baseContent, "onTaskStateEvent") {
+		t.Error("Missing onTaskStateEvent in client.ts")
+	}
+	if !strings.Contains(baseContent, "onTaskUpdateEvent") {
+		t.Error("Missing onTaskUpdateEvent in client.ts")
+	}
+
+	// TaskStateEvent/TaskUpdateEvent interfaces in client.ts
+	if !strings.Contains(baseContent, "export interface TaskStateEvent") {
+		t.Error("Missing TaskStateEvent interface in client.ts")
+	}
+	if !strings.Contains(baseContent, "export interface TaskUpdateEvent") {
+		t.Error("Missing TaskUpdateEvent interface in client.ts")
+	}
+
+	// No task-cancel-handler.ts should be generated
+	if _, exists := files["task-cancel-handler.ts"]; exists {
+		t.Error("task-cancel-handler.ts should not be generated — internal groups should be skipped")
+	}
 }
 
 func TestGenerateWithTasksReact(t *testing.T) {
@@ -1254,6 +1300,22 @@ func TestGenerateWithTasksReact(t *testing.T) {
 	if !strings.Contains(output, "export interface TaskRef") {
 		t.Error("Missing TaskRef interface")
 	}
+
+	// Task push event handlers
+	if !strings.Contains(output, "onTaskStateEvent") {
+		t.Error("Missing onTaskStateEvent function")
+	}
+	if !strings.Contains(output, "onTaskUpdateEvent") {
+		t.Error("Missing onTaskUpdateEvent function")
+	}
+
+	// TaskStateEvent/TaskUpdateEvent interfaces
+	if !strings.Contains(output, "export interface TaskStateEvent") {
+		t.Error("Missing TaskStateEvent interface")
+	}
+	if !strings.Contains(output, "export interface TaskUpdateEvent") {
+		t.Error("Missing TaskUpdateEvent interface")
+	}
 }
 
 func TestGenerateWithTasksReactMultiFile(t *testing.T) {
@@ -1291,6 +1353,19 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 	}
 	if strings.Contains(baseContent, "'running' | 'completed' | 'failed'") {
 		t.Error("Should not have hardcoded status union in client.ts")
+	}
+
+	// Task push event handlers in client.ts
+	if !strings.Contains(baseContent, "onTaskStateEvent") {
+		t.Error("Missing onTaskStateEvent in client.ts")
+	}
+	if !strings.Contains(baseContent, "onTaskUpdateEvent") {
+		t.Error("Missing onTaskUpdateEvent in client.ts")
+	}
+
+	// No task-cancel-handler.ts should be generated
+	if _, exists := files["task-cancel-handler.ts"]; exists {
+		t.Error("task-cancel-handler.ts should not be generated — internal groups should be skipped")
 	}
 }
 

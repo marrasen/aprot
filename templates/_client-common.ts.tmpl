@@ -99,6 +99,17 @@ export interface SharedTaskState {
 export interface TaskRef {
     taskId: string;
 }
+
+export interface TaskStateEvent {
+    tasks: SharedTaskState[];
+}
+
+export interface TaskUpdateEvent {
+    taskId: string;
+    output?: string;
+    current?: number;
+    total?: number;
+}
 {{- end}}
 
 export type PushHandler<T> = (data: T) => void;

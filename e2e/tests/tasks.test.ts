@@ -3,7 +3,7 @@ import { wsUrl } from './helpers';
 import { ApiClient, cancelSharedTask } from '../api/client';
 import type { TaskNode, SharedTaskState } from '../api/client';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
-import { onTaskStateEvent, onTaskUpdateEvent } from '../api/task-cancel-handler';
+import { onTaskStateEvent, onTaskUpdateEvent } from '../api/client';
 
 describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
