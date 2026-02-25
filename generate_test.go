@@ -1616,22 +1616,6 @@ func TestGenerateWithoutMetaHasAnyMetaField(t *testing.T) {
 	}
 }
 
-func TestEnableTasksRegistersEnum(t *testing.T) {
-	registry := NewRegistry()
-	enableTestTasks(registry)
-
-	enumInfo := registry.GetEnum(reflect.TypeOf(TaskNodeStatus("")))
-	if enumInfo == nil {
-		t.Fatal("enableTestTasks should register TaskNodeStatus as an enum")
-	}
-	if enumInfo.Name != "TaskNodeStatus" {
-		t.Errorf("Expected enum name TaskNodeStatus, got %s", enumInfo.Name)
-	}
-	if len(enumInfo.Values) != 4 {
-		t.Errorf("Expected 4 enum values, got %d", len(enumInfo.Values))
-	}
-}
-
 // Handler groups for deterministic push-event test.
 type PushGroupA struct{}
 

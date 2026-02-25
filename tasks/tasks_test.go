@@ -1,10 +1,16 @@
 package tasks
 
 import (
+	"context"
+	"encoding/json"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-json-experiment/json/jsontext"
+	"github.com/gorilla/websocket"
 	"github.com/marrasen/aprot"
 )
 
@@ -180,5 +186,236 @@ func TestAppendTaskConvenienceCode_WithNestedMeta(t *testing.T) {
 	parentIdx := strings.Index(code, "export interface testMetaWithNested")
 	if nestedIdx > parentIdx {
 		t.Error("nested interface should appear before parent")
+	}
+}
+
+// --- Integration tests (moved from aprot package) ---
+
+// Test handler types for WebSocket integration tests.
+type titleRequest struct {
+	Title string `json:"title"`
+}
+
+type testHandlers struct{}
+
+func (h *testHandlers) RunSharedSubTask(ctx context.Context, req *titleRequest) error {
+	return aprot.SharedSubTask(ctx, req.Title, func(ctx context.Context) error {
+		time.Sleep(500 * time.Millisecond)
+		return nil
+	})
+}
+
+func (h *testHandlers) RunStartSharedTask(ctx context.Context, req *titleRequest) (*aprot.TaskRef, error) {
+	_, task := aprot.StartSharedTask[struct{}](ctx, req.Title)
+	time.Sleep(500 * time.Millisecond)
+	return &aprot.TaskRef{TaskID: task.ID()}, nil
+}
+
+func connectWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http")
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	// Read and discard the config message that is sent on connect
+	_, _, err = ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Failed to read config message: %v", err)
+	}
+	return ws
+}
+
+// readFirstTaskIsOwner reads messages from a WebSocket until it finds a TaskStateEvent
+// with at least one task, and returns that task's isOwner value.
+func readFirstTaskIsOwner(ws interface{ ReadMessage() (int, []byte, error) }) *bool {
+	for i := 0; i < 20; i++ {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		if !strings.Contains(string(data), "TaskStateEvent") {
+			continue
+		}
+		var msg struct {
+			Data struct {
+				Tasks []struct {
+					IsOwner bool `json:"isOwner"`
+				} `json:"tasks"`
+			} `json:"data"`
+		}
+		json.Unmarshal(data, &msg)
+		if len(msg.Data.Tasks) > 0 {
+			v := msg.Data.Tasks[0].IsOwner
+			return &v
+		}
+	}
+	return nil
+}
+
+// Test that Enable registers the CancelTask handler and push events.
+func TestEnableRegistersHandler(t *testing.T) {
+	registry := aprot.NewRegistry()
+	Enable(registry)
+
+	_, ok := registry.Get("taskCancelHandler.CancelTask")
+	if !ok {
+		t.Fatal("expected CancelTask handler to be registered")
+	}
+
+	// Check push events
+	events := registry.PushEvents()
+	found := map[string]bool{}
+	for _, e := range events {
+		found[e.Name] = true
+	}
+	if !found["TaskStateEvent"] {
+		t.Error("expected TaskStateEvent push event")
+	}
+	if !found["TaskUpdateEvent"] {
+		t.Error("expected TaskUpdateEvent push event")
+	}
+}
+
+func TestEnableWithMetaRegistersType(t *testing.T) {
+	type TaskMeta struct {
+		UserName string `json:"userName,omitempty"`
+		Error    string `json:"error,omitempty"`
+	}
+
+	registry := aprot.NewRegistry()
+	EnableWithMeta[TaskMeta](registry)
+
+	if !registry.TasksEnabled() {
+		t.Fatal("expected tasks to be enabled")
+	}
+
+	metaType := registry.TaskMetaType()
+	if metaType == nil {
+		t.Fatal("expected non-nil meta type")
+	}
+	if metaType.Name() != "TaskMeta" {
+		t.Errorf("expected meta type name 'TaskMeta', got %s", metaType.Name())
+	}
+	if metaType.NumField() != 2 {
+		t.Errorf("expected 2 fields, got %d", metaType.NumField())
+	}
+}
+
+func TestEnableRegistersEnum(t *testing.T) {
+	registry := aprot.NewRegistry()
+	Enable(registry)
+
+	enumInfo := registry.GetEnum(reflect.TypeOf(aprot.TaskNodeStatus("")))
+	if enumInfo == nil {
+		t.Fatal("Enable should register TaskNodeStatus as an enum")
+	}
+	if enumInfo.Name != "TaskNodeStatus" {
+		t.Errorf("Expected enum name TaskNodeStatus, got %s", enumInfo.Name)
+	}
+	if len(enumInfo.Values) != 4 {
+		t.Errorf("Expected 4 enum values, got %d", len(enumInfo.Values))
+	}
+}
+
+func TestSharedSubTaskIsOwnerAlwaysFalse(t *testing.T) {
+	registry := aprot.NewRegistry()
+	handlers := &testHandlers{}
+	registry.Register(handlers)
+	Enable(registry)
+
+	server := aprot.NewServer(registry)
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws1 := connectWS(t, ts)
+	defer ws1.Close()
+
+	ws2 := connectWS(t, ts)
+	defer ws2.Close()
+
+	// Wait for both connections to be registered.
+	time.Sleep(50 * time.Millisecond)
+
+	// Client 1 calls SharedSubTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := aprot.IncomingMessage{
+		Type:   aprot.TypeRequest,
+		ID:     "1",
+		Method: "testHandlers.RunSharedSubTask",
+		Params: jsontext.Value(`[{"title":"Deploy"}]`),
+	}
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
+
+	if isOwner1 == nil || isOwner2 == nil {
+		t.Fatal("expected both clients to receive TaskStateEvent")
+	}
+
+	// Both should be false — SharedSubTask tasks are not top-level.
+	if *isOwner1 {
+		t.Error("expected isOwner=false for caller (SharedSubTask is not top-level)")
+	}
+	if *isOwner2 {
+		t.Error("expected isOwner=false for observer (SharedSubTask is not top-level)")
+	}
+}
+
+func TestStartSharedTaskIsOwnerTrue(t *testing.T) {
+	registry := aprot.NewRegistry()
+	handlers := &testHandlers{}
+	registry.Register(handlers)
+	Enable(registry)
+
+	server := aprot.NewServer(registry)
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws1 := connectWS(t, ts)
+	defer ws1.Close()
+
+	ws2 := connectWS(t, ts)
+	defer ws2.Close()
+
+	// Wait for both connections to be registered.
+	time.Sleep(50 * time.Millisecond)
+
+	// Client 1 calls StartSharedTask via RPC — the handler sleeps 500ms,
+	// giving the flush loop time to broadcast TaskStateEvent.
+	req := aprot.IncomingMessage{
+		Type:   aprot.TypeRequest,
+		ID:     "1",
+		Method: "testHandlers.RunStartSharedTask",
+		Params: jsontext.Value(`[{"title":"Build"}]`),
+	}
+	if err := ws1.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	ws1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ws2.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	isOwner1 := readFirstTaskIsOwner(ws1)
+	isOwner2 := readFirstTaskIsOwner(ws2)
+
+	if isOwner1 == nil || isOwner2 == nil {
+		t.Fatal("expected both clients to receive TaskStateEvent")
+	}
+
+	// Client 1 (caller) should see isOwner=true, client 2 should see false.
+	if !*isOwner1 {
+		t.Error("expected isOwner=true for caller (StartSharedTask is top-level)")
+	}
+	if *isOwner2 {
+		t.Error("expected isOwner=false for observer")
 	}
 }
