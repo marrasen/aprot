@@ -11,6 +11,13 @@ type noopProgress struct{}
 
 func (p *noopProgress) Update(current, total int, message string) {}
 
+// RequestSender allows external packages to send messages on a request's
+// connection. The tasks package uses this to send progress messages.
+type RequestSender interface {
+	SendJSON(v any) error
+	RequestID() string
+}
+
 // progressReporter sends progress updates for a specific request.
 type progressReporter struct {
 	conn      *Conn
@@ -28,21 +35,12 @@ func (p *progressReporter) Update(current, total int, message string) {
 	p.conn.sendProgress(p.requestID, current, total, message)
 }
 
-func (p *progressReporter) updateTasks(tasks []*TaskNode) {
-	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Tasks: tasks}
-	p.conn.sendJSON(msg)
+// SendJSON implements RequestSender.
+func (p *progressReporter) SendJSON(v any) error {
+	return p.conn.sendJSON(v)
 }
 
-// sendNodeUpdate sends a targeted per-node update (output and/or progress)
-// for a specific task node within this request.
-func (p *progressReporter) sendNodeUpdate(taskID string, output *string, current, total *int) {
-	msg := ProgressMessage{
-		Type:    TypeProgress,
-		ID:      p.requestID,
-		TaskID:  taskID,
-		Output:  output,
-		Current: current,
-		Total:   total,
-	}
-	p.conn.sendJSON(msg)
+// RequestID implements RequestSender.
+func (p *progressReporter) RequestID() string {
+	return p.requestID
 }

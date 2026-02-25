@@ -147,6 +147,13 @@ func newConn(t transport, server *Server, id uint64, r *http.Request, ctx contex
 	}
 }
 
+// ServerBroadcaster returns the server as a Broadcaster.
+// This allows external packages to broadcast push events without
+// exposing the *Server type directly.
+func (c *Conn) ServerBroadcaster() Broadcaster {
+	return c.server
+}
+
 // Push sends a push message to this connection.
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
@@ -279,18 +286,10 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	progress := newProgressReporter(c, msg.ID)
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
-
-	// Add task tree to context (zero-cost until SubTask is called)
-	tree := newTaskTree(progress)
-	ctx = withTaskTree(ctx, tree)
+	ctx = withRequestSender(ctx, progress)
 
 	// Add handler info to context for middleware
 	ctx = withHandlerInfo(ctx, info)
-
-	// Add task slot so StartTask/StartSharedTask can deposit a reference
-	// for auto-lifecycle management after the handler returns.
-	slot := &taskSlot{}
-	ctx = withTaskSlot(ctx, slot)
 
 	// Create request object for middleware
 	req := &Request{
@@ -300,12 +299,19 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 	ctx = withRequest(ctx, req)
 
+	// Run BeforeRequest interceptors
+	for _, interceptor := range c.server.interceptors {
+		ctx = interceptor.BeforeRequest(ctx)
+	}
+
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
 	result, err := handler(ctx, req)
 
-	// Auto-manage inline task lifecycle.
-	c.finalizeTaskSlot(slot, ctx, err)
+	// Run AfterRequest interceptors (reverse order)
+	for i := len(c.server.interceptors) - 1; i >= 0; i-- {
+		c.server.interceptors[i].AfterRequest(ctx, err)
+	}
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {
@@ -325,35 +331,6 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 
 	c.sendResponse(msg.ID, result)
-}
-
-// finalizeTaskSlot auto-manages the lifecycle of inline tasks created by
-// StartTask or StartSharedTask during a handler call.
-func (c *Conn) finalizeTaskSlot(slot *taskSlot, ctx context.Context, handlerErr error) {
-	canceled := ctx.Err() != nil
-
-	// Finalize shared task.
-	if core := slot.sharedCore; core != nil {
-		if handlerErr != nil {
-			core.fail(handlerErr.Error())
-		} else if canceled {
-			core.fail("canceled")
-		} else {
-			core.closeTask()
-		}
-	}
-
-	// Finalize request-scoped task.
-	if node := slot.taskNode; node != nil {
-		if handlerErr != nil {
-			node.setFailed(handlerErr.Error())
-		} else if canceled {
-			node.setFailed("canceled")
-		} else {
-			node.setStatus(TaskNodeStatusCompleted)
-		}
-		node.tree.send()
-	}
 }
 
 func (c *Conn) close() {

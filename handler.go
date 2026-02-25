@@ -96,9 +96,8 @@ type Registry struct {
 	nextErrorCode  int                           // auto-incrementing error code
 	enums          []EnumInfo                    // registered enum types
 	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
-	tasksEnabled   bool                          // true when SetTasksEnabled(true) has been called
-	taskMetaType   reflect.Type                  // nil when tasks used without meta
 	generateHooks  []func(results map[string]string, mode OutputMode) // hooks run after generation
+	serverInitHooks []func(s *Server)            // hooks run during NewServer
 }
 
 // NewRegistry creates a new handler registry.
@@ -355,17 +354,6 @@ func (r *Registry) Enums() []EnumInfo {
 	return r.enums
 }
 
-// SetTasksEnabled marks the registry for shared task runtime support.
-// When true, NewServer creates a taskManager and OnConnect hook.
-func (r *Registry) SetTasksEnabled(enabled bool) {
-	r.tasksEnabled = enabled
-}
-
-// SetTaskMetaType sets the typed metadata type for shared tasks.
-func (r *Registry) SetTaskMetaType(t reflect.Type) {
-	r.taskMetaType = t
-}
-
 // OnGenerate registers a hook called after code generation.
 // The hook receives the results map (filename → content) and the output mode.
 // Hooks can modify existing entries or add new files.
@@ -373,14 +361,11 @@ func (r *Registry) OnGenerate(hook func(results map[string]string, mode OutputMo
 	r.generateHooks = append(r.generateHooks, hook)
 }
 
-// TaskMetaType returns the registered meta type, or nil if tasks are used without meta.
-func (r *Registry) TaskMetaType() reflect.Type {
-	return r.taskMetaType
-}
-
-// TasksEnabled returns whether the shared task system is enabled.
-func (r *Registry) TasksEnabled() bool {
-	return r.tasksEnabled
+// OnServerInit registers a hook called during NewServer after the server is
+// constructed but before the run loop starts. This lets subpackages like
+// tasks/ defer server-side setup to server creation time.
+func (r *Registry) OnServerInit(hook func(s *Server)) {
+	r.serverInitHooks = append(r.serverInitHooks, hook)
 }
 
 // GenerateHooks returns the registered generation hooks.

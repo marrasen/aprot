@@ -58,16 +58,17 @@ type Server struct {
 	register        chan *Conn
 	unregister      chan *Conn
 	middleware      []Middleware
+	interceptors    []RequestInterceptor
 	nextConnID      uint64 // atomic counter for connection IDs
 	options         ServerOptions
 	connectHooks    []ConnectHook
 	disconnectHooks []DisconnectHook
+	stopHooks       []func()
 	stopping        atomic.Bool   // reject new connections when set
 	stopCh          chan struct{} // closed by Stop() to signal run() to drain and exit
 	stopOnce        sync.Once    // ensures stopCh is closed only once
 	done            chan struct{} // closed by run() when it finishes
 	requestsWg      sync.WaitGroup
-	taskManager     *taskManager  // nil unless EnableTasks() was called
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -110,16 +111,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		stopCh:     make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-	if registry.tasksEnabled {
-		s.taskManager = newTaskManager(s)
-		s.OnConnect(func(ctx context.Context, conn *Conn) error {
-			// Push current shared task state to newly connected clients.
-			states := s.taskManager.snapshotAllForConn(conn.ID())
-			if len(states) > 0 {
-				conn.Push(TaskStateEvent{Tasks: states})
-			}
-			return nil
-		})
+	// Run OnServerInit hooks (used by tasks/ to set up taskManager, interceptors, etc.)
+	for _, hook := range registry.serverInitHooks {
+		hook(s)
 	}
 
 	go s.run()
@@ -144,6 +138,30 @@ func (s *Server) OnConnect(hook ConnectHook) {
 // The connection's UserID is still available when the hook is called.
 func (s *Server) OnDisconnect(hook DisconnectHook) {
 	s.disconnectHooks = append(s.disconnectHooks, hook)
+}
+
+// AddInterceptor registers a request interceptor.
+// Interceptors are called in order for BeforeRequest and in reverse order
+// for AfterRequest.
+func (s *Server) AddInterceptor(i RequestInterceptor) {
+	s.interceptors = append(s.interceptors, i)
+}
+
+// OnStop registers a hook called during Server.Stop after in-flight requests
+// drain. Used by the tasks package to shut down the taskManager.
+func (s *Server) OnStop(hook func()) {
+	s.stopHooks = append(s.stopHooks, hook)
+}
+
+// ForEachConn iterates over all active connections under a read lock.
+// The callback must not block or call methods that acquire the server's
+// write lock.
+func (s *Server) ForEachConn(fn func(conn *Conn)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for conn := range s.conns {
+		fn(conn)
+	}
 }
 
 // runConnectHooks executes all connect hooks in order.
@@ -377,9 +395,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	// Stop task manager if enabled
-	if s.taskManager != nil {
-		s.taskManager.stop()
+	// Run OnStop hooks
+	for _, hook := range s.stopHooks {
+		hook()
 	}
 
 	// Signal run() to exit

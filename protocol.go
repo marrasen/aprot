@@ -58,7 +58,7 @@ type ProgressMessage struct {
 	Current *int        `json:"current,omitempty"`
 	Total   *int        `json:"total,omitempty"`
 	Message string      `json:"message,omitempty"`
-	Tasks   []*TaskNode `json:"tasks,omitempty"`
+	Tasks   any         `json:"tasks,omitempty"`
 	Output  *string     `json:"output,omitempty"`
 }
 
