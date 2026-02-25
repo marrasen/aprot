@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
+	"github.com/marrasen/aprot/tasks"
 )
 
 // Broadcaster is an interface for broadcasting push events to all clients.
@@ -116,7 +117,7 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 			// Push current shared task state to newly connected clients.
 			states := s.taskManager.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {
-				conn.Push(TaskStateEvent{Tasks: states})
+				conn.Push(tasks.TaskStateEvent{Tasks: states})
 			}
 			return nil
 		})

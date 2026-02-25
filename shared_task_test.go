@@ -10,13 +10,14 @@ import (
 
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"github.com/marrasen/aprot/tasks"
 )
 
 func TestSharedTaskBasic(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -40,7 +41,7 @@ func TestSharedTaskBasic(t *testing.T) {
 	if states[0].Title != "Build project" {
 		t.Errorf("expected 'Build project', got %s", states[0].Title)
 	}
-	if states[0].Status != TaskNodeStatusCreated {
+	if states[0].Status != tasks.TaskNodeStatusCreated {
 		t.Errorf("expected created status, got %s", states[0].Status)
 	}
 
@@ -58,7 +59,7 @@ func TestSharedTaskProgress(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -81,7 +82,7 @@ func TestSharedTaskSubTask(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -105,7 +106,7 @@ func TestSharedTaskSubTask(t *testing.T) {
 	if child.Title != "Build image" {
 		t.Errorf("expected 'Build image', got %s", child.Title)
 	}
-	if child.Status != TaskNodeStatusCompleted {
+	if child.Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed, got %s", child.Status)
 	}
 	if child.Current != 1 || child.Total != 3 {
@@ -119,7 +120,7 @@ func TestSharedTaskCancel(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -137,7 +138,7 @@ func TestSharedTaskCancel(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(states))
 	}
-	if states[0].Status != TaskNodeStatusFailed {
+	if states[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed status, got %s", states[0].Status)
 	}
 
@@ -153,7 +154,7 @@ func TestSharedTaskCancelNonExistent(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -168,7 +169,7 @@ func TestSharedTaskBatchBroadcast(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -201,7 +202,7 @@ func TestSharedTaskFail(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -216,7 +217,7 @@ func TestSharedTaskFail(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(states))
 	}
-	if states[0].Status != TaskNodeStatusFailed {
+	if states[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed status, got %s", states[0].Status)
 	}
 	if states[0].Error != "something went wrong" {
@@ -228,7 +229,7 @@ func TestSharedTaskErr(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -244,7 +245,7 @@ func TestSharedTaskErr(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(states))
 	}
-	if states[0].Status != TaskNodeStatusCompleted {
+	if states[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed, got %s", states[0].Status)
 	}
 	if states[0].Error != "" {
@@ -263,7 +264,7 @@ func TestSharedTaskErr(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(states))
 	}
-	if states[0].Status != TaskNodeStatusFailed {
+	if states[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed, got %s", states[0].Status)
 	}
 	if states[0].Error != "deploy failed" {
@@ -275,7 +276,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -292,7 +293,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 	if len(states[0].Children) != 1 {
 		t.Fatalf("expected 1 child, got %d", len(states[0].Children))
 	}
-	if states[0].Children[0].Status != TaskNodeStatusCompleted {
+	if states[0].Children[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed, got %s", states[0].Children[0].Status)
 	}
 	if states[0].Children[0].Error != "" {
@@ -308,7 +309,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 		t.Fatalf("expected 2 children, got %d", len(states[0].Children))
 	}
 	// Find the failed child.
-	var failed *TaskNode
+	var failed *tasks.TaskNode
 	for _, child := range states[0].Children {
 		if child.Title == "Sub Fail" {
 			failed = child
@@ -317,7 +318,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 	if failed == nil {
 		t.Fatal("expected to find 'Sub Fail' child")
 	}
-	if failed.Status != TaskNodeStatusFailed {
+	if failed.Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed, got %s", failed.Status)
 	}
 	if failed.Error != "step failed" {
@@ -332,7 +333,7 @@ func TestEnableTasksRegistersHandler(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	_, ok := registry.Get("taskCancelHandler.CancelTask")
 	if !ok {
@@ -359,7 +360,7 @@ func TestSharedTaskBroadcastOverWebSocket(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -407,7 +408,7 @@ func TestSharedTaskPushOnConnect(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -452,7 +453,7 @@ func TestSharedTaskSetMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -486,7 +487,7 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -519,7 +520,7 @@ func TestSharedTaskSubSubTask(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -551,7 +552,7 @@ func TestSharedTaskSubSubTask(t *testing.T) {
 	if gc.Title != "Level 2" {
 		t.Errorf("expected 'Level 2', got %s", gc.Title)
 	}
-	if gc.Status != TaskNodeStatusCompleted {
+	if gc.Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed, got %s", gc.Status)
 	}
 
@@ -567,7 +568,7 @@ func setupSharedSubTaskEnv(t *testing.T) (context.Context, *taskTree, *taskManag
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	t.Cleanup(func() { server.Stop(context.Background()) })
@@ -617,7 +618,7 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 	if states[0].Children[0].Title != "Step A" {
 		t.Errorf("expected shared child 'Step A', got %s", states[0].Children[0].Title)
 	}
-	if states[0].Children[0].Status != TaskNodeStatusCompleted {
+	if states[0].Children[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected shared child completed, got %s", states[0].Children[0].Status)
 	}
 
@@ -739,7 +740,7 @@ func TestSubTaskWithSharedContextError(t *testing.T) {
 	if len(states[0].Children) != 1 {
 		t.Fatalf("expected 1 shared child, got %d", len(states[0].Children))
 	}
-	if states[0].Children[0].Status != TaskNodeStatusFailed {
+	if states[0].Children[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected shared child failed, got %s", states[0].Children[0].Status)
 	}
 
@@ -809,7 +810,7 @@ func TestSharedSubTaskErrorPropagation(t *testing.T) {
 	if len(states) != 1 {
 		t.Fatalf("expected 1 shared task, got %d", len(states))
 	}
-	if states[0].Status != TaskNodeStatusFailed {
+	if states[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed, got %s", states[0].Status)
 	}
 
@@ -826,7 +827,7 @@ func TestSharedSubTaskWithoutTaskTree(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -882,7 +883,7 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -928,7 +929,7 @@ func TestSharedTaskWithContextAndSubTask(t *testing.T) {
 	for _, child := range states[0].Children {
 		if child.Title == "Step in goroutine" {
 			found = true
-			if child.Status != TaskNodeStatusCompleted {
+			if child.Status != tasks.TaskNodeStatusCompleted {
 				t.Errorf("expected completed, got %s", child.Status)
 			}
 		}
@@ -944,7 +945,7 @@ func TestOutputSharedContextRoutesExclusively(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -989,7 +990,7 @@ func TestSharedTaskNodeSubTaskRefactor(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -1023,7 +1024,7 @@ func TestSharedTaskNodeSubTaskRefactor(t *testing.T) {
 	if len(l3) != 1 || l3[0].Title != "L3" {
 		t.Fatalf("expected L3, got %+v", l3)
 	}
-	if l3[0].Status != TaskNodeStatusCompleted {
+	if l3[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected L3 completed, got %s", l3[0].Status)
 	}
 
@@ -1034,7 +1035,7 @@ func TestSharedTaskSnapshotForConn(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -1067,7 +1068,7 @@ func TestSharedTaskSnapshotAllForConn(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	defer server.Stop(context.Background())
@@ -1118,7 +1119,7 @@ func TestSharedTaskIsOwnerBroadcast(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -1207,7 +1208,7 @@ func TestSharedTaskPushOnConnectIsOwner(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -1290,7 +1291,7 @@ func TestSharedSubTaskIsOwnerAlwaysFalse(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -1343,7 +1344,7 @@ func TestStartSharedTaskIsOwnerTrue(t *testing.T) {
 	handlers := &IntegrationHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasks(registry)
+	EnableTasks(registry)
 
 	server := NewServer(registry)
 	handlers.server = server
@@ -1400,7 +1401,7 @@ func TestEnableTasksWithMeta(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&IntegrationHandlers{})
 	registry.RegisterPushEventFor(&IntegrationHandlers{}, NotificationEvent{})
-	enableTestTasksWithMeta[TaskMeta](registry)
+	EnableTasksWithMeta[TaskMeta](registry)
 
 	if !registry.TasksEnabled() {
 		t.Fatal("expected tasks to be enabled")

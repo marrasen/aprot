@@ -5,54 +5,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/marrasen/aprot/tasks"
 )
-
-// TaskStateEvent is the push event broadcast to all clients when shared tasks change.
-type TaskStateEvent struct {
-	Tasks []SharedTaskState `json:"tasks"`
-}
-
-// TaskUpdateEvent is the push event for per-node output and progress updates
-// on shared tasks. It replaces the former TaskOutputEvent with additional
-// progress fields.
-type TaskUpdateEvent struct {
-	TaskID  string  `json:"taskId"`
-	Output  *string `json:"output,omitempty"`
-	Current *int    `json:"current,omitempty"`
-	Total   *int    `json:"total,omitempty"`
-}
-
-// SharedTaskState is the wire representation of a shared task.
-type SharedTaskState struct {
-	ID       string         `json:"id"`
-	ParentID string         `json:"parentId,omitempty"`
-	Title    string         `json:"title"`
-	Status   TaskNodeStatus `json:"status"`
-	Error    string         `json:"error,omitempty"`
-	Current  int            `json:"current,omitempty"`
-	Total    int            `json:"total,omitempty"`
-	Meta     any            `json:"meta,omitempty"`
-	Children []*TaskNode    `json:"children,omitempty"`
-	IsOwner  bool           `json:"isOwner"`
-}
-
-// TaskRef is the reference returned to the client from a handler
-// when a shared task is created.
-type TaskRef struct {
-	TaskID string `json:"taskId"`
-}
-
-// CancelTaskRequest is the request payload for canceling a shared task.
-type CancelTaskRequest struct {
-	TaskID string `json:"taskId"`
-}
 
 // sharedTaskCore is the internal, non-generic core of a shared task.
 // It is stored by taskManager and holds all mutable state.
 type sharedTaskCore struct {
 	id          string
 	title       string
-	status      TaskNodeStatus
+	status      tasks.TaskNodeStatus
 	error       string
 	current     int
 	total       int
@@ -87,11 +49,11 @@ func (t *sharedTaskCore) output(msg string) {
 
 func (t *sharedTaskCore) closeTask() {
 	t.mu.Lock()
-	if t.status != TaskNodeStatusRunning && t.status != TaskNodeStatusCreated {
+	if t.status != tasks.TaskNodeStatusRunning && t.status != tasks.TaskNodeStatusCreated {
 		t.mu.Unlock()
 		return
 	}
-	t.status = TaskNodeStatusCompleted
+	t.status = tasks.TaskNodeStatusCompleted
 	t.mu.Unlock()
 	t.cancel()
 	t.manager.markDirty(t.id)
@@ -104,11 +66,11 @@ func (t *sharedTaskCore) closeTask() {
 
 func (t *sharedTaskCore) fail(msg string) {
 	t.mu.Lock()
-	if t.status != TaskNodeStatusRunning && t.status != TaskNodeStatusCreated {
+	if t.status != tasks.TaskNodeStatusRunning && t.status != tasks.TaskNodeStatusCreated {
 		t.mu.Unlock()
 		return
 	}
-	t.status = TaskNodeStatusFailed
+	t.status = tasks.TaskNodeStatusFailed
 	t.error = msg
 	t.mu.Unlock()
 	t.cancel()
@@ -123,23 +85,23 @@ func (t *sharedTaskCore) subTask(title string) *sharedTaskNode {
 	child := &sharedTaskNode{
 		id:     t.manager.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 	}
 	t.mu.Lock()
 	t.children = append(t.children, child)
 	t.mu.Unlock()
 	t.manager.markDirty(t.id)
 	child.mu.Lock()
-	child.status = TaskNodeStatusRunning
+	child.status = tasks.TaskNodeStatusRunning
 	child.mu.Unlock()
 	t.manager.markDirty(t.id)
 	return child
 }
 
-func (t *sharedTaskCore) snapshot() SharedTaskState {
+func (t *sharedTaskCore) snapshot() tasks.SharedTaskState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	state := SharedTaskState{
+	state := tasks.SharedTaskState{
 		ID:      t.id,
 		Title:   t.title,
 		Status:  t.status,
@@ -154,7 +116,7 @@ func (t *sharedTaskCore) snapshot() SharedTaskState {
 	return state
 }
 
-func (t *sharedTaskCore) snapshotForConn(connID uint64) SharedTaskState {
+func (t *sharedTaskCore) snapshotForConn(connID uint64) tasks.SharedTaskState {
 	state := t.snapshot()
 	state.IsOwner = t.topLevel && (t.ownerConnID == connID)
 	return state
@@ -234,7 +196,7 @@ type SharedTaskSub[M any] struct {
 // Complete marks this sub-task as completed.
 func (s *SharedTaskSub[M]) Complete() {
 	s.node.mu.Lock()
-	s.node.status = TaskNodeStatusCompleted
+	s.node.status = tasks.TaskNodeStatusCompleted
 	s.node.mu.Unlock()
 	s.core.manager.markDirty(s.core.id)
 }
@@ -242,7 +204,7 @@ func (s *SharedTaskSub[M]) Complete() {
 // Fail marks this sub-task as failed with the given error message.
 func (s *SharedTaskSub[M]) Fail(message string) {
 	s.node.mu.Lock()
-	s.node.status = TaskNodeStatusFailed
+	s.node.status = tasks.TaskNodeStatusFailed
 	s.node.error = message
 	s.node.mu.Unlock()
 	s.core.manager.markDirty(s.core.id)
@@ -292,7 +254,7 @@ type sharedContext struct {
 type sharedTaskNode struct {
 	id       string
 	title    string
-	status   TaskNodeStatus
+	status   tasks.TaskNodeStatus
 	error    string
 	current  int
 	total    int
@@ -305,23 +267,23 @@ func (n *sharedTaskNode) subTask(core *sharedTaskCore, title string) *sharedTask
 	child := &sharedTaskNode{
 		id:     core.manager.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 	}
 	n.mu.Lock()
 	n.children = append(n.children, child)
 	n.mu.Unlock()
 	core.manager.markDirty(core.id)
 	child.mu.Lock()
-	child.status = TaskNodeStatusRunning
+	child.status = tasks.TaskNodeStatusRunning
 	child.mu.Unlock()
 	core.manager.markDirty(core.id)
 	return child
 }
 
-func (n *sharedTaskNode) snapshot() *TaskNode {
+func (n *sharedTaskNode) snapshot() *tasks.TaskNode {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	node := &TaskNode{
+	node := &tasks.TaskNode{
 		ID:      n.id,
 		Title:   n.title,
 		Status:  n.status,
@@ -377,7 +339,7 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 	task := &sharedTaskCore{
 		id:          id,
 		title:       title,
-		status:      TaskNodeStatusCreated,
+		status:      tasks.TaskNodeStatusCreated,
 		manager:     tm,
 		cancel:      cancel,
 		ctx:         taskCtx,
@@ -413,7 +375,7 @@ func (tm *taskManager) markDirty(id string) {
 // sendUpdate broadcasts a per-node update event immediately.
 // Used for output and progress updates on shared task nodes.
 func (tm *taskManager) sendUpdate(taskID string, output *string, current, total *int) {
-	event := TaskUpdateEvent{
+	event := tasks.TaskUpdateEvent{
 		TaskID:  taskID,
 		Output:  output,
 		Current: current,
@@ -435,10 +397,10 @@ func (tm *taskManager) cancelTask(id string) bool {
 }
 
 // snapshotAll returns the current state of all active tasks.
-func (tm *taskManager) snapshotAll() []SharedTaskState {
+func (tm *taskManager) snapshotAll() []tasks.SharedTaskState {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	states := make([]SharedTaskState, 0, len(tm.tasks))
+	states := make([]tasks.SharedTaskState, 0, len(tm.tasks))
 	for _, task := range tm.tasks {
 		states = append(states, task.snapshot())
 	}
@@ -447,10 +409,10 @@ func (tm *taskManager) snapshotAll() []SharedTaskState {
 
 // snapshotAllForConn returns the current state of all active tasks with
 // IsOwner set according to the given connection ID.
-func (tm *taskManager) snapshotAllForConn(connID uint64) []SharedTaskState {
+func (tm *taskManager) snapshotAllForConn(connID uint64) []tasks.SharedTaskState {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-	states := make([]SharedTaskState, 0, len(tm.tasks))
+	states := make([]tasks.SharedTaskState, 0, len(tm.tasks))
 	for _, task := range tm.tasks {
 		states = append(states, task.snapshotForConn(connID))
 	}
@@ -467,10 +429,10 @@ func (tm *taskManager) broadcastNow() {
 	}
 	tm.server.mu.RUnlock()
 
-	event := tm.server.registry.eventName(TaskStateEvent{})
+	event := tm.server.registry.eventName(tasks.TaskStateEvent{})
 	for _, conn := range conns {
 		states := tm.snapshotAllForConn(conn.ID())
-		conn.push(event, TaskStateEvent{Tasks: states})
+		conn.push(event, tasks.TaskStateEvent{Tasks: states})
 	}
 }
 
@@ -530,7 +492,7 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 	}
 	core := tm.create(title, conn.ID(), true, ctx)
 	core.mu.Lock()
-	core.status = TaskNodeStatusRunning
+	core.status = tasks.TaskNodeStatusRunning
 	core.mu.Unlock()
 	tm.markDirty(core.id)
 
@@ -575,7 +537,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	// Create a new shared task core (not top-level, so isOwner stays false).
 	core := tm.create(title, conn.ID(), false, ctx)
 	core.mu.Lock()
-	core.status = TaskNodeStatusRunning
+	core.status = tasks.TaskNodeStatusRunning
 	core.mu.Unlock()
 	tm.markDirty(core.id)
 	sc := &sharedContext{core: core}

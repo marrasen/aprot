@@ -4,15 +4,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/marrasen/aprot"
 )
 
 func TestAppendTaskConvenienceCode_SingleFileVanilla(t *testing.T) {
 	results := map[string]string{
 		"client.ts": "// base client\n",
 	}
-	appendTaskConvenienceCode(results, aprot.OutputVanilla, nil)
+	AppendConvenienceCode(results, false, nil)
 
 	code := results["client.ts"]
 	appended := strings.TrimPrefix(code, "// base client\n")
@@ -35,7 +33,7 @@ func TestAppendTaskConvenienceCode_SingleFileReact(t *testing.T) {
 	results := map[string]string{
 		"client.ts": "// base client\n",
 	}
-	appendTaskConvenienceCode(results, aprot.OutputReact, nil)
+	AppendConvenienceCode(results, true, nil)
 
 	code := results["client.ts"]
 	appended := strings.TrimPrefix(code, "// base client\n")
@@ -68,7 +66,7 @@ func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 		"client.ts":              "// base\n",
 		"task-cancel-handler.ts": "// handler\n",
 	}
-	appendTaskConvenienceCode(results, aprot.OutputVanilla, nil)
+	AppendConvenienceCode(results, false, nil)
 
 	tasksCode, ok := results["tasks.ts"]
 	if !ok {
@@ -100,7 +98,7 @@ func TestAppendTaskConvenienceCode_MultiFileReact(t *testing.T) {
 		"client.ts":              "// base\n",
 		"task-cancel-handler.ts": "// handler\n",
 	}
-	appendTaskConvenienceCode(results, aprot.OutputReact, nil)
+	AppendConvenienceCode(results, true, nil)
 
 	tasksCode, ok := results["tasks.ts"]
 	if !ok {
@@ -134,7 +132,7 @@ func TestAppendTaskConvenienceCode_WithMeta(t *testing.T) {
 	}
 
 	metaType := reflect.TypeFor[testMeta]()
-	appendTaskConvenienceCode(results, aprot.OutputVanilla, metaType)
+	AppendConvenienceCode(results, false, metaType)
 
 	code := results["client.ts"]
 
@@ -163,7 +161,7 @@ func TestAppendTaskConvenienceCode_WithNestedMeta(t *testing.T) {
 	}
 
 	metaType := reflect.TypeFor[testMetaWithNested]()
-	appendTaskConvenienceCode(results, aprot.OutputVanilla, metaType)
+	AppendConvenienceCode(results, false, metaType)
 
 	code := results["client.ts"]
 

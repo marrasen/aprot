@@ -15,6 +15,8 @@ import (
 	"text/template"
 	"time"
 	"unicode"
+
+	"github.com/marrasen/aprot/tasks"
 )
 
 var timeType = reflect.TypeOf(time.Time{})
@@ -185,7 +187,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// Phase 1: collect base types (protocol types like TaskNode)
 	g.types = make(map[reflect.Type]string)
 	g.collectedEnums = make(map[reflect.Type]*EnumInfo)
-	g.collectType(reflect.TypeOf(TaskNode{}))
+	g.collectType(reflect.TypeOf(tasks.TaskNode{}))
 	g.collectTaskNodeStatusEnum()
 
 	// Build base interfaces and enums
@@ -305,10 +307,10 @@ func (g *Generator) Generate() (map[string]string, error) {
 }
 
 // GenerateTo writes TypeScript client code to a single writer.
-// This combines all handler groups into one file (legacy behavior).
+// This combines all handler groups into one file.
 func (g *Generator) GenerateTo(w io.Writer) error {
 	// Collect TaskNode (protocol type) and its enum first
-	g.collectType(reflect.TypeOf(TaskNode{}))
+	g.collectType(reflect.TypeOf(tasks.TaskNode{}))
 	g.collectTaskNodeStatusEnum()
 
 	// Collect all types from all groups
@@ -613,7 +615,7 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 // TaskNodeStatus is a protocol enum (used by TaskNode.Status) and must always
 // be available in generated output, regardless of whether the task system is enabled.
 func (g *Generator) collectTaskNodeStatusEnum() {
-	vals := TaskNodeStatusValues()
+	vals := tasks.TaskNodeStatusValues()
 	t := reflect.TypeOf(vals[0])
 	info := &EnumInfo{
 		Name:     "TaskNodeStatus",

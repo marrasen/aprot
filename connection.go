@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/go-json-experiment/json"
+	"github.com/marrasen/aprot/tasks"
 )
 
 // ConnInfo contains HTTP request information captured at connection time.
@@ -350,7 +351,7 @@ func (c *Conn) finalizeTaskSlot(slot *taskSlot, ctx context.Context, handlerErr 
 		} else if canceled {
 			node.setFailed("canceled")
 		} else {
-			node.setStatus(TaskNodeStatusCompleted)
+			node.setStatus(tasks.TaskNodeStatusCompleted)
 		}
 		node.tree.send()
 	}

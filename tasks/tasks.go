@@ -1,15 +1,12 @@
 package tasks
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"reflect"
 	"strings"
 	"text/template"
 	"time"
-
-	"github.com/marrasen/aprot"
 )
 
 //go:embed templates/*.tmpl
@@ -18,41 +15,6 @@ var templateFS embed.FS
 var taskTemplates = template.Must(
 	template.New("").ParseFS(templateFS, "templates/*.tmpl"),
 )
-
-// taskCancelHandler is the handler struct for task cancellation.
-type taskCancelHandler struct{}
-
-func (h *taskCancelHandler) CancelTask(ctx context.Context, req *aprot.CancelTaskRequest) error {
-	return aprot.CancelSharedTask(ctx, req.TaskID)
-}
-
-// Enable registers the shared task system with the registry.
-func Enable(r *aprot.Registry) {
-	r.SetTasksEnabled(true)
-	r.RegisterEnum(aprot.TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
-	r.Register(handler)
-	r.RegisterPushEventFor(handler, aprot.TaskStateEvent{})
-	r.RegisterPushEventFor(handler, aprot.TaskUpdateEvent{})
-	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
-		appendTaskConvenienceCode(results, mode, nil)
-	})
-}
-
-// EnableWithMeta registers the shared task system with typed metadata.
-func EnableWithMeta[M any](r *aprot.Registry) {
-	metaType := reflect.TypeFor[M]()
-	r.SetTaskMetaType(metaType)
-	r.SetTasksEnabled(true)
-	r.RegisterEnum(aprot.TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
-	r.Register(handler)
-	r.RegisterPushEventFor(handler, aprot.TaskStateEvent{})
-	r.RegisterPushEventFor(handler, aprot.TaskUpdateEvent{})
-	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
-		appendTaskConvenienceCode(results, mode, metaType)
-	})
-}
 
 // taskTemplateData holds all data needed for task template rendering.
 type taskTemplateData struct {
@@ -72,15 +34,15 @@ type metaFieldData struct {
 	Optional bool
 }
 
-// appendTaskConvenienceCode generates convenience TypeScript code for the task system.
+// AppendConvenienceCode generates convenience TypeScript code for the task system.
 // For multi-file mode it creates a tasks.ts file; for single-file mode it appends to client.ts.
-func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode, metaType reflect.Type) {
+func AppendConvenienceCode(results map[string]string, isReact bool, metaType reflect.Type) {
 	_, hasHandlerFile := results["task-cancel-handler.ts"]
 	isMultiFile := hasHandlerFile
 
 	data := taskTemplateData{
 		IsMultiFile: isMultiFile,
-		IsReact:     mode == aprot.OutputReact,
+		IsReact:     isReact,
 	}
 
 	if metaType != nil {

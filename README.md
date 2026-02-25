@@ -380,17 +380,15 @@ Shared tasks are visible to **all** connected clients (not just the requesting o
 
 #### Setup
 
-Enable shared tasks in the registry via the `tasks` subpackage:
+Enable shared tasks in the registry:
 
 ```go
-import "github.com/marrasen/aprot/tasks"
-
 registry := aprot.NewRegistry()
 registry.Register(&Handlers{})
-tasks.Enable(registry)  // Registers TaskStateEvent, TaskUpdateEvent push events + CancelTask handler
+aprot.EnableTasks(registry)  // Registers TaskStateEvent, TaskUpdateEvent push events + CancelTask handler
 ```
 
-To attach typed metadata to tasks, use `EnableWithMeta` instead:
+To attach typed metadata to tasks, use `EnableTasksWithMeta` instead:
 
 ```go
 type TaskMeta struct {
@@ -398,7 +396,7 @@ type TaskMeta struct {
     Error    string `json:"error,omitempty"`
 }
 
-tasks.EnableWithMeta[TaskMeta](registry)
+aprot.EnableTasksWithMeta[TaskMeta](registry)
 ```
 
 This generates a typed `TaskMeta` interface in the TypeScript client and adds an optional `meta?: TaskMeta` field to `SharedTaskState` and `TaskNode`.

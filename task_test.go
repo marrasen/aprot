@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-json-experiment/json"
+	"github.com/marrasen/aprot/tasks"
 )
 
 func TestSubTaskBasic(t *testing.T) {
@@ -56,7 +57,7 @@ func TestSubTaskWithTree(t *testing.T) {
 	if len(captured[0].Tasks) != 1 {
 		t.Fatalf("expected 1 task in first message, got %d", len(captured[0].Tasks))
 	}
-	if captured[0].Tasks[0].Status != TaskNodeStatusCreated {
+	if captured[0].Tasks[0].Status != tasks.TaskNodeStatusCreated {
 		t.Errorf("expected created status, got %s", captured[0].Tasks[0].Status)
 	}
 	if captured[0].Tasks[0].Title != "Step 1" {
@@ -65,7 +66,7 @@ func TestSubTaskWithTree(t *testing.T) {
 
 	// Last message should have the task in "completed" state
 	last := captured[len(captured)-1]
-	if last.Tasks[0].Status != TaskNodeStatusCompleted {
+	if last.Tasks[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed status, got %s", last.Tasks[0].Status)
 	}
 }
@@ -93,7 +94,7 @@ func TestSubTaskError(t *testing.T) {
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(snap))
 	}
-	if snap[0].Status != TaskNodeStatusFailed {
+	if snap[0].Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed status, got %s", snap[0].Status)
 	}
 	if snap[0].Error != "test failure" {
@@ -133,7 +134,7 @@ func TestSubTaskNested(t *testing.T) {
 	if snap[0].Children[0].Title != "Child" {
 		t.Errorf("expected 'Child', got %s", snap[0].Children[0].Title)
 	}
-	if snap[0].Children[0].Status != TaskNodeStatusCompleted {
+	if snap[0].Children[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected child completed, got %s", snap[0].Children[0].Status)
 	}
 }
@@ -203,7 +204,7 @@ func TestOutputWriter(t *testing.T) {
 			hasOutput = true
 			outputTaskID = msg.TaskID
 		}
-		if len(msg.Tasks) > 0 && msg.Tasks[0].Status == TaskNodeStatusCompleted {
+		if len(msg.Tasks) > 0 && msg.Tasks[0].Status == tasks.TaskNodeStatusCompleted {
 			hasCompleted = true
 		}
 	}
@@ -264,7 +265,7 @@ func TestWriterProgress(t *testing.T) {
 	if snap[0].Total != 100 {
 		t.Errorf("expected total=100, got %d", snap[0].Total)
 	}
-	if snap[0].Status != TaskNodeStatusCompleted {
+	if snap[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed status, got %s", snap[0].Status)
 	}
 }
@@ -300,7 +301,7 @@ func TestTaskErr(t *testing.T) {
 	if len(snap) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(snap))
 	}
-	if snap[0].Status != TaskNodeStatusCompleted {
+	if snap[0].Status != tasks.TaskNodeStatusCompleted {
 		t.Errorf("expected completed, got %s", snap[0].Status)
 	}
 	if snap[0].Error != "" {
@@ -317,7 +318,7 @@ func TestTaskErr(t *testing.T) {
 		t.Fatalf("expected 2 tasks, got %d", len(snap))
 	}
 	// Find the failed task.
-	var failed *TaskNode
+	var failed *tasks.TaskNode
 	for _, n := range snap {
 		if n.Title == "Task Fail" {
 			failed = n
@@ -326,7 +327,7 @@ func TestTaskErr(t *testing.T) {
 	if failed == nil {
 		t.Fatal("expected to find 'Task Fail' node")
 	}
-	if failed.Status != TaskNodeStatusFailed {
+	if failed.Status != tasks.TaskNodeStatusFailed {
 		t.Errorf("expected failed, got %s", failed.Status)
 	}
 	if failed.Error != "something broke" {

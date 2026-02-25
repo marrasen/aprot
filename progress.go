@@ -1,5 +1,7 @@
 package aprot
 
+import "github.com/marrasen/aprot/tasks"
+
 // ProgressReporter allows handlers to report progress during long operations.
 type ProgressReporter interface {
 	// Update sends a progress update to the client.
@@ -28,8 +30,8 @@ func (p *progressReporter) Update(current, total int, message string) {
 	p.conn.sendProgress(p.requestID, current, total, message)
 }
 
-func (p *progressReporter) updateTasks(tasks []*TaskNode) {
-	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Tasks: tasks}
+func (p *progressReporter) updateTasks(nodes []*tasks.TaskNode) {
+	msg := ProgressMessage{Type: TypeProgress, ID: p.requestID, Tasks: nodes}
 	p.conn.sendJSON(msg)
 }
 

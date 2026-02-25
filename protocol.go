@@ -1,6 +1,9 @@
 package aprot
 
-import "github.com/go-json-experiment/json/jsontext"
+import (
+	"github.com/go-json-experiment/json/jsontext"
+	"github.com/marrasen/aprot/tasks"
+)
 
 // MessageType represents the type of protocol message.
 type MessageType string
@@ -58,7 +61,7 @@ type ProgressMessage struct {
 	Current *int        `json:"current,omitempty"`
 	Total   *int        `json:"total,omitempty"`
 	Message string      `json:"message,omitempty"`
-	Tasks   []*TaskNode `json:"tasks,omitempty"`
+	Tasks   []*tasks.TaskNode `json:"tasks,omitempty"`
 	Output  *string     `json:"output,omitempty"`
 }
 

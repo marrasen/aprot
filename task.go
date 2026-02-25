@@ -6,39 +6,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/marrasen/aprot/tasks"
 )
-
-// TaskNodeStatus represents the current state of a task node.
-type TaskNodeStatus string
-
-const (
-	TaskNodeStatusCreated   TaskNodeStatus = "created"
-	TaskNodeStatusRunning   TaskNodeStatus = "running"
-	TaskNodeStatusCompleted TaskNodeStatus = "completed"
-	TaskNodeStatusFailed    TaskNodeStatus = "failed"
-)
-
-// TaskNodeStatusValues returns all possible TaskNodeStatus values.
-func TaskNodeStatusValues() []TaskNodeStatus {
-	return []TaskNodeStatus{
-		TaskNodeStatusCreated,
-		TaskNodeStatusRunning,
-		TaskNodeStatusCompleted,
-		TaskNodeStatusFailed,
-	}
-}
-
-// TaskNode is the JSON-serializable snapshot of a task sent to the client.
-type TaskNode struct {
-	ID       string         `json:"id"`
-	Title    string         `json:"title"`
-	Status   TaskNodeStatus `json:"status"`
-	Error    string         `json:"error,omitempty"`
-	Current  int            `json:"current,omitempty"`
-	Total    int            `json:"total,omitempty"`
-	Meta     any            `json:"meta,omitempty"`
-	Children []*TaskNode    `json:"children,omitempty"`
-}
 
 // taskTree is the mutable state for a request's task hierarchy.
 // It is created per-request and stored in the context.
@@ -56,7 +26,7 @@ func newTaskTree(reporter *progressReporter) *taskTree {
 }
 
 // snapshot returns the current task tree as a slice of TaskNodes.
-func (t *taskTree) snapshot() []*TaskNode {
+func (t *taskTree) snapshot() []*tasks.TaskNode {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.root == nil {
@@ -101,7 +71,7 @@ type taskNode struct {
 	tree     *taskTree
 	id       string
 	title    string
-	status   TaskNodeStatus
+	status   tasks.TaskNodeStatus
 	error    string
 	current  int
 	total    int
@@ -110,10 +80,10 @@ type taskNode struct {
 	mu       sync.Mutex
 }
 
-func (n *taskNode) snapshot() *TaskNode {
+func (n *taskNode) snapshot() *tasks.TaskNode {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	node := &TaskNode{
+	node := &tasks.TaskNode{
 		ID:      n.id,
 		Title:   n.title,
 		Status:  n.status,
@@ -128,10 +98,10 @@ func (n *taskNode) snapshot() *TaskNode {
 	return node
 }
 
-func (n *taskNode) snapshotChildren() []*TaskNode {
+func (n *taskNode) snapshotChildren() []*tasks.TaskNode {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	var nodes []*TaskNode
+	var nodes []*tasks.TaskNode
 	for _, child := range n.children {
 		nodes = append(nodes, child.snapshot())
 	}
@@ -144,7 +114,7 @@ func (n *taskNode) addChild(child *taskNode) {
 	n.children = append(n.children, child)
 }
 
-func (n *taskNode) setStatus(s TaskNodeStatus) {
+func (n *taskNode) setStatus(s tasks.TaskNodeStatus) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.status = s
@@ -153,7 +123,7 @@ func (n *taskNode) setStatus(s TaskNodeStatus) {
 func (n *taskNode) setFailed(msg string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.status = TaskNodeStatusFailed
+	n.status = tasks.TaskNodeStatusFailed
 	n.error = msg
 }
 
@@ -178,7 +148,7 @@ func (t *taskTree) ensureRoot() *taskNode {
 			tree:   t,
 			id:     "root",
 			title:  "",
-			status: TaskNodeStatusRunning,
+			status: tasks.TaskNodeStatusRunning,
 		}
 	}
 	return t.root
@@ -219,19 +189,19 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 	}
 	parent.addChild(child)
 	tree.send()
 
-	child.setStatus(TaskNodeStatusRunning)
+	child.setStatus(tasks.TaskNodeStatusRunning)
 	childCtx := withTaskNode(ctx, child)
 	err := fn(childCtx)
 
 	if err != nil {
 		child.setFailed(err.Error())
 	} else {
-		child.setStatus(TaskNodeStatusCompleted)
+		child.setStatus(tasks.TaskNodeStatusCompleted)
 	}
 	tree.send()
 
@@ -253,10 +223,10 @@ func sharedSubTaskInner(ctx context.Context, sc *sharedContext, title string, fn
 
 	sharedNode.mu.Lock()
 	if err != nil {
-		sharedNode.status = TaskNodeStatusFailed
+		sharedNode.status = tasks.TaskNodeStatusFailed
 		sharedNode.error = err.Error()
 	} else {
-		sharedNode.status = TaskNodeStatusCompleted
+		sharedNode.status = tasks.TaskNodeStatusCompleted
 	}
 	sharedNode.mu.Unlock()
 	sc.core.manager.markDirty(sc.core.id)
@@ -364,12 +334,12 @@ func OutputWriter(ctx context.Context, title string) io.WriteCloser {
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 	}
 	parent.addChild(child)
 	tree.send()
 
-	child.setStatus(TaskNodeStatusRunning)
+	child.setStatus(tasks.TaskNodeStatusRunning)
 	return &taskOutputWriter{
 		tree: tree,
 		node: child,
@@ -392,7 +362,7 @@ func (w *taskOutputWriter) Write(p []byte) (int, error) {
 }
 
 func (w *taskOutputWriter) Close() error {
-	w.node.setStatus(TaskNodeStatusCompleted)
+	w.node.setStatus(tasks.TaskNodeStatusCompleted)
 	w.tree.send()
 	return nil
 }
@@ -414,7 +384,7 @@ func (w *sharedOutputWriter) Write(p []byte) (int, error) {
 
 func (w *sharedOutputWriter) Close() error {
 	w.node.mu.Lock()
-	w.node.status = TaskNodeStatusCompleted
+	w.node.status = tasks.TaskNodeStatusCompleted
 	w.node.mu.Unlock()
 	w.core.manager.markDirty(w.core.id)
 	return nil
@@ -464,13 +434,13 @@ func WriterProgress(ctx context.Context, title string, size int) io.WriteCloser 
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 		total:  size,
 	}
 	parent.addChild(child)
 	tree.send()
 
-	child.setStatus(TaskNodeStatusRunning)
+	child.setStatus(tasks.TaskNodeStatusRunning)
 	return &taskProgressWriter{
 		tree:     tree,
 		node:     child,
@@ -506,7 +476,7 @@ func (w *taskProgressWriter) Write(p []byte) (int, error) {
 
 func (w *taskProgressWriter) Close() error {
 	w.node.setProgress(w.written, w.total)
-	w.node.setStatus(TaskNodeStatusCompleted)
+	w.node.setStatus(tasks.TaskNodeStatusCompleted)
 	w.tree.send()
 	return nil
 }
@@ -543,7 +513,7 @@ func (w *sharedProgressWriter) Close() error {
 	w.node.mu.Lock()
 	w.node.current = w.written
 	w.node.total = w.total
-	w.node.status = TaskNodeStatusCompleted
+	w.node.status = tasks.TaskNodeStatusCompleted
 	w.node.mu.Unlock()
 	w.core.manager.markDirty(w.core.id)
 	return nil
@@ -584,7 +554,7 @@ func (t *Task[M]) SetMeta(v M) {
 
 // Close marks the task as completed.
 func (t *Task[M]) Close() {
-	t.node.setStatus(TaskNodeStatusCompleted)
+	t.node.setStatus(tasks.TaskNodeStatusCompleted)
 	t.node.tree.send()
 }
 
@@ -624,7 +594,7 @@ func StartTask[M any](ctx context.Context, title string) (context.Context, *Task
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusCreated,
+		status: tasks.TaskNodeStatusCreated,
 	}
 	root.addChild(node)
 
@@ -636,6 +606,6 @@ func StartTask[M any](ctx context.Context, title string) (context.Context, *Task
 	ctx = withTaskNode(ctx, node)
 	tree.send()
 
-	node.setStatus(TaskNodeStatusRunning)
+	node.setStatus(tasks.TaskNodeStatusRunning)
 	return ctx, &Task[M]{node: node}
 }

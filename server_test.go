@@ -14,6 +14,7 @@ import (
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gorilla/websocket"
+	"github.com/marrasen/aprot/tasks"
 )
 
 // Integration test types
@@ -83,10 +84,10 @@ func (h *IntegrationHandlers) RunSharedSubTask(ctx context.Context, req *TaskTit
 	})
 }
 
-func (h *IntegrationHandlers) RunStartSharedTask(ctx context.Context, req *TaskTitleRequest) (*TaskRef, error) {
+func (h *IntegrationHandlers) RunStartSharedTask(ctx context.Context, req *TaskTitleRequest) (*tasks.TaskRef, error) {
 	_, task := StartSharedTask[struct{}](ctx, req.Title)
 	time.Sleep(500 * time.Millisecond)
-	return &TaskRef{TaskID: task.ID()}, nil
+	return &tasks.TaskRef{TaskID: task.ID()}, nil
 }
 
 func (h *IntegrationHandlers) TriggerPush(ctx context.Context, req *BroadcastRequest) (*BroadcastResponse, error) {
