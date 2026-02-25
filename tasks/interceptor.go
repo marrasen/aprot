@@ -6,31 +6,32 @@ import (
 	"github.com/marrasen/aprot"
 )
 
-// taskInterceptor implements aprot.RequestInterceptor for the task system.
-type taskInterceptor struct {
-	tm *taskManager
+// taskMiddleware returns a middleware that sets up and finalizes the task
+// tree, task slot, and task manager on each request context.
+func taskMiddleware(tm *taskManager) aprot.Middleware {
+	return func(next aprot.Handler) aprot.Handler {
+		return func(ctx context.Context, req *aprot.Request) (any, error) {
+			rs := aprot.RequestSenderFromContext(ctx)
+			if rs == nil {
+				return next(ctx, req)
+			}
+			tree := newTaskTree(rs)
+			ctx = withTaskTree(ctx, tree)
+			slot := &taskSlot{}
+			ctx = withTaskSlot(ctx, slot)
+			ctx = withTaskManager(ctx, tm)
+
+			result, err := next(ctx, req)
+
+			finalizeTaskSlot(ctx, slot, err)
+
+			return result, err
+		}
+	}
 }
 
-// BeforeRequest sets up the task tree, task slot, and task manager on the context.
-func (ti *taskInterceptor) BeforeRequest(ctx context.Context) context.Context {
-	rs := aprot.RequestSenderFromContext(ctx)
-	if rs == nil {
-		return ctx
-	}
-	tree := newTaskTree(rs)
-	ctx = withTaskTree(ctx, tree)
-	slot := &taskSlot{}
-	ctx = withTaskSlot(ctx, slot)
-	ctx = withTaskManager(ctx, ti.tm)
-	return ctx
-}
-
-// AfterRequest finalizes any inline tasks created during the handler.
-func (ti *taskInterceptor) AfterRequest(ctx context.Context, err error) {
-	slot := taskSlotFromContext(ctx)
-	if slot == nil {
-		return
-	}
+// finalizeTaskSlot completes or fails any inline tasks created during the handler.
+func finalizeTaskSlot(ctx context.Context, slot *taskSlot, err error) {
 	canceled := ctx.Err() != nil
 
 	// Finalize shared task.
@@ -56,6 +57,3 @@ func (ti *taskInterceptor) AfterRequest(ctx context.Context, err error) {
 		node.tree.send()
 	}
 }
-
-// Ensure interface compliance at compile time.
-var _ aprot.RequestInterceptor = (*taskInterceptor)(nil)

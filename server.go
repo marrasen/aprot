@@ -58,7 +58,6 @@ type Server struct {
 	register        chan *Conn
 	unregister      chan *Conn
 	middleware      []Middleware
-	interceptors    []RequestInterceptor
 	nextConnID      uint64 // atomic counter for connection IDs
 	options         ServerOptions
 	connectHooks    []ConnectHook
@@ -111,7 +110,7 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		stopCh:     make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-	// Run OnServerInit hooks (used by tasks/ to set up taskManager, interceptors, etc.)
+	// Run OnServerInit hooks (used by tasks/ to set up taskManager, middleware, etc.)
 	for _, hook := range registry.serverInitHooks {
 		hook(s)
 	}
@@ -138,13 +137,6 @@ func (s *Server) OnConnect(hook ConnectHook) {
 // The connection's UserID is still available when the hook is called.
 func (s *Server) OnDisconnect(hook DisconnectHook) {
 	s.disconnectHooks = append(s.disconnectHooks, hook)
-}
-
-// AddInterceptor registers a request interceptor.
-// Interceptors are called in order for BeforeRequest and in reverse order
-// for AfterRequest.
-func (s *Server) AddInterceptor(i RequestInterceptor) {
-	s.interceptors = append(s.interceptors, i)
 }
 
 // OnStop registers a hook called during Server.Stop after in-flight requests

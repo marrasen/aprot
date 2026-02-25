@@ -51,8 +51,8 @@ func withSharedContext(ctx context.Context, sc *sharedContext) context.Context {
 	return context.WithValue(ctx, sharedContextKey, sc)
 }
 
-// taskSlot is a mutable slot placed on the context by the interceptor.
-// StartTask and StartSharedTask populate it so AfterRequest can detect
+// taskSlot is a mutable slot placed on the context by the task middleware.
+// StartTask and StartSharedTask populate it so the middleware can detect
 // inline tasks after the handler returns and auto-manage their lifecycle.
 type taskSlot struct {
 	sharedCore *sharedTaskCore

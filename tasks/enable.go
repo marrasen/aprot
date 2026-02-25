@@ -26,7 +26,7 @@ func Enable(r *aprot.Registry) {
 	})
 	r.OnServerInit(func(s *aprot.Server) {
 		tm := newTaskManager(s)
-		s.AddInterceptor(&taskInterceptor{tm: tm})
+		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {
@@ -51,7 +51,7 @@ func EnableWithMeta[M any](r *aprot.Registry) {
 	})
 	r.OnServerInit(func(s *aprot.Server) {
 		tm := newTaskManager(s)
-		s.AddInterceptor(&taskInterceptor{tm: tm})
+		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {

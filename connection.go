@@ -299,19 +299,9 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 	ctx = withRequest(ctx, req)
 
-	// Run BeforeRequest interceptors
-	for _, interceptor := range c.server.interceptors {
-		ctx = interceptor.BeforeRequest(ctx)
-	}
-
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
 	result, err := handler(ctx, req)
-
-	// Run AfterRequest interceptors (reverse order)
-	for i := len(c.server.interceptors) - 1; i >= 0; i-- {
-		c.server.interceptors[i].AfterRequest(ctx, err)
-	}
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {
