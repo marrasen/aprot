@@ -1337,12 +1337,6 @@ func TestGenerateWithTasksReact(t *testing.T) {
 	if strings.Count(output, "function onTaskUpdateEvent") > 1 {
 		t.Error("onTaskUpdateEvent should only appear once")
 	}
-	if strings.Contains(output, "function useTaskStateEvent") {
-		t.Error("useTaskStateEvent hook should not be generated — useSharedTasks covers this")
-	}
-	if strings.Contains(output, "function useTaskUpdateEvent") {
-		t.Error("useTaskUpdateEvent hook should not be generated — useTaskOutput covers this")
-	}
 
 	// Internal handler methods should not leak
 	if strings.Contains(output, "cancelTask(client") {
@@ -1414,13 +1408,6 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 	}
 
 	// No auto-generated hooks for internal events
-	if strings.Contains(baseContent, "function useTaskStateEvent") {
-		t.Error("useTaskStateEvent hook should not be generated — useSharedTasks covers this")
-	}
-	if strings.Contains(baseContent, "function useTaskUpdateEvent") {
-		t.Error("useTaskUpdateEvent hook should not be generated — useTaskOutput covers this")
-	}
-
 	// Internal handler methods should not leak
 	if strings.Contains(baseContent, "cancelTask(client") {
 		t.Error("Internal cancelTask method should not appear as a standalone function in client.ts")

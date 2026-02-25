@@ -667,14 +667,6 @@ export function {{.HookName}}(options?: { maxEvents?: number }): UsePushResult<{
 {{end -}}
 {{- if .HasTasks}}
 
-export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {
-    return client.onPush<TaskStateEvent>('TaskStateEvent', handler);
-}
-
-export function onTaskUpdateEvent(client: ApiClient, handler: PushHandler<TaskUpdateEvent>): () => void {
-    return client.onPush<TaskUpdateEvent>('TaskUpdateEvent', handler);
-}
-
 // Shared task hooks
 export function useSharedTasks(): SharedTaskState[] {
     const client = useApiClient();
