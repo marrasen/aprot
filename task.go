@@ -12,6 +12,7 @@ import (
 type TaskNodeStatus string
 
 const (
+	TaskNodeStatusCreated   TaskNodeStatus = "created"
 	TaskNodeStatusRunning   TaskNodeStatus = "running"
 	TaskNodeStatusCompleted TaskNodeStatus = "completed"
 	TaskNodeStatusFailed    TaskNodeStatus = "failed"
@@ -20,6 +21,7 @@ const (
 // TaskNodeStatusValues returns all possible TaskNodeStatus values.
 func TaskNodeStatusValues() []TaskNodeStatus {
 	return []TaskNodeStatus{
+		TaskNodeStatusCreated,
 		TaskNodeStatusRunning,
 		TaskNodeStatusCompleted,
 		TaskNodeStatusFailed,
@@ -217,11 +219,12 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 	}
 	parent.addChild(child)
 	tree.send()
 
+	child.setStatus(TaskNodeStatusRunning)
 	childCtx := withTaskNode(ctx, child)
 	err := fn(childCtx)
 
@@ -361,11 +364,12 @@ func OutputWriter(ctx context.Context, title string) io.WriteCloser {
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 	}
 	parent.addChild(child)
 	tree.send()
 
+	child.setStatus(TaskNodeStatusRunning)
 	return &taskOutputWriter{
 		tree: tree,
 		node: child,
@@ -460,12 +464,13 @@ func WriterProgress(ctx context.Context, title string, size int) io.WriteCloser 
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 		total:  size,
 	}
 	parent.addChild(child)
 	tree.send()
 
+	child.setStatus(TaskNodeStatusRunning)
 	return &taskProgressWriter{
 		tree:     tree,
 		node:     child,
@@ -619,7 +624,7 @@ func StartTask[M any](ctx context.Context, title string) (context.Context, *Task
 		tree:   tree,
 		id:     tree.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 	}
 	root.addChild(node)
 
@@ -631,5 +636,6 @@ func StartTask[M any](ctx context.Context, title string) (context.Context, *Task
 	ctx = withTaskNode(ctx, node)
 	tree.send()
 
+	node.setStatus(TaskNodeStatusRunning)
 	return ctx, &Task[M]{node: node}
 }

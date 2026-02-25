@@ -47,17 +47,17 @@ func TestSubTaskWithTree(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should have received 2 progress messages: one for "running", one for "completed".
+	// Should have received 2 progress messages: one for "created", one for "completed".
 	if len(captured) < 2 {
 		t.Fatalf("expected at least 2 progress messages, got %d", len(captured))
 	}
 
-	// First message should have a task in "running" state
+	// First message should have a task in "created" state
 	if len(captured[0].Tasks) != 1 {
 		t.Fatalf("expected 1 task in first message, got %d", len(captured[0].Tasks))
 	}
-	if captured[0].Tasks[0].Status != TaskNodeStatusRunning {
-		t.Errorf("expected running status, got %s", captured[0].Tasks[0].Status)
+	if captured[0].Tasks[0].Status != TaskNodeStatusCreated {
+		t.Errorf("expected created status, got %s", captured[0].Tasks[0].Status)
 	}
 	if captured[0].Tasks[0].Title != "Step 1" {
 		t.Errorf("expected title 'Step 1', got %s", captured[0].Tasks[0].Title)
