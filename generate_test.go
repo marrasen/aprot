@@ -1188,6 +1188,9 @@ func TestGenerateWithTasks(t *testing.T) {
 	if strings.Count(output, "function onTaskStateEvent") > 1 {
 		t.Error("onTaskStateEvent should only appear once")
 	}
+	if strings.Count(output, "function onTaskUpdateEvent") > 1 {
+		t.Error("onTaskUpdateEvent should only appear once")
+	}
 }
 
 func TestGenerateWithTasksMultiFile(t *testing.T) {
@@ -1247,6 +1250,16 @@ func TestGenerateWithTasksMultiFile(t *testing.T) {
 	// No task-cancel-handler.ts should be generated
 	if _, exists := files["task-cancel-handler.ts"]; exists {
 		t.Error("task-cancel-handler.ts should not be generated — internal groups should be skipped")
+	}
+
+	// No duplicate on-handlers
+	if strings.Count(baseContent, "function onTaskStateEvent") > 1 {
+		t.Error("onTaskStateEvent should only appear once in client.ts")
+	}
+
+	// Internal handler methods should not leak
+	if strings.Contains(baseContent, "cancelTask(client") {
+		t.Error("Internal cancelTask method should not appear as a standalone function in client.ts")
 	}
 }
 
@@ -1321,11 +1334,19 @@ func TestGenerateWithTasksReact(t *testing.T) {
 	if strings.Count(output, "function onTaskStateEvent") > 1 {
 		t.Error("onTaskStateEvent should only appear once")
 	}
+	if strings.Count(output, "function onTaskUpdateEvent") > 1 {
+		t.Error("onTaskUpdateEvent should only appear once")
+	}
 	if strings.Contains(output, "function useTaskStateEvent") {
 		t.Error("useTaskStateEvent hook should not be generated — useSharedTasks covers this")
 	}
 	if strings.Contains(output, "function useTaskUpdateEvent") {
 		t.Error("useTaskUpdateEvent hook should not be generated — useTaskOutput covers this")
+	}
+
+	// Internal handler methods should not leak
+	if strings.Contains(output, "cancelTask(client") {
+		t.Error("Internal cancelTask method should not appear as a standalone function")
 	}
 }
 
@@ -1374,9 +1395,35 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 		t.Error("Missing onTaskUpdateEvent in client.ts")
 	}
 
+	// TaskStateEvent/TaskUpdateEvent interfaces in client.ts
+	if !strings.Contains(baseContent, "export interface TaskStateEvent") {
+		t.Error("Missing TaskStateEvent interface in client.ts")
+	}
+	if !strings.Contains(baseContent, "export interface TaskUpdateEvent") {
+		t.Error("Missing TaskUpdateEvent interface in client.ts")
+	}
+
 	// No task-cancel-handler.ts should be generated
 	if _, exists := files["task-cancel-handler.ts"]; exists {
 		t.Error("task-cancel-handler.ts should not be generated — internal groups should be skipped")
+	}
+
+	// No duplicate on-handlers
+	if strings.Count(baseContent, "function onTaskStateEvent") > 1 {
+		t.Error("onTaskStateEvent should only appear once in client.ts")
+	}
+
+	// No auto-generated hooks for internal events
+	if strings.Contains(baseContent, "function useTaskStateEvent") {
+		t.Error("useTaskStateEvent hook should not be generated — useSharedTasks covers this")
+	}
+	if strings.Contains(baseContent, "function useTaskUpdateEvent") {
+		t.Error("useTaskUpdateEvent hook should not be generated — useTaskOutput covers this")
+	}
+
+	// Internal handler methods should not leak
+	if strings.Contains(baseContent, "cancelTask(client") {
+		t.Error("Internal cancelTask method should not appear as a standalone function in client.ts")
 	}
 }
 
