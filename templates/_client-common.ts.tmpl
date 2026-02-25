@@ -45,61 +45,12 @@ export class ApiError extends Error {
 {{end}}
 
 {{define "types"}}
-{{- range .TaskMetaInterfaces}}
-export interface {{.Name}} {
-{{- range .Fields}}
-    {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
-{{- end}}
-}
-
-{{end -}}
-export const TaskNodeStatus = {
-    Running: "running",
-    Completed: "completed",
-    Failed: "failed",
-} as const;
-export type TaskNodeStatusType = typeof TaskNodeStatus[keyof typeof TaskNodeStatus];
-
-export interface TaskNode {
-    id: string;
-    title: string;
-    status: TaskNodeStatusType;
-    error?: string;
-    current?: number;
-    total?: number;
-{{- if .TaskMetaType}}
-    meta?: {{.TaskMetaType}};
-{{- end}}
-    children?: TaskNode[];
-}
-
 export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
     onTaskProgress?: (tasks: TaskNode[]) => void;
     onOutput?: (output: string, taskId?: string) => void;
 }
-{{- if .HasTasks}}
-
-export interface SharedTaskState {
-    id: string;
-    parentId?: string;
-    title: string;
-    status: TaskNodeStatusType;
-    error?: string;
-    current?: number;
-    total?: number;
-    isOwner: boolean;
-{{- if .TaskMetaType}}
-    meta?: {{.TaskMetaType}};
-{{- end}}
-    children?: TaskNode[];
-}
-
-export interface TaskRef {
-    taskId: string;
-}
-{{- end}}
 
 export type PushHandler<T> = (data: T) => void;
 

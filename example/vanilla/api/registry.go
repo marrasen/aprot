@@ -1,6 +1,9 @@
 package api
 
-import "github.com/marrasen/aprot"
+import (
+	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/tasks"
+)
 
 // NewRegistry creates and configures the API registry with all handlers and push events.
 // Middleware is applied per-handler group for safety - you can't accidentally forget
@@ -27,7 +30,7 @@ func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Reg
 
 	// Enable shared tasks with typed metadata
 	// (registers TaskStateEvent, TaskUpdateEvent, CancelTask handler)
-	aprot.EnableTasksWithMeta[TaskMeta](registry)
+	tasks.EnableWithMeta[TaskMeta](registry)
 
 	return registry
 }

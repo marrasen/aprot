@@ -96,8 +96,9 @@ type Registry struct {
 	nextErrorCode  int                           // auto-incrementing error code
 	enums          []EnumInfo                    // registered enum types
 	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
-	tasksEnabled   bool                          // true when EnableTasks() has been called
-	taskMetaType   reflect.Type                  // nil when EnableTasks() used without meta
+	tasksEnabled   bool                          // true when SetTasksEnabled(true) has been called
+	taskMetaType   reflect.Type                  // nil when tasks used without meta
+	generateHooks  []func(results map[string]string, mode OutputMode) // hooks run after generation
 }
 
 // NewRegistry creates a new handler registry.
@@ -354,45 +355,37 @@ func (r *Registry) Enums() []EnumInfo {
 	return r.enums
 }
 
-// EnableTasks enables the shared task system.
-// It registers a CancelTask handler and the TaskStateEvent and TaskUpdateEvent
-// push events. Call this before creating the Server.
-func (r *Registry) EnableTasks() {
-	r.tasksEnabled = true
-	r.RegisterEnum(TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
-	r.Register(handler)
-	r.RegisterPushEventFor(handler, TaskStateEvent{})
-	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
+// SetTasksEnabled marks the registry for shared task runtime support.
+// When true, NewServer creates a taskManager and OnConnect hook.
+func (r *Registry) SetTasksEnabled(enabled bool) {
+	r.tasksEnabled = enabled
 }
 
-// EnableTasksWithMeta enables the shared task system with a typed metadata struct.
-// The meta type will be used in the generated TypeScript client for type-safe
-// metadata on SharedTaskState and TaskNode.
-//
-// This is a free function (not a method) because Go does not allow generic
-// methods on non-generic types.
-//
-// Example:
-//
-//	type TaskMeta struct {
-//	    UserName string `json:"userName,omitempty"`
-//	    Error    string `json:"error,omitempty"`
-//	}
-//	aprot.EnableTasksWithMeta[TaskMeta](registry)
-func EnableTasksWithMeta[M any](r *Registry) {
-	r.taskMetaType = reflect.TypeFor[M]()
-	r.EnableTasks()
+// SetTaskMetaType sets the typed metadata type for shared tasks.
+func (r *Registry) SetTaskMetaType(t reflect.Type) {
+	r.taskMetaType = t
 }
 
-// TaskMetaType returns the registered meta type, or nil if EnableTasks() was used without meta.
+// OnGenerate registers a hook called after code generation.
+// The hook receives the results map (filename → content) and the output mode.
+// Hooks can modify existing entries or add new files.
+func (r *Registry) OnGenerate(hook func(results map[string]string, mode OutputMode)) {
+	r.generateHooks = append(r.generateHooks, hook)
+}
+
+// TaskMetaType returns the registered meta type, or nil if tasks are used without meta.
 func (r *Registry) TaskMetaType() reflect.Type {
 	return r.taskMetaType
 }
 
-// TasksEnabled returns whether EnableTasks() has been called.
+// TasksEnabled returns whether the shared task system is enabled.
 func (r *Registry) TasksEnabled() bool {
 	return r.tasksEnabled
+}
+
+// GenerateHooks returns the registered generation hooks.
+func (r *Registry) GenerateHooks() []func(results map[string]string, mode OutputMode) {
+	return r.generateHooks
 }
 
 // capitalize capitalizes the first letter of a string.

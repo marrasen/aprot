@@ -577,13 +577,10 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	return err
 }
 
-// taskCancelHandler is an internal handler registered by EnableTasks()
-// to allow clients to cancel shared tasks.
-type taskCancelHandler struct {
-	server *Server
-}
-
-func (h *taskCancelHandler) CancelTask(ctx context.Context, req *CancelTaskRequest) error {
+// CancelSharedTask cancels a shared task by ID.
+// It accesses the task manager via the connection on the context.
+// Intended to be called from handler methods (e.g., the tasks subpackage).
+func CancelSharedTask(ctx context.Context, taskID string) error {
 	conn := Connection(ctx)
 	if conn == nil {
 		return ErrInternal(nil)
@@ -592,8 +589,8 @@ func (h *taskCancelHandler) CancelTask(ctx context.Context, req *CancelTaskReque
 	if tm == nil {
 		return NewError(CodeInternalError, "tasks not enabled")
 	}
-	if !tm.cancelTask(req.TaskID) {
-		return NewError(CodeInvalidParams, "task not found: "+req.TaskID)
+	if !tm.cancelTask(taskID) {
+		return NewError(CodeInvalidParams, "task not found: "+taskID)
 	}
 	return nil
 }

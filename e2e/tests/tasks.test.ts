@@ -1,9 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
-import { ApiClient, cancelSharedTask } from '../api/client';
-import type { TaskNode, SharedTaskState } from '../api/client';
-import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
+import { ApiClient } from '../api/client';
+import type { TaskNode } from '../api/client';
+import type { SharedTaskState } from '../api/task-cancel-handler';
 import { onTaskStateEvent, onTaskUpdateEvent } from '../api/task-cancel-handler';
+import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
+import { cancelSharedTask } from '../api/tasks';
 
 describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
