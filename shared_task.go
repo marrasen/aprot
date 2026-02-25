@@ -87,7 +87,7 @@ func (t *sharedTaskCore) output(msg string) {
 
 func (t *sharedTaskCore) closeTask() {
 	t.mu.Lock()
-	if t.status != TaskNodeStatusRunning {
+	if t.status != TaskNodeStatusRunning && t.status != TaskNodeStatusCreated {
 		t.mu.Unlock()
 		return
 	}
@@ -104,7 +104,7 @@ func (t *sharedTaskCore) closeTask() {
 
 func (t *sharedTaskCore) fail(msg string) {
 	t.mu.Lock()
-	if t.status != TaskNodeStatusRunning {
+	if t.status != TaskNodeStatusRunning && t.status != TaskNodeStatusCreated {
 		t.mu.Unlock()
 		return
 	}
@@ -123,11 +123,15 @@ func (t *sharedTaskCore) subTask(title string) *sharedTaskNode {
 	child := &sharedTaskNode{
 		id:     t.manager.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 	}
 	t.mu.Lock()
 	t.children = append(t.children, child)
 	t.mu.Unlock()
+	t.manager.markDirty(t.id)
+	child.mu.Lock()
+	child.status = TaskNodeStatusRunning
+	child.mu.Unlock()
 	t.manager.markDirty(t.id)
 	return child
 }
@@ -301,11 +305,15 @@ func (n *sharedTaskNode) subTask(core *sharedTaskCore, title string) *sharedTask
 	child := &sharedTaskNode{
 		id:     core.manager.allocID(),
 		title:  title,
-		status: TaskNodeStatusRunning,
+		status: TaskNodeStatusCreated,
 	}
 	n.mu.Lock()
 	n.children = append(n.children, child)
 	n.mu.Unlock()
+	core.manager.markDirty(core.id)
+	child.mu.Lock()
+	child.status = TaskNodeStatusRunning
+	child.mu.Unlock()
 	core.manager.markDirty(core.id)
 	return child
 }
@@ -369,7 +377,7 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 	task := &sharedTaskCore{
 		id:          id,
 		title:       title,
-		status:      TaskNodeStatusRunning,
+		status:      TaskNodeStatusCreated,
 		manager:     tm,
 		cancel:      cancel,
 		ctx:         taskCtx,
@@ -521,6 +529,10 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 		return ctx, nil
 	}
 	core := tm.create(title, conn.ID(), true, ctx)
+	core.mu.Lock()
+	core.status = TaskNodeStatusRunning
+	core.mu.Unlock()
+	tm.markDirty(core.id)
 
 	// Populate the task slot so handleRequest can auto-manage lifecycle.
 	if slot := taskSlotFromContext(ctx); slot != nil {
@@ -562,6 +574,10 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 
 	// Create a new shared task core (not top-level, so isOwner stays false).
 	core := tm.create(title, conn.ID(), false, ctx)
+	core.mu.Lock()
+	core.status = TaskNodeStatusRunning
+	core.mu.Unlock()
+	tm.markDirty(core.id)
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 

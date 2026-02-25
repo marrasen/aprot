@@ -314,7 +314,7 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 
 The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (a `TaskNodeStatusType`), optional `error` message (populated on failure), and optional `current`/`total` progress.
 
-`TaskNodeStatus` is exported as a TypeScript const enum, so you can use `TaskNodeStatus.Running`, `TaskNodeStatus.Completed`, and `TaskNodeStatus.Failed` instead of raw string literals:
+`TaskNodeStatus` is exported as a TypeScript const enum, so you can use `TaskNodeStatus.Created`, `TaskNodeStatus.Running`, `TaskNodeStatus.Completed`, and `TaskNodeStatus.Failed` instead of raw string literals. A task starts with `Created` status, transitions to `Running` before its function executes, and ends with `Completed` or `Failed`:
 
 ```typescript
 import { TaskNodeStatus } from './api/client';

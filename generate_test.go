@@ -1627,8 +1627,8 @@ func TestEnableTasksRegistersEnum(t *testing.T) {
 	if enumInfo.Name != "TaskNodeStatus" {
 		t.Errorf("Expected enum name TaskNodeStatus, got %s", enumInfo.Name)
 	}
-	if len(enumInfo.Values) != 3 {
-		t.Errorf("Expected 3 enum values, got %d", len(enumInfo.Values))
+	if len(enumInfo.Values) != 4 {
+		t.Errorf("Expected 4 enum values, got %d", len(enumInfo.Values))
 	}
 }
 

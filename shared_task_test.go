@@ -32,7 +32,7 @@ func TestSharedTaskBasic(t *testing.T) {
 		t.Fatal("expected non-empty task ID")
 	}
 
-	// Check snapshot
+	// Check snapshot — tm.create() leaves the task in "created" status
 	states := tm.snapshotAll()
 	if len(states) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(states))
@@ -40,8 +40,8 @@ func TestSharedTaskBasic(t *testing.T) {
 	if states[0].Title != "Build project" {
 		t.Errorf("expected 'Build project', got %s", states[0].Title)
 	}
-	if states[0].Status != TaskNodeStatusRunning {
-		t.Errorf("expected running status, got %s", states[0].Status)
+	if states[0].Status != TaskNodeStatusCreated {
+		t.Errorf("expected created status, got %s", states[0].Status)
 	}
 
 	// Close the task
