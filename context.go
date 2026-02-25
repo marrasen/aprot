@@ -9,10 +9,7 @@ const (
 	connectionKey
 	handlerInfoKey
 	requestKey
-	taskTreeKey
-	taskNodeKey
-	sharedContextKey
-	taskSlotKey
+	requestSenderKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -71,65 +68,16 @@ func withRequest(ctx context.Context, req *Request) context.Context {
 	return context.WithValue(ctx, requestKey, req)
 }
 
-// taskTreeFromContext returns the taskTree from the context.
+// RequestSenderFromContext returns the RequestSender from the context.
 // Returns nil if not present.
-func taskTreeFromContext(ctx context.Context) *taskTree {
-	if t, ok := ctx.Value(taskTreeKey).(*taskTree); ok {
-		return t
+func RequestSenderFromContext(ctx context.Context) RequestSender {
+	if rs, ok := ctx.Value(requestSenderKey).(RequestSender); ok {
+		return rs
 	}
 	return nil
 }
 
-// taskNodeFromContext returns the current taskNode from the context.
-// Returns nil if not present.
-func taskNodeFromContext(ctx context.Context) *taskNode {
-	if n, ok := ctx.Value(taskNodeKey).(*taskNode); ok {
-		return n
-	}
-	return nil
-}
-
-// withTaskTree returns a context with the given task tree.
-func withTaskTree(ctx context.Context, t *taskTree) context.Context {
-	return context.WithValue(ctx, taskTreeKey, t)
-}
-
-// withTaskNode returns a context with the given task node.
-func withTaskNode(ctx context.Context, n *taskNode) context.Context {
-	return context.WithValue(ctx, taskNodeKey, n)
-}
-
-// sharedCtxFromContext returns the sharedContext from the context.
-// Returns nil if not present.
-func sharedCtxFromContext(ctx context.Context) *sharedContext {
-	if sc, ok := ctx.Value(sharedContextKey).(*sharedContext); ok {
-		return sc
-	}
-	return nil
-}
-
-// withSharedContext returns a context with the given shared context.
-func withSharedContext(ctx context.Context, sc *sharedContext) context.Context {
-	return context.WithValue(ctx, sharedContextKey, sc)
-}
-
-// taskSlot is a mutable slot placed on the context by handleRequest.
-// StartTask and StartSharedTask populate it so handleRequest can detect
-// inline tasks after the handler returns and auto-manage their lifecycle.
-type taskSlot struct {
-	sharedCore *sharedTaskCore // non-nil if StartSharedTask was called
-	taskNode   *taskNode       // non-nil if StartTask was called
-}
-
-// taskSlotFromContext returns the taskSlot from the context.
-func taskSlotFromContext(ctx context.Context) *taskSlot {
-	if s, ok := ctx.Value(taskSlotKey).(*taskSlot); ok {
-		return s
-	}
-	return nil
-}
-
-// withTaskSlot returns a context with the given task slot.
-func withTaskSlot(ctx context.Context, s *taskSlot) context.Context {
-	return context.WithValue(ctx, taskSlotKey, s)
+// withRequestSender returns a context with the given request sender.
+func withRequestSender(ctx context.Context, rs RequestSender) context.Context {
+	return context.WithValue(ctx, requestSenderKey, rs)
 }

@@ -45,10 +45,6 @@ type NotificationEvent struct {
 	Message string `json:"message"`
 }
 
-type TaskTitleRequest struct {
-	Title string `json:"title"`
-}
-
 // Integration test handlers
 type IntegrationHandlers struct {
 	server *Server
@@ -74,19 +70,6 @@ func (h *IntegrationHandlers) Slow(ctx context.Context, req *SlowRequest) (*Slow
 func (h *IntegrationHandlers) TriggerBroadcast(ctx context.Context, req *BroadcastRequest) (*BroadcastResponse, error) {
 	h.server.Broadcast(&NotificationEvent{Message: req.Message})
 	return &BroadcastResponse{Sent: true}, nil
-}
-
-func (h *IntegrationHandlers) RunSharedSubTask(ctx context.Context, req *TaskTitleRequest) error {
-	return SharedSubTask(ctx, req.Title, func(ctx context.Context) error {
-		time.Sleep(500 * time.Millisecond)
-		return nil
-	})
-}
-
-func (h *IntegrationHandlers) RunStartSharedTask(ctx context.Context, req *TaskTitleRequest) (*TaskRef, error) {
-	_, task := StartSharedTask[struct{}](ctx, req.Title)
-	time.Sleep(500 * time.Millisecond)
-	return &TaskRef{TaskID: task.ID()}, nil
 }
 
 func (h *IntegrationHandlers) TriggerPush(ctx context.Context, req *BroadcastRequest) (*BroadcastResponse, error) {

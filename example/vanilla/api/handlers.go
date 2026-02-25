@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/tasks"
 )
 
 // UserPusher interface for sending push messages to specific users.
@@ -239,10 +240,10 @@ func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, req *ProcessWi
 
 	completed := 0
 	for i, step := range req.Steps {
-		err := aprot.SubTask(ctx, step, func(ctx context.Context) error {
-			aprot.Output(ctx, fmt.Sprintf("Starting %s", step))
+		err := tasks.SubTask(ctx, step, func(ctx context.Context) error {
+			tasks.Output(ctx, fmt.Sprintf("Starting %s", step))
 			time.Sleep(time.Duration(delay) * time.Millisecond)
-			aprot.Output(ctx, fmt.Sprintf("Finished %s", step))
+			tasks.Output(ctx, fmt.Sprintf("Finished %s", step))
 			return nil
 		})
 		if err != nil {
@@ -270,7 +271,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		delay = 50
 	}
 
-	ctx, task := aprot.StartSharedTask[TaskMeta](ctx, req.Title)
+	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, req.Title)
 	if task == nil {
 		return aprot.ErrInternal(nil)
 	}

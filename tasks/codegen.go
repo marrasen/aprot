@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"reflect"
@@ -18,41 +17,6 @@ var templateFS embed.FS
 var taskTemplates = template.Must(
 	template.New("").ParseFS(templateFS, "templates/*.tmpl"),
 )
-
-// taskCancelHandler is the handler struct for task cancellation.
-type taskCancelHandler struct{}
-
-func (h *taskCancelHandler) CancelTask(ctx context.Context, req *aprot.CancelTaskRequest) error {
-	return aprot.CancelSharedTask(ctx, req.TaskID)
-}
-
-// Enable registers the shared task system with the registry.
-func Enable(r *aprot.Registry) {
-	r.SetTasksEnabled(true)
-	r.RegisterEnum(aprot.TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
-	r.Register(handler)
-	r.RegisterPushEventFor(handler, aprot.TaskStateEvent{})
-	r.RegisterPushEventFor(handler, aprot.TaskUpdateEvent{})
-	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
-		appendTaskConvenienceCode(results, mode, nil)
-	})
-}
-
-// EnableWithMeta registers the shared task system with typed metadata.
-func EnableWithMeta[M any](r *aprot.Registry) {
-	metaType := reflect.TypeFor[M]()
-	r.SetTaskMetaType(metaType)
-	r.SetTasksEnabled(true)
-	r.RegisterEnum(aprot.TaskNodeStatusValues())
-	handler := &taskCancelHandler{}
-	r.Register(handler)
-	r.RegisterPushEventFor(handler, aprot.TaskStateEvent{})
-	r.RegisterPushEventFor(handler, aprot.TaskUpdateEvent{})
-	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
-		appendTaskConvenienceCode(results, mode, metaType)
-	})
-}
 
 // taskTemplateData holds all data needed for task template rendering.
 type taskTemplateData struct {
@@ -73,9 +37,8 @@ type metaFieldData struct {
 }
 
 // appendTaskConvenienceCode generates convenience TypeScript code for the task system.
-// For multi-file mode it creates a tasks.ts file; for single-file mode it appends to client.ts.
 func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode, metaType reflect.Type) {
-	_, hasHandlerFile := results["task-cancel-handler.ts"]
+	_, hasHandlerFile := results["tasks-handler.ts"]
 	isMultiFile := hasHandlerFile
 
 	data := taskTemplateData{
@@ -112,18 +75,15 @@ func buildMetaInterfaces(t reflect.Type) []metaInterfaceData {
 		return nil
 	}
 
-	// Collect nested types first (depth-first so dependencies come first)
 	var nested []reflect.Type
 	collectNestedStructs(t, &nested, map[reflect.Type]bool{})
 
 	var result []metaInterfaceData
 
-	// Nested interfaces first
 	for _, nt := range nested {
 		result = append(result, buildInterfaceData(nt))
 	}
 
-	// Main interface
 	result = append(result, buildInterfaceData(t))
 
 	return result

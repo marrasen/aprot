@@ -48,18 +48,13 @@ type ErrorMessage struct {
 	Message string      `json:"message"`
 }
 
-// ProgressMessage represents a progress update from server to client.
-// When TaskID is set, the update targets a specific task node (output or progress).
-// When TaskID is empty, the update is request-level (legacy progress or full task tree).
+// ProgressMessage represents a request-level progress update from server to client.
 type ProgressMessage struct {
 	Type    MessageType `json:"type"`
 	ID      string      `json:"id"`
-	TaskID  string      `json:"taskId,omitempty"`
 	Current *int        `json:"current,omitempty"`
 	Total   *int        `json:"total,omitempty"`
 	Message string      `json:"message,omitempty"`
-	Tasks   []*TaskNode `json:"tasks,omitempty"`
-	Output  *string     `json:"output,omitempty"`
 }
 
 // PushMessage represents a server-initiated push message.

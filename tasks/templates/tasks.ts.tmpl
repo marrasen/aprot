@@ -3,17 +3,36 @@
 
 {{if .IsReact -}}
 import { useState, useEffect, useCallback } from 'react';
-import type { ApiClient } from './client';
+import type { ApiClient, RequestOptions, TaskNode } from './client';
 import { useApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './task-cancel-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
 {{- else -}}
-import type { ApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './task-cancel-handler';
+import type { ApiClient, RequestOptions, TaskNode } from './client';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
 {{- end}}
 
 {{end -}}
+export interface TaskRequestOptions extends RequestOptions {
+    onTaskProgress?: (tasks: TaskNode[]) => void;
+    onOutput?: (output: string, taskId?: string) => void;
+}
+
+export function taskOptions(opts: TaskRequestOptions): RequestOptions {
+    const { onTaskProgress, onOutput, ...base } = opts;
+    if (!onTaskProgress && !onOutput) return opts;
+    const prevOnMessage = base.onMessage;
+    return {
+        ...base,
+        onMessage: (msg: any) => {
+            if (msg.tasks && onTaskProgress) onTaskProgress(msg.tasks);
+            if (msg.output != null && onOutput) onOutput(msg.output, msg.taskId);
+            prevOnMessage?.(msg);
+        },
+    };
+}
+
 export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
-    return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
+    return client.request<void>('tasksHandler.CancelTask', [taskId]);
 }
 {{- if .IsReact}}
 {{template "react-hooks" .}}

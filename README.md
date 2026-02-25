@@ -289,13 +289,15 @@ progress := aprot.Progress(ctx)            // Progress reporter
 
 ### Sub-Tasks
 
-Use `SubTask` inside any handler to report hierarchical progress to the calling client. Sub-tasks nest automatically via context:
+Use `tasks.SubTask` inside any handler to report hierarchical progress to the calling client. Sub-tasks nest automatically via context:
 
 ```go
+import "github.com/marrasen/aprot/tasks"
+
 func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
-    err := aprot.SubTask(ctx, "Build image", func(ctx context.Context) error {
+    err := tasks.SubTask(ctx, "Build image", func(ctx context.Context) error {
         // Nested sub-task
-        return aprot.SubTask(ctx, "Compile", func(ctx context.Context) error {
+        return tasks.SubTask(ctx, "Compile", func(ctx context.Context) error {
             // ... do work ...
             return nil
         })
@@ -304,7 +306,7 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
         return nil, err
     }
 
-    err = aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+    err = tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
         return nil
     })
 
@@ -327,36 +329,36 @@ if (task.status === TaskNodeStatus.Completed) {
 **Task progress** — report numeric progress (current/total) on a sub-task from inside the callback:
 
 ```go
-aprot.SubTask(ctx, "Parsing files", func(ctx context.Context) error {
-    aprot.TaskProgress(ctx, 0, len(files))
+tasks.SubTask(ctx, "Parsing files", func(ctx context.Context) error {
+    tasks.TaskProgress(ctx, 0, len(files))
     for _, file := range files {
         if err := parseFile(ctx, file); err != nil {
             return err
         }
-        aprot.StepTaskProgress(ctx, 1)
+        tasks.StepTaskProgress(ctx, 1)
     }
     return nil
 })
 ```
 
-- `TaskProgress(ctx, current, total)` — sets both current and total on the task node
-- `StepTaskProgress(ctx, step)` — increments current by step (e.g. call with 1 after each item)
+- `tasks.TaskProgress(ctx, current, total)` — sets both current and total on the task node
+- `tasks.StepTaskProgress(ctx, step)` — increments current by step (e.g. call with 1 after each item)
 
-Both update the request-scoped task tree and the shared task system (if present). No-op if called outside a `SubTask` context.
+Both update the request-scoped task tree and the shared task system (if present). No-op if called outside a `tasks.SubTask` context.
 
 **Output streaming** sends text output during execution:
 
 ```go
-aprot.Output(ctx, "Starting deployment...")
+tasks.Output(ctx, "Starting deployment...")
 
 // Or use a writer for command output:
-w := aprot.OutputWriter(ctx, "Running tests")
+w := tasks.OutputWriter(ctx, "Running tests")
 cmd.Stdout = w
 cmd.Run()
 w.Close()
 
 // Track bytes as progress (e.g. file downloads):
-pw := aprot.WriterProgress(ctx, "Downloading", fileSize)
+pw := tasks.WriterProgress(ctx, "Downloading", fileSize)
 io.Copy(pw, resp.Body)
 pw.Close()
 ```
@@ -405,11 +407,13 @@ This generates a typed `TaskMeta` interface in the TypeScript client and adds an
 
 #### Creating Shared Tasks
 
-`StartSharedTask` returns a context and a typed task handle. The handler body **is** the task body — no goroutine needed. The task auto-completes when the handler returns nil, and auto-fails on error.
+`tasks.StartSharedTask` returns a context and a typed task handle. The handler body **is** the task body — no goroutine needed. The task auto-completes when the handler returns nil, and auto-fails on error.
 
 ```go
+import "github.com/marrasen/aprot/tasks"
+
 func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) error {
-    ctx, task := aprot.StartSharedTask[TaskMeta](ctx, "Deploying "+req.Service)
+    ctx, task := tasks.StartSharedTask[TaskMeta](ctx, req.Title)
     if task == nil {
         return aprot.ErrInternal(nil)
     }
@@ -421,8 +425,8 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) error {
     task.Output("Building image...")
 
     // SubTask calls on ctx automatically create mirrored nodes in the shared task tree
-    err := aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
-        aprot.TaskProgress(ctx, 1, 2)
+    err := tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+        tasks.TaskProgress(ctx, 1, 2)
         return nil
     })
     if err != nil {
@@ -437,13 +441,13 @@ func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) error {
 The task uses the request context for cancellation. If the client disconnects, the task is canceled. To make a task survive disconnection:
 
 ```go
-ctx, task := aprot.StartSharedTask[struct{}](context.WithoutCancel(ctx), "Long job")
+ctx, task := tasks.StartSharedTask[struct{}](context.WithoutCancel(ctx), "Long job")
 ```
 
 If you don't use metadata, use `struct{}`:
 
 ```go
-ctx, task := aprot.StartSharedTask[struct{}](ctx, "Simple task")
+ctx, task := tasks.StartSharedTask[struct{}](ctx, "Simple task")
 ```
 
 Key methods on `SharedTask[M]`:
@@ -468,15 +472,15 @@ Key methods on `SharedTaskSub[M]` (child nodes):
 
 #### Request-Scoped Tasks
 
-`StartTask` creates a task visible only to the calling client via the progress stream. Same inline pattern as shared tasks:
+`tasks.StartTask` creates a task visible only to the calling client via the progress stream. Same inline pattern as shared tasks:
 
 ```go
 func (h *Handlers) ProcessData(ctx context.Context, req *ProcessRequest) error {
-    ctx, task := aprot.StartTask[ProcessMeta](ctx, "Processing")
+    ctx, task := tasks.StartTask[ProcessMeta](ctx, "Processing")
     task.SetMeta(ProcessMeta{FileName: req.File})
 
     // SubTask calls create child nodes in the task tree
-    err := aprot.SubTask(ctx, "Parse", func(ctx context.Context) error {
+    err := tasks.SubTask(ctx, "Parse", func(ctx context.Context) error {
         return nil
     })
     if err != nil {
@@ -580,21 +584,21 @@ await cancelSharedTask(client, taskId);
 
 ### SharedSubTask (Bridging Request-Scoped and Shared Tasks)
 
-`SharedSubTask` bridges both task systems: it creates a top-level shared task (broadcast to all clients) and routes all nested `SubTask`, `Output`, and `TaskProgress` calls through the shared task system exclusively.
+`tasks.SharedSubTask` bridges both task systems: it creates a top-level shared task (broadcast to all clients) and routes all nested `SubTask`, `Output`, and `TaskProgress` calls through the shared task system exclusively.
 
 ```go
 func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
     // Creates a shared task visible to all clients + request-scoped progress for the caller.
-    err := aprot.SharedSubTask(ctx, "Deploying", func(ctx context.Context) error {
+    err := tasks.SharedSubTask(ctx, "Deploying", func(ctx context.Context) error {
         // Nested SubTask calls are mirrored to both systems.
-        if err := aprot.SubTask(ctx, "Build image", func(ctx context.Context) error {
-            aprot.Output(ctx, "Compiling...")  // sent to requester AND broadcast
+        if err := tasks.SubTask(ctx, "Build image", func(ctx context.Context) error {
+            tasks.Output(ctx, "Compiling...")  // sent to requester AND broadcast
             return nil
         }); err != nil {
             return err
         }
 
-        return aprot.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
+        return tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
             return nil
         })
     })
@@ -604,20 +608,20 @@ func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployRespo
 ```
 
 **Behavior:**
-- If called with no existing shared context, `SharedSubTask` creates a new shared task core. On return, the core is auto-closed (or marked failed on error).
-- If nested inside another `SharedSubTask`, it delegates to `SubTask` — no new core is created, just a child node.
-- If no connection or `taskManager` is available, it falls back to plain `SubTask`.
-- `Output(ctx, msg)` inside a shared context broadcasts to all clients via the shared task system.
+- If called with no existing shared context, `tasks.SharedSubTask` creates a new shared task core. On return, the core is auto-closed (or marked failed on error).
+- If nested inside another `tasks.SharedSubTask`, it delegates to `tasks.SubTask` — no new core is created, just a child node.
+- If no connection or `taskManager` is available, it falls back to plain `tasks.SubTask`.
+- `tasks.Output(ctx, msg)` inside a shared context broadcasts to all clients via the shared task system.
 
 **`SharedTask.WithContext()`** — for goroutines that should route through the shared task system:
 
 ```go
-ctx, task := aprot.StartSharedTask[struct{}](ctx, "Background job")
+ctx, task := tasks.StartSharedTask[struct{}](ctx, "Background job")
 go func() {
     // Attach the shared context so SubTask/Output/TaskProgress route through the shared system.
     ctx := task.WithContext(context.Background())
 
-    aprot.SubTask(ctx, "Step 1", func(ctx context.Context) error {
+    tasks.SubTask(ctx, "Step 1", func(ctx context.Context) error {
         // This creates a child in the shared task tree (broadcast to all clients).
         return nil
     })
