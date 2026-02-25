@@ -198,16 +198,10 @@ func (g *Generator) Generate() (map[string]string, error) {
 		})
 	}
 
-	var baseBuf strings.Builder
 	baseTemplateName := "client-base.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		baseTemplateName = "client-base-react.ts.tmpl"
 	}
-
-	if err := templates.ExecuteTemplate(&baseBuf, baseTemplateName, baseData); err != nil {
-		return nil, err
-	}
-	results["client.ts"] = baseBuf.String()
 
 	// Generate handler files
 	handlerTemplateName := "client-handler.ts.tmpl"
@@ -219,11 +213,36 @@ func (g *Generator) Generate() (map[string]string, error) {
 	paramNames := g.extractAllParamNames()
 
 	for _, group := range g.registry.Groups() {
-		if group.Internal {
-			continue
-		}
 		g.types = make(map[reflect.Type]string)           // Reset types per group
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo) // Reset enums per group
+
+		if group.Internal {
+			// Merge internal group's push events into the base client
+			for _, event := range group.PushEvents {
+				g.collectType(event.DataType)
+			}
+			types := make([]reflect.Type, 0, len(g.types))
+			for t := range g.types {
+				types = append(types, t)
+			}
+			sort.Slice(types, func(i, j int) bool {
+				return types[i].Name() < types[j].Name()
+			})
+			for _, t := range types {
+				iface := interfaceData{Name: t.Name()}
+				iface.Fields = g.collectInterfaceFields(t)
+				baseData.Interfaces = append(baseData.Interfaces, iface)
+			}
+			for _, event := range group.PushEvents {
+				baseData.PushEvents = append(baseData.PushEvents, pushEventData{
+					Name:        event.Name,
+					HandlerName: "on" + event.Name,
+					HookName:    "use" + event.Name,
+					DataType:    event.DataType.Name(),
+				})
+			}
+			continue
+		}
 
 		// Collect types for this group
 		for _, info := range group.Handlers {
@@ -249,6 +268,13 @@ func (g *Generator) Generate() (map[string]string, error) {
 
 		results[data.FileName] = buf.String()
 	}
+
+	// Render base client after the loop so internal group data is included
+	var baseBuf strings.Builder
+	if err := templates.ExecuteTemplate(&baseBuf, baseTemplateName, baseData); err != nil {
+		return nil, err
+	}
+	results["client.ts"] = baseBuf.String()
 
 	// Write to files if OutputDir is set
 	if g.options.OutputDir != "" {
@@ -348,9 +374,6 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	// Build push events from all groups
 	for _, event := range g.registry.PushEvents() {
-		if grp, ok := g.registry.Groups()[event.StructName]; ok && grp.Internal {
-			continue
-		}
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
 			HandlerName: "on" + event.Name,

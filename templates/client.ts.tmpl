@@ -460,12 +460,4 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
 export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
     return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
 }
-
-export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {
-    return client.onPush<TaskStateEvent>('TaskStateEvent', handler);
-}
-
-export function onTaskUpdateEvent(client: ApiClient, handler: PushHandler<TaskUpdateEvent>): () => void {
-    return client.onPush<TaskUpdateEvent>('TaskUpdateEvent', handler);
-}
 {{- end}}
