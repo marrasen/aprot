@@ -36,12 +36,11 @@ func (t *taskTree) snapshot() []*TaskNode {
 func (t *taskTree) send() {
 	nodes := t.snapshot()
 	if nodes != nil {
-		msg := aprot.ProgressMessage{
+		t.sender.SendJSON(taskTreeMessage{
 			Type:  aprot.TypeProgress,
 			ID:    t.sender.RequestID(),
 			Tasks: nodes,
-		}
-		t.sender.SendJSON(msg)
+		})
 	}
 }
 

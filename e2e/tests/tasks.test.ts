@@ -5,7 +5,7 @@ import type { TaskNode } from '../api/client';
 import type { SharedTaskState } from '../api/tasks-handler';
 import { onTaskStateEvent, onTaskUpdateEvent } from '../api/tasks-handler';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
-import { cancelSharedTask } from '../api/tasks';
+import { cancelSharedTask, taskOptions } from '../api/tasks';
 
 describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
@@ -25,11 +25,11 @@ describe('SubTask (WebSocket)', () => {
         const res = await processWithSubTasks(
             client,
             { steps: ['Build', 'Test', 'Deploy'], delay: 50 },
-            {
+            taskOptions({
                 onTaskProgress: (tasks) => {
                     taskUpdates.push(tasks);
                 },
-            },
+            }),
         );
 
         expect(res.completed).toBe(3);
@@ -60,7 +60,7 @@ describe('SubTask (WebSocket)', () => {
         const res = await processWithSubTasks(
             client,
             { steps: ['Alpha', 'Beta'], delay: 50 },
-            {
+            taskOptions({
                 onOutput: (output, taskId) => {
                     outputs.push({ output, taskId });
                 },
@@ -69,7 +69,7 @@ describe('SubTask (WebSocket)', () => {
                     taskNodes.length = 0;
                     taskNodes.push(...tasks);
                 },
-            },
+            }),
         );
 
         expect(res.completed).toBe(2);

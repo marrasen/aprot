@@ -11,10 +11,24 @@ import (
 	"github.com/marrasen/aprot"
 )
 
+// capturedMessage is a test-only superset of all progress-like fields so that
+// the mock sender can capture any message type (tree snapshot, output, or
+// node-level progress) in a single struct.
+type capturedMessage struct {
+	Type    string      `json:"type"`
+	ID      string      `json:"id"`
+	Tasks   []*TaskNode `json:"tasks,omitempty"`
+	TaskID  string      `json:"taskId,omitempty"`
+	Output  *string     `json:"output,omitempty"`
+	Current *int        `json:"current,omitempty"`
+	Total   *int        `json:"total,omitempty"`
+	Message string      `json:"message,omitempty"`
+}
+
 // mockSender is a test double for aprot.RequestSender that records every
 // message passed to SendJSON.
 type mockSender struct {
-	captured []aprot.ProgressMessage
+	captured []capturedMessage
 	mu       sync.Mutex
 }
 
@@ -23,7 +37,7 @@ func (m *mockSender) SendJSON(v any) error {
 	if err != nil {
 		return err
 	}
-	var msg aprot.ProgressMessage
+	var msg capturedMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return err
 	}
@@ -35,29 +49,18 @@ func (m *mockSender) SendJSON(v any) error {
 
 func (m *mockSender) RequestID() string { return "req-1" }
 
-func (m *mockSender) messages() []aprot.ProgressMessage {
+func (m *mockSender) messages() []capturedMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]aprot.ProgressMessage, len(m.captured))
+	out := make([]capturedMessage, len(m.captured))
 	copy(out, m.captured)
 	return out
 }
 
-// extractTasks round-trips msg.Tasks through JSON to obtain a typed slice.
-func extractTasks(t *testing.T, msg aprot.ProgressMessage) []*TaskNode {
+// extractTasks returns the Tasks field from a captured message.
+func extractTasks(t *testing.T, msg capturedMessage) []*TaskNode {
 	t.Helper()
-	if msg.Tasks == nil {
-		return nil
-	}
-	data, err := json.Marshal(msg.Tasks)
-	if err != nil {
-		t.Fatalf("extractTasks: marshal: %v", err)
-	}
-	var nodes []*TaskNode
-	if err := json.Unmarshal(data, &nodes); err != nil {
-		t.Fatalf("extractTasks: unmarshal: %v", err)
-	}
-	return nodes
+	return msg.Tasks
 }
 
 // newTestCtx returns a context that has a task tree backed by sender.

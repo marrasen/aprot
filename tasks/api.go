@@ -99,11 +99,11 @@ func Output(ctx context.Context, msg string) {
 		if node := taskNodeFromContext(ctx); node != nil {
 			taskID = node.id
 		}
-		tree.sender.SendJSON(aprot.ProgressMessage{
+		tree.sender.SendJSON(taskNodeOutputMessage{
 			Type:   aprot.TypeProgress,
 			ID:     tree.sender.RequestID(),
 			TaskID: taskID,
-			Output: &msg,
+			Output: msg,
 		})
 	}
 }
@@ -122,12 +122,12 @@ func TaskProgress(ctx context.Context, current, total int) {
 	if node != nil {
 		node.setProgress(current, total)
 		tree := node.tree
-		tree.sender.SendJSON(aprot.ProgressMessage{
+		tree.sender.SendJSON(taskNodeProgressMessage{
 			Type:    aprot.TypeProgress,
 			ID:      tree.sender.RequestID(),
 			TaskID:  node.id,
-			Current: &current,
-			Total:   &total,
+			Current: current,
+			Total:   total,
 		})
 	}
 }
@@ -147,12 +147,12 @@ func StepTaskProgress(ctx context.Context, step int) {
 	if node != nil {
 		current, total := node.stepProgress(step)
 		tree := node.tree
-		tree.sender.SendJSON(aprot.ProgressMessage{
+		tree.sender.SendJSON(taskNodeProgressMessage{
 			Type:    aprot.TypeProgress,
 			ID:      tree.sender.RequestID(),
 			TaskID:  node.id,
-			Current: &current,
-			Total:   &total,
+			Current: current,
+			Total:   total,
 		})
 	}
 }
@@ -270,12 +270,12 @@ func (t *Task[M]) ID() string {
 func (t *Task[M]) Progress(current, total int) {
 	t.node.setProgress(current, total)
 	tree := t.node.tree
-	tree.sender.SendJSON(aprot.ProgressMessage{
+	tree.sender.SendJSON(taskNodeProgressMessage{
 		Type:    aprot.TypeProgress,
 		ID:      tree.sender.RequestID(),
 		TaskID:  t.node.id,
-		Current: &current,
-		Total:   &total,
+		Current: current,
+		Total:   total,
 	})
 }
 

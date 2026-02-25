@@ -16,12 +16,11 @@ type taskOutputWriter struct {
 
 func (w *taskOutputWriter) Write(p []byte) (int, error) {
 	if len(p) > 0 {
-		s := string(p)
-		w.tree.sender.SendJSON(aprot.ProgressMessage{
+		w.tree.sender.SendJSON(taskNodeOutputMessage{
 			Type:   aprot.TypeProgress,
 			ID:     w.tree.sender.RequestID(),
 			TaskID: w.node.id,
-			Output: &s,
+			Output: string(p),
 		})
 	}
 	return len(p), nil
@@ -71,14 +70,12 @@ func (w *taskProgressWriter) Write(p []byte) (int, error) {
 	w.node.setProgress(w.written, w.total)
 
 	if time.Since(w.lastSend) >= 100*time.Millisecond {
-		current := w.written
-		total := w.total
-		w.tree.sender.SendJSON(aprot.ProgressMessage{
+		w.tree.sender.SendJSON(taskNodeProgressMessage{
 			Type:    aprot.TypeProgress,
 			ID:      w.tree.sender.RequestID(),
 			TaskID:  w.node.id,
-			Current: &current,
-			Total:   &total,
+			Current: w.written,
+			Total:   w.total,
 		})
 		w.lastSend = time.Now()
 	}
