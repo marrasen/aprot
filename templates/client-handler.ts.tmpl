@@ -3,11 +3,13 @@
 
 import { ApiClient } from './client';
 {{- if and .Methods .PushEvents}}
-import type { RequestOptions, PushHandler } from './client';
+import type { RequestOptions, PushHandler{{if .BaseTypeImports}}, {{join .BaseTypeImports ", "}}{{end}} } from './client';
 {{- else if .Methods}}
-import type { RequestOptions } from './client';
+import type { RequestOptions{{if .BaseTypeImports}}, {{join .BaseTypeImports ", "}}{{end}} } from './client';
 {{- else if .PushEvents}}
-import type { PushHandler } from './client';
+import type { PushHandler{{if .BaseTypeImports}}, {{join .BaseTypeImports ", "}}{{end}} } from './client';
+{{- else if .BaseTypeImports}}
+import type { {{join .BaseTypeImports ", "}} } from './client';
 {{- end}}
 
 {{range .Enums -}}

@@ -9,6 +9,15 @@
 {{template "get-websocket-url" .}}
 
 {{template "api-client-class" .}}
+{{- range .Enums}}
+
+export const {{.Name}} = {
+{{- range .Values}}
+    {{.Name}}: {{.Value}},
+{{- end}}
+} as const;
+export type {{.Name}}Type = typeof {{.Name}}[keyof typeof {{.Name}}];
+{{- end}}
 {{- range .Interfaces}}
 
 export interface {{.Name}} {
@@ -21,11 +30,5 @@ export interface {{.Name}} {
 
 export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
     return client.onPush<{{.DataType}}>('{{.Name}}', handler);
-}
-{{- end}}
-{{- if .HasTasks}}
-
-export function cancelSharedTask(client: ApiClient, taskId: string): Promise<void> {
-    return client.request<void>('taskCancelHandler.CancelTask', [{ taskId }]);
 }
 {{- end}}

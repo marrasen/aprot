@@ -25,6 +25,7 @@ var templateFS embed.FS
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"toLowerCamel": toLowerCamel,
 	"toKebab":      toKebab,
+	"join":         strings.Join,
 	"hasParams": func(params []paramData) bool {
 		return len(params) > 0
 	},
@@ -112,16 +113,14 @@ func (g *Generator) WithOptions(opts GeneratorOptions) *Generator {
 
 // templateData holds all data needed for template rendering.
 type templateData struct {
-	StructName         string
-	FileName           string
-	Interfaces         []interfaceData
-	Methods            []methodData
-	PushEvents         []pushEventData
-	CustomErrorCodes   []errorCodeData
-	Enums              []enumTemplateData
-	HasTasks           bool
-	TaskMetaType       string          // e.g. "TaskMeta", empty if no meta
-	TaskMetaInterfaces []interfaceData // the meta type's interface definitions
+	StructName       string
+	FileName         string
+	Interfaces       []interfaceData
+	Methods          []methodData
+	PushEvents       []pushEventData
+	CustomErrorCodes []errorCodeData
+	Enums            []enumTemplateData
+	BaseTypeImports  []string // base type names to import from './client' (handler files only)
 }
 
 type enumTemplateData struct {
@@ -183,19 +182,45 @@ type errorCodeData struct {
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
 
-	// Generate base client file
+	// Phase 1: collect base types (protocol types like TaskNode)
+	g.types = make(map[reflect.Type]string)
+	g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+	g.collectType(reflect.TypeOf(TaskNode{}))
+	g.collectTaskNodeStatusEnum()
+
+	// Build base interfaces and enums
 	baseData := templateData{
 		StructName: "Base",
 		FileName:   "client.ts",
-		HasTasks:   g.registry.tasksEnabled,
 	}
-	baseData.TaskMetaType, baseData.TaskMetaInterfaces = g.buildTaskMetaData()
+	baseData.Interfaces = g.buildInterfaces()
+	baseData.Enums = g.buildEnums()
 	for _, ec := range g.registry.ErrorCodes() {
 		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
 			Code:       ec.Code,
 			MethodName: "is" + ec.Name,
 		})
+	}
+
+	// Snapshot base types for dedup
+	baseTypeSet := make(map[reflect.Type]string, len(g.types))
+	for t, name := range g.types {
+		baseTypeSet[t] = name
+	}
+	baseEnumSet := make(map[reflect.Type]*EnumInfo, len(g.collectedEnums))
+	for t, info := range g.collectedEnums {
+		baseEnumSet[t] = info
+	}
+
+	// Build base type name set for handler import resolution.
+	// Includes interface names and enum companion type names (e.g., "TaskNodeStatusType").
+	baseTypeNames := make(map[string]bool)
+	for _, iface := range baseData.Interfaces {
+		baseTypeNames[iface.Name] = true
+	}
+	for _, enum := range baseData.Enums {
+		baseTypeNames[enum.Name+"Type"] = true
 	}
 
 	baseTemplateName := "client-base.ts.tmpl"
@@ -212,37 +237,10 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// Extract param names from AST
 	paramNames := g.extractAllParamNames()
 
+	// Phase 2: handler groups
 	for _, group := range g.registry.Groups() {
-		g.types = make(map[reflect.Type]string)           // Reset types per group
-		g.collectedEnums = make(map[reflect.Type]*EnumInfo) // Reset enums per group
-
-		if group.Internal {
-			// Merge internal group's push events into the base client
-			for _, event := range group.PushEvents {
-				g.collectType(event.DataType)
-			}
-			types := make([]reflect.Type, 0, len(g.types))
-			for t := range g.types {
-				types = append(types, t)
-			}
-			sort.Slice(types, func(i, j int) bool {
-				return types[i].Name() < types[j].Name()
-			})
-			for _, t := range types {
-				iface := interfaceData{Name: t.Name()}
-				iface.Fields = g.collectInterfaceFields(t)
-				baseData.Interfaces = append(baseData.Interfaces, iface)
-			}
-			for _, event := range group.PushEvents {
-				baseData.PushEvents = append(baseData.PushEvents, pushEventData{
-					Name:        event.Name,
-					HandlerName: "on" + event.Name,
-					HookName:    "use" + event.Name,
-					DataType:    event.DataType.Name(),
-				})
-			}
-			continue
-		}
+		g.types = make(map[reflect.Type]string)
+		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
 
 		// Collect types for this group
 		for _, info := range group.Handlers {
@@ -259,7 +257,16 @@ func (g *Generator) Generate() (map[string]string, error) {
 			g.collectType(event.DataType)
 		}
 
+		// Exclude types already in base
+		for t := range baseTypeSet {
+			delete(g.types, t)
+		}
+		for t := range baseEnumSet {
+			delete(g.collectedEnums, t)
+		}
+
 		data := g.buildTemplateData(group, paramNames)
+		data.BaseTypeImports = findBaseTypeImports(&data, baseTypeNames)
 
 		var buf strings.Builder
 		if err := templates.ExecuteTemplate(&buf, handlerTemplateName, data); err != nil {
@@ -269,12 +276,17 @@ func (g *Generator) Generate() (map[string]string, error) {
 		results[data.FileName] = buf.String()
 	}
 
-	// Render base client after the loop so internal group data is included
+	// Render base client
 	var baseBuf strings.Builder
 	if err := templates.ExecuteTemplate(&baseBuf, baseTemplateName, baseData); err != nil {
 		return nil, err
 	}
 	results["client.ts"] = baseBuf.String()
+
+	// Run generate hooks
+	for _, hook := range g.registry.generateHooks {
+		hook(results, g.options.Mode)
+	}
 
 	// Write to files if OutputDir is set
 	if g.options.OutputDir != "" {
@@ -295,6 +307,10 @@ func (g *Generator) Generate() (map[string]string, error) {
 // GenerateTo writes TypeScript client code to a single writer.
 // This combines all handler groups into one file (legacy behavior).
 func (g *Generator) GenerateTo(w io.Writer) error {
+	// Collect TaskNode (protocol type) and its enum first
+	g.collectType(reflect.TypeOf(TaskNode{}))
+	g.collectTaskNodeStatusEnum()
+
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
@@ -312,10 +328,6 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		}
 	}
 
-	// TaskNodeStatus is rendered in the base types template block,
-	// so remove it from collectedEnums to avoid duplication.
-	delete(g.collectedEnums, reflect.TypeOf(TaskNodeStatus("")))
-
 	// Extract param names from AST
 	paramNames := g.extractAllParamNames()
 
@@ -323,24 +335,10 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	data := templateData{
 		StructName: "Combined",
 		FileName:   "client.ts",
-		HasTasks:   g.registry.tasksEnabled,
 	}
-	data.TaskMetaType, data.TaskMetaInterfaces = g.buildTaskMetaData()
 
 	// Build interfaces
-	types := make([]reflect.Type, 0, len(g.types))
-	for t := range g.types {
-		types = append(types, t)
-	}
-	sort.Slice(types, func(i, j int) bool {
-		return types[i].Name() < types[j].Name()
-	})
-
-	for _, t := range types {
-		iface := interfaceData{Name: t.Name()}
-		iface.Fields = g.collectInterfaceFields(t)
-		data.Interfaces = append(data.Interfaces, iface)
-	}
+	data.Interfaces = g.buildInterfaces()
 
 	// Build methods from all groups
 	handlers := g.registry.Handlers()
@@ -352,9 +350,6 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	for _, qualifiedName := range names {
 		info := handlers[qualifiedName]
-		if grp, ok := g.registry.Groups()[info.StructName]; ok && grp.Internal {
-			continue
-		}
 		shortName := info.Name
 		isVoid := info.ResponseType == voidResponseType
 		respType := "void"
@@ -391,42 +386,33 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		})
 	}
 
-	// Build enums (sorted by name for deterministic output)
-	enumTypes := make([]reflect.Type, 0, len(g.collectedEnums))
-	for t := range g.collectedEnums {
-		enumTypes = append(enumTypes, t)
-	}
-	sort.Slice(enumTypes, func(i, j int) bool {
-		return g.collectedEnums[enumTypes[i]].Name < g.collectedEnums[enumTypes[j]].Name
-	})
-
-	for _, t := range enumTypes {
-		enumInfo := g.collectedEnums[t]
-		ed := enumTemplateData{
-			Name:     enumInfo.Name,
-			IsString: enumInfo.IsString,
-		}
-		for _, v := range enumInfo.Values {
-			var val string
-			if enumInfo.IsString {
-				val = fmt.Sprintf(`"%s"`, v.Value)
-			} else {
-				val = fmt.Sprintf("%d", v.Value)
-			}
-			ed.Values = append(ed.Values, enumValueTemplateData{
-				Name:  v.Name,
-				Value: val,
-			})
-		}
-		data.Enums = append(data.Enums, ed)
-	}
+	// Build enums
+	data.Enums = g.buildEnums()
 
 	templateName := "client.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		templateName = "client-react.ts.tmpl"
 	}
 
-	return templates.ExecuteTemplate(w, templateName, data)
+	// Execute template to a buffer so we can run hooks
+	var buf strings.Builder
+	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
+		return err
+	}
+
+	content := buf.String()
+
+	// Run generate hooks (single-file mode: hooks append to the file content)
+	if len(g.registry.generateHooks) > 0 {
+		results := map[string]string{"client.ts": content}
+		for _, hook := range g.registry.generateHooks {
+			hook(results, g.options.Mode)
+		}
+		content = results["client.ts"]
+	}
+
+	_, err := io.WriteString(w, content)
+	return err
 }
 
 func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string]map[string][]string) templateData {
@@ -527,78 +513,120 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 	return data
 }
 
-// buildTaskMetaData builds the template data for the task meta type.
-// Returns the meta type name and its interface definitions.
-func (g *Generator) buildTaskMetaData() (string, []interfaceData) {
-	metaType := g.registry.TaskMetaType()
-	if metaType == nil {
-		return "", nil
+// buildInterfaces extracts sorted interface data from g.types.
+func (g *Generator) buildInterfaces() []interfaceData {
+	types := make([]reflect.Type, 0, len(g.types))
+	for t := range g.types {
+		types = append(types, t)
 	}
+	sort.Slice(types, func(i, j int) bool {
+		return types[i].Name() < types[j].Name()
+	})
 
 	var ifaces []interfaceData
-	g.collectTaskMetaType(metaType, &ifaces)
-	return metaType.Name(), ifaces
+	for _, t := range types {
+		iface := interfaceData{Name: t.Name()}
+		iface.Fields = g.collectInterfaceFields(t)
+		ifaces = append(ifaces, iface)
+	}
+	return ifaces
 }
 
-// collectTaskMetaType recursively collects interfaces for the meta type and its nested structs.
-func (g *Generator) collectTaskMetaType(t reflect.Type, ifaces *[]interfaceData) {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
+// buildEnums extracts sorted enum data from g.collectedEnums.
+func (g *Generator) buildEnums() []enumTemplateData {
+	enumTypes := make([]reflect.Type, 0, len(g.collectedEnums))
+	for t := range g.collectedEnums {
+		enumTypes = append(enumTypes, t)
 	}
-	if t.Kind() != reflect.Struct || t.PkgPath() == "" {
-		return
-	}
+	sort.Slice(enumTypes, func(i, j int) bool {
+		return g.collectedEnums[enumTypes[i]].Name < g.collectedEnums[enumTypes[j]].Name
+	})
 
-	// Avoid duplicates
-	for _, iface := range *ifaces {
-		if iface.Name == t.Name() {
-			return
+	var enums []enumTemplateData
+	for _, t := range enumTypes {
+		enumInfo := g.collectedEnums[t]
+		ed := enumTemplateData{
+			Name:     enumInfo.Name,
+			IsString: enumInfo.IsString,
 		}
+		for _, v := range enumInfo.Values {
+			var val string
+			if enumInfo.IsString {
+				val = fmt.Sprintf(`"%s"`, v.Value)
+			} else {
+				val = fmt.Sprintf("%d", v.Value)
+			}
+			ed.Values = append(ed.Values, enumValueTemplateData{
+				Name:  v.Name,
+				Value: val,
+			})
+		}
+		enums = append(enums, ed)
 	}
-
-	iface := interfaceData{Name: t.Name()}
-	iface.Fields = g.collectInterfaceFields(t)
-	// Recurse into nested struct types (including from embedded fields)
-	g.collectTaskMetaNestedTypes(t, ifaces)
-	*ifaces = append(*ifaces, iface)
+	return enums
 }
 
-// collectTaskMetaNestedTypes recursively collects nested struct types from fields,
-// handling embedded structs by recursing into their fields without registering
-// the embedded type itself (since its fields are flattened into the parent).
-func (g *Generator) collectTaskMetaNestedTypes(t reflect.Type, ifaces *[]interfaceData) {
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() || shouldSkipField(field) {
-			continue
-		}
-		if field.Anonymous {
-			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
-				g.collectTaskMetaNestedTypes(ft, ifaces)
-			}
-			continue
-		}
-		ft := field.Type
-		if ft.Kind() == reflect.Ptr {
-			ft = ft.Elem()
-		}
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
-			g.collectTaskMetaType(ft, ifaces)
-		}
-		if ft.Kind() == reflect.Slice {
-			et := ft.Elem()
-			if et.Kind() == reflect.Ptr {
-				et = et.Elem()
-			}
-			if et.Kind() == reflect.Struct && et.PkgPath() != "" && et != timeType {
-				g.collectTaskMetaType(et, ifaces)
+// findBaseTypeImports returns the set of base type names referenced by the handler's
+// interface fields, method responses, and push event data types. These need to be
+// imported from './client' in multi-file mode.
+func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []string {
+	referenced := make(map[string]bool)
+	for _, iface := range data.Interfaces {
+		for _, field := range iface.Fields {
+			for name := range baseTypeNames {
+				if strings.Contains(field.Type, name) {
+					referenced[name] = true
+				}
 			}
 		}
 	}
+	for _, m := range data.Methods {
+		for name := range baseTypeNames {
+			if strings.Contains(m.ResponseType, name) {
+				referenced[name] = true
+			}
+		}
+		for _, p := range m.Params {
+			for name := range baseTypeNames {
+				if strings.Contains(p.Type, name) {
+					referenced[name] = true
+				}
+			}
+		}
+	}
+	for _, ev := range data.PushEvents {
+		for name := range baseTypeNames {
+			if strings.Contains(ev.DataType, name) {
+				referenced[name] = true
+			}
+		}
+	}
+	result := make([]string, 0, len(referenced))
+	for name := range referenced {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// collectTaskNodeStatusEnum adds the TaskNodeStatus enum to g.collectedEnums.
+// TaskNodeStatus is a protocol enum (used by TaskNode.Status) and must always
+// be available in generated output, regardless of whether the task system is enabled.
+func (g *Generator) collectTaskNodeStatusEnum() {
+	vals := TaskNodeStatusValues()
+	t := reflect.TypeOf(vals[0])
+	info := &EnumInfo{
+		Name:     "TaskNodeStatus",
+		Type:     t,
+		IsString: true,
+	}
+	for _, v := range vals {
+		info.Values = append(info.Values, EnumValueInfo{
+			Name:  capitalize(string(v)),
+			Value: string(v),
+		})
+	}
+	g.collectedEnums[t] = info
 }
 
 // collectInterfaceFields collects fields from a struct, flattening anonymous (embedded)
@@ -706,19 +734,18 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 }
 
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.
-// Fields of type interface{} (any) are skipped because they produce unhelpful "any" types
-// and are typically handled by hardcoded template definitions instead.
 // Fields with json:"-" are skipped to match encoding/json behavior.
 func shouldSkipField(field reflect.StructField) bool {
-	if field.Type.Kind() == reflect.Interface {
-		return true
-	}
 	return field.Tag.Get("json") == "-"
 }
 
 func (g *Generator) goTypeToTS(t reflect.Type) string {
 	// Check if this is a registered enum type
 	if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
+		return enumInfo.Name + "Type"
+	}
+	// Also check collected enums (for built-in protocol enums like TaskNodeStatus)
+	if enumInfo, ok := g.collectedEnums[t]; ok {
 		return enumInfo.Name + "Type"
 	}
 

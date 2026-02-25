@@ -7,7 +7,7 @@ import { ApiClient, useApiClient } from './client';
 {{- else}}
 import { ApiClient } from './client';
 {{- end}}
-{{- if or .Methods .PushEvents}}
+{{- if or .Methods .PushEvents .BaseTypeImports}}
 import type {
 {{- if .Methods}}
     RequestOptions,
@@ -25,6 +25,9 @@ import type {
 {{- end}}
 {{- if .PushEvents}}
     UsePushResult,
+{{- end}}
+{{- range .BaseTypeImports}}
+    {{.}},
 {{- end}}
 } from './client';
 {{- end}}
