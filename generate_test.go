@@ -1316,6 +1316,17 @@ func TestGenerateWithTasksReact(t *testing.T) {
 	if !strings.Contains(output, "export interface TaskUpdateEvent") {
 		t.Error("Missing TaskUpdateEvent interface")
 	}
+
+	// No duplicate on-handlers or auto-generated hooks for internal events
+	if strings.Count(output, "function onTaskStateEvent") > 1 {
+		t.Error("onTaskStateEvent should only appear once")
+	}
+	if strings.Contains(output, "function useTaskStateEvent") {
+		t.Error("useTaskStateEvent hook should not be generated — useSharedTasks covers this")
+	}
+	if strings.Contains(output, "function useTaskUpdateEvent") {
+		t.Error("useTaskUpdateEvent hook should not be generated — useTaskOutput covers this")
+	}
 }
 
 func TestGenerateWithTasksReactMultiFile(t *testing.T) {

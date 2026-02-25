@@ -372,8 +372,11 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		})
 	}
 
-	// Build push events from all groups
+	// Build push events from all groups (skip internal — handled in HasTasks template block)
 	for _, event := range g.registry.PushEvents() {
+		if grp, ok := g.registry.Groups()[event.StructName]; ok && grp.Internal {
+			continue
+		}
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
 			HandlerName: "on" + event.Name,
