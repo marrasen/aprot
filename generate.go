@@ -257,6 +257,11 @@ func (g *Generator) Generate() (map[string]string, error) {
 			g.collectType(event.DataType)
 		}
 
+		// Include enums explicitly registered for this group
+		for i := range group.Enums {
+			g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
+		}
+
 		// Exclude types already in base
 		for t := range baseTypeSet {
 			delete(g.types, t)
@@ -325,6 +330,10 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		}
 		for _, event := range group.PushEvents {
 			g.collectType(event.DataType)
+		}
+		// Include enums explicitly registered for this group
+		for i := range group.Enums {
+			g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
 		}
 	}
 

@@ -362,12 +362,14 @@ func TestGenerateOutput(t *testing.T) {
 
 func TestRegisterEnum(t *testing.T) {
 	registry := NewRegistry()
+	handler := &TaskHandlers{}
+	registry.Register(handler)
 
 	// Test string-based enum
-	registry.RegisterEnum(TaskStatusValues())
+	registry.RegisterEnumFor(handler, TaskStatusValues())
 
 	// Test int-based enum with Stringer
-	registry.RegisterEnum(PriorityValues())
+	registry.RegisterEnumFor(handler, PriorityValues())
 
 	enums := registry.Enums()
 	if len(enums) != 2 {
@@ -414,6 +416,8 @@ func TestRegisterEnum(t *testing.T) {
 
 func TestRegisterEnumErrors(t *testing.T) {
 	registry := NewRegistry()
+	handler := &TaskHandlers{}
+	registry.Register(handler)
 
 	// Test non-slice panics
 	func() {
@@ -422,7 +426,7 @@ func TestRegisterEnumErrors(t *testing.T) {
 				t.Error("Expected panic for non-slice")
 			}
 		}()
-		registry.RegisterEnum("not a slice")
+		registry.RegisterEnumFor(handler, "not a slice")
 	}()
 
 	// Test empty slice panics
@@ -432,15 +436,26 @@ func TestRegisterEnumErrors(t *testing.T) {
 				t.Error("Expected panic for empty slice")
 			}
 		}()
-		registry.RegisterEnum([]TaskStatus{})
+		registry.RegisterEnumFor(handler, []TaskStatus{})
+	}()
+
+	// Test unregistered handler panics
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Expected panic for unregistered handler")
+			}
+		}()
+		registry.RegisterEnumFor(&TestHandlers{}, TaskStatusValues())
 	}()
 }
 
 func TestGenerateWithEnums(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterEnum(TaskStatusValues())
-	registry.RegisterEnum(PriorityValues())
-	registry.Register(&TaskHandlers{})
+	handler := &TaskHandlers{}
+	registry.Register(handler)
+	registry.RegisterEnumFor(handler, TaskStatusValues())
+	registry.RegisterEnumFor(handler, PriorityValues())
 
 	gen := NewGenerator(registry)
 
@@ -847,9 +862,10 @@ func TestGenerateTimeFieldsSingleFile(t *testing.T) {
 
 func TestGenerateMultipleFilesWithEnums(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterEnum(TaskStatusValues())
-	registry.RegisterEnum(PriorityValues())
-	registry.Register(&TaskHandlers{})
+	handler := &TaskHandlers{}
+	registry.Register(handler)
+	registry.RegisterEnumFor(handler, TaskStatusValues())
+	registry.RegisterEnumFor(handler, PriorityValues())
 
 	gen := NewGenerator(registry)
 
@@ -1205,9 +1221,10 @@ func TestGenerateDeterministic(t *testing.T) {
 		var first string
 		for i := 0; i < iterations; i++ {
 			registry := NewRegistry()
-			registry.RegisterEnum(TaskStatusValues())
-			registry.RegisterEnum(PriorityValues())
-			registry.Register(&TaskHandlers{})
+			handler := &TaskHandlers{}
+			registry.Register(handler)
+			registry.RegisterEnumFor(handler, TaskStatusValues())
+			registry.RegisterEnumFor(handler, PriorityValues())
 
 			gen := NewGenerator(registry)
 			var buf bytes.Buffer
@@ -1228,9 +1245,10 @@ func TestGenerateDeterministic(t *testing.T) {
 		var firstFiles map[string]string
 		for i := 0; i < iterations; i++ {
 			registry := NewRegistry()
-			registry.RegisterEnum(TaskStatusValues())
-			registry.RegisterEnum(PriorityValues())
-			registry.Register(&TaskHandlers{})
+			handler := &TaskHandlers{}
+			registry.Register(handler)
+			registry.RegisterEnumFor(handler, TaskStatusValues())
+			registry.RegisterEnumFor(handler, PriorityValues())
 
 			gen := NewGenerator(registry)
 			files, err := gen.Generate()

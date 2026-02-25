@@ -1060,8 +1060,10 @@ func PriorityValues() []Priority {
 
 ```go
 registry := aprot.NewRegistry()
-registry.RegisterEnum(TaskStatusValues())
-registry.RegisterEnum(PriorityValues())
+handler := &MyHandlers{}
+registry.Register(handler)
+registry.RegisterEnumFor(handler, TaskStatusValues())
+registry.RegisterEnumFor(handler, PriorityValues())
 ```
 
 #### Using Enums in Types

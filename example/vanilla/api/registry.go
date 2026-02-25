@@ -11,12 +11,12 @@ import (
 func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Registry {
 	registry := aprot.NewRegistry()
 
-	// Register enums
-	registry.RegisterEnum(TaskStatusValues())
-
 	// Register public handlers (no middleware)
 	publicHandlers := NewPublicHandlers(state)
 	registry.Register(publicHandlers)
+
+	// Register enums
+	registry.RegisterEnumFor(publicHandlers, TaskStatusValues())
 
 	// Register protected handlers (with auth middleware)
 	protectedHandlers := NewProtectedHandlers(state)
