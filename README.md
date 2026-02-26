@@ -1255,6 +1255,12 @@ function UsersList() {
 
 The `mutate` function accepts a Promise or async function. It sets `isLoading=true`, awaits the action, refetches data on success, or sets `error` on failure. This consolidates loading/error state for all operations on the resource.
 
+Per-handler hooks (`useListUsers`, `useCreateUserMutation`, etc.) are thin wrappers around three generic hooks that are also exported for direct use:
+
+- `useQuery(fn, options?)` — auto-fetching query with refetch interval support
+- `useMutation(fn)` — imperative mutation with loading/error state
+- `usePushEvent(fn, options?)` — subscribes to server push events
+
 ## Protocol
 
 Messages are JSON with a `type` field:

@@ -656,8 +656,7 @@ export function useConnection(): { isConnected: boolean; state: ConnectionState 
 
 {{define "react-hook-types"}}
 // Query hook options
-export interface UseQueryOptions<TReq> {
-    params: TReq;
+export interface UseQueryOptions {
     enabled?: boolean;
     refetchInterval?: number;
 }
@@ -690,5 +689,135 @@ export interface UsePushResult<T> {
     lastEvent: T | null;
     events: T[];
     clear: () => void;
+}
+{{end}}
+
+{{define "react-generic-hooks"}}
+// Generic query hook
+export function useQuery<TRes>(fn: (client: ApiClient) => Promise<TRes>, options?: UseQueryOptions): UseQueryResult<TRes>;
+export function useQuery<TArgs extends unknown[], TRes>(fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>, options: UseQueryOptions & { params: TArgs }): UseQueryResult<TRes>;
+export function useQuery<TArgs extends unknown[], TRes>(
+    fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>,
+    options?: UseQueryOptions & { params?: TArgs },
+): UseQueryResult<TRes> {
+    const client = useApiClient();
+    const [data, setData] = useState<TRes | null>(null);
+    const [error, setError] = useState<Error | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const params = options?.params;
+    const paramsKey = params ? JSON.stringify(params) : '[]';
+
+    const fetch = useCallback(async () => {
+        if (options?.enabled === false) return;
+        setIsLoading(true);
+        setError(null);
+        try {
+            const result = params
+                ? await fn(client, ...params)
+                : await (fn as unknown as (client: ApiClient) => Promise<TRes>)(client);
+            setData(result);
+        } catch (err) {
+            setError(err as Error);
+        } finally {
+            setIsLoading(false);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [client, fn, options?.enabled, paramsKey]);
+
+    useEffect(() => {
+        fetch();
+    }, [fetch]);
+
+    useEffect(() => {
+        if (options?.refetchInterval && options.refetchInterval > 0) {
+            const interval = setInterval(fetch, options.refetchInterval);
+            return () => clearInterval(interval);
+        }
+    }, [fetch, options?.refetchInterval]);
+
+    const refetch = useCallback(() => {
+        fetch();
+    }, [fetch]);
+
+    const mutate = useCallback(async (action: Promise<unknown> | (() => Promise<unknown>)) => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            await (typeof action === 'function' ? action() : action);
+            await fetch();
+        } catch (err) {
+            setError(err as Error);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [fetch]);
+
+    return { data, error, isLoading, refetch, mutate };
+}
+
+// Generic mutation hook
+export function useMutation<TArgs extends unknown[], TRes>(
+    fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>,
+    _options?: UseMutationOptions,
+): UseMutationResult<TArgs, TRes> {
+    const client = useApiClient();
+    const [data, setData] = useState<TRes | null>(null);
+    const [error, setError] = useState<Error | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const fnRef = useRef(fn);
+    fnRef.current = fn;
+
+    const mutate = useCallback(async (...args: TArgs): Promise<TRes> => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const result = await fnRef.current(client, ...args);
+            setData(result);
+            return result;
+        } catch (err) {
+            setError(err as Error);
+            throw err;
+        } finally {
+            setIsLoading(false);
+        }
+    }, [client]);
+
+    const reset = useCallback(() => {
+        setData(null);
+        setError(null);
+        setIsLoading(false);
+    }, []);
+
+    return { mutate, data, error, isLoading, reset };
+}
+
+// Generic push event hook
+export function usePushEvent<T>(
+    fn: (client: ApiClient, handler: PushHandler<T>) => () => void,
+    options?: { maxEvents?: number },
+): UsePushResult<T> {
+    const client = useApiClient();
+    const [lastEvent, setLastEvent] = useState<T | null>(null);
+    const [events, setEvents] = useState<T[]>([]);
+    const maxEvents = options?.maxEvents ?? 100;
+
+    useEffect(() => {
+        return fn(client, (data) => {
+            setLastEvent(data);
+            setEvents((prev) => {
+                const next = [...prev, data];
+                return next.length > maxEvents ? next.slice(-maxEvents) : next;
+            });
+        });
+    }, [client, fn, maxEvents]);
+
+    const clear = useCallback(() => {
+        setLastEvent(null);
+        setEvents([]);
+    }, []);
+
+    return { lastEvent, events, clear };
 }
 {{end}}
