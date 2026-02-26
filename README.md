@@ -1010,7 +1010,7 @@ Register Go enum types to generate TypeScript const objects with full type safet
 type TaskStatus string
 
 const (
-    TaskStatusPending   TaskStatus = "pending"
+    TaskStatusCreated   TaskStatus = "created"
     TaskStatusRunning   TaskStatus = "running"
     TaskStatusCompleted TaskStatus = "completed"
     TaskStatusFailed    TaskStatus = "failed"
@@ -1019,7 +1019,7 @@ const (
 // Required: Values() function returning all enum values
 func TaskStatusValues() []TaskStatus {
     return []TaskStatus{
-        TaskStatusPending,
+        TaskStatusCreated,
         TaskStatusRunning,
         TaskStatusCompleted,
         TaskStatusFailed,
@@ -1119,8 +1119,8 @@ if (task.status === TaskStatus.Running) {
 // Type-safe switch with exhaustive checking
 function getStatusLabel(status: TaskStatusType): string {
     switch (status) {
-        case TaskStatus.Pending:
-            return 'Pending';
+        case TaskStatus.Created:
+            return 'Created';
         case TaskStatus.Running:
             return 'Running';
         case TaskStatus.Completed:

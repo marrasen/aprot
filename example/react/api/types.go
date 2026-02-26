@@ -6,7 +6,7 @@ package api
 type TaskStatus string
 
 const (
-	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusCreated   TaskStatus = "created"
 	TaskStatusRunning   TaskStatus = "running"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusFailed    TaskStatus = "failed"
@@ -15,7 +15,7 @@ const (
 // TaskStatusValues returns all possible TaskStatus values.
 func TaskStatusValues() []TaskStatus {
 	return []TaskStatus{
-		TaskStatusPending,
+		TaskStatusCreated,
 		TaskStatusRunning,
 		TaskStatusCompleted,
 		TaskStatusFailed,

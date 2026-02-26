@@ -66,8 +66,8 @@ async function doListUsers(): Promise<void> {
 // Helper to get a human-readable label for task status using the enum
 function getStatusLabel(status: TaskStatusType): string {
     switch (status) {
-        case TaskStatus.Pending:
-            return '⏳ Pending';
+        case TaskStatus.Created:
+            return '⏳ Created';
         case TaskStatus.Running:
             return '🔄 Running';
         case TaskStatus.Completed:
@@ -82,8 +82,8 @@ function getStatusLabel(status: TaskStatusType): string {
 // Helper to get CSS class for status badge
 function getStatusClass(status: TaskStatusType): string {
     switch (status) {
-        case TaskStatus.Pending:
-            return 'status-pending';
+        case TaskStatus.Created:
+            return 'status-created';
         case TaskStatus.Running:
             return 'status-running';
         case TaskStatus.Completed:
