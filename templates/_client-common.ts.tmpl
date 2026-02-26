@@ -682,6 +682,7 @@ export interface UseMutationResult<TParams extends unknown[], TRes> {
     error: Error | null;
     isLoading: boolean;
     reset: () => void;
+    cancel: () => void;
 }
 
 // Push event hook result
@@ -758,22 +759,26 @@ export function useQuery<TArgs extends unknown[], TRes>(
 
 // Generic mutation hook
 export function useMutation<TArgs extends unknown[], TRes>(
-    fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>,
+    fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => Promise<TRes>,
     _options?: UseMutationOptions,
 ): UseMutationResult<TArgs, TRes> {
     const client = useApiClient();
     const [data, setData] = useState<TRes | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const abortRef = useRef<AbortController | null>(null);
 
     const fnRef = useRef(fn);
     fnRef.current = fn;
 
     const mutate = useCallback(async (...args: TArgs): Promise<TRes> => {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
         setIsLoading(true);
         setError(null);
         try {
-            const result = await fnRef.current(client, ...args);
+            const result = await fnRef.current(client, controller.signal, ...args);
             setData(result);
             return result;
         } catch (err) {
@@ -781,6 +786,9 @@ export function useMutation<TArgs extends unknown[], TRes>(
             throw err;
         } finally {
             setIsLoading(false);
+            if (abortRef.current === controller) {
+                abortRef.current = null;
+            }
         }
     }, [client]);
 
@@ -790,7 +798,12 @@ export function useMutation<TArgs extends unknown[], TRes>(
         setIsLoading(false);
     }, []);
 
-    return { mutate, data, error, isLoading, reset };
+    const cancel = useCallback(() => {
+        abortRef.current?.abort();
+        abortRef.current = null;
+    }, []);
+
+    return { mutate, data, error, isLoading, reset, cancel };
 }
 
 // Generic push event hook

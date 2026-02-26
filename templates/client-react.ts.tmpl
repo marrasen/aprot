@@ -472,7 +472,7 @@ export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.Resp
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
     const wrappedFn = useCallback(
-        (client: ApiClient) => {{.MethodName}}(client, { onProgress: options?.onProgress }),
+        (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal, onProgress: options?.onProgress }),
         [options?.onProgress],
     );
     return useMutation(wrappedFn, options);
@@ -484,7 +484,7 @@ export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions):
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {
     const wrappedFn = useCallback(
-        (client: ApiClient, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { onProgress: options?.onProgress }),
+        (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal, onProgress: options?.onProgress }),
         [options?.onProgress],
     );
     return useMutation(wrappedFn, options);
