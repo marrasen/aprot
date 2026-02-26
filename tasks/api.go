@@ -358,7 +358,7 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 		slot.sharedCore = core
 	}
 
-	ctx = withSharedContext(ctx, &sharedContext{core: core})
+	ctx = withSharedContext(core.ctx, &sharedContext{core: core})
 
 	return ctx, &SharedTask[M]{core: core}
 }
@@ -385,7 +385,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	core.status = TaskNodeStatusRunning
 	core.mu.Unlock()
 	sc := &sharedContext{core: core}
-	childCtx := withSharedContext(ctx, sc)
+	childCtx := withSharedContext(core.ctx, sc)
 
 	err := SubTask(childCtx, title, fn)
 

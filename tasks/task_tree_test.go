@@ -225,12 +225,9 @@ func TestOutput(t *testing.T) {
 // TestOutputWithoutTree verifies that Output is a no-op when there is no task
 // tree on the context (no panic, no messages sent).
 func TestOutputWithoutTree(t *testing.T) {
-	sender := &mockSender{}
-	// Bare context, no tree.
+	// Output on a bare context (no tree, no shared context) should be a
+	// silent no-op — verify it does not panic.
 	Output(context.Background(), "silent")
-	if len(sender.messages()) != 0 {
-		t.Error("expected no messages when no task tree is present")
-	}
 }
 
 // --- OutputWriter ---
