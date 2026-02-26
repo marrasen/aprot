@@ -385,7 +385,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	core.status = TaskNodeStatusRunning
 	core.mu.Unlock()
 	sc := &sharedContext{core: core}
-	childCtx := withSharedContext(ctx, sc)
+	childCtx := withSharedContext(core.ctx, sc)
 
 	err := SubTask(childCtx, title, fn)
 

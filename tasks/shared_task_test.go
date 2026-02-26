@@ -848,6 +848,55 @@ func TestSharedTaskFailIdempotent(t *testing.T) {
 	}
 }
 
+// TestSharedSubTaskCancelPropagation verifies that canceling a task created by
+// SharedSubTask also cancels the context passed to fn.
+func TestSharedSubTaskCancelPropagation(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	ctx := context.Background()
+	ctx = aprot.WithTestConnection(ctx, 1)
+	ctx = withTaskManager(ctx, tm)
+
+	fnStarted := make(chan struct{})
+	fnDone := make(chan error, 1)
+
+	go func() {
+		fnDone <- SharedSubTask(ctx, "cancel-propagation", func(fnCtx context.Context) error {
+			close(fnStarted)
+			<-fnCtx.Done()
+			return fnCtx.Err()
+		})
+	}()
+
+	// Wait for fn to start running.
+	select {
+	case <-fnStarted:
+	case <-time.After(time.Second):
+		t.Fatal("fn did not start within timeout")
+	}
+
+	// Find the task by title and cancel it.
+	var taskID string
+	for _, s := range tm.snapshotAll() {
+		if s.Title == "cancel-propagation" {
+			taskID = s.ID
+			break
+		}
+	}
+	if taskID == "" {
+		t.Fatal("shared task not found in snapshot")
+	}
+
+	tm.cancelTask(taskID)
+
+	select {
+	case <-fnDone:
+		// expected: fn's context was canceled
+	case <-time.After(time.Second):
+		t.Fatal("fn's context was not canceled after cancelTask")
+	}
+}
+
 // TestSharedTaskCloseIdempotent verifies that calling closeTask() on an
 // already-completed task is a no-op.
 func TestSharedTaskCloseIdempotent(t *testing.T) {
