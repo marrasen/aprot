@@ -897,6 +897,37 @@ func TestSharedSubTaskCancelPropagation(t *testing.T) {
 	}
 }
 
+// TestStartSharedTaskCancelPropagation verifies that canceling a task created
+// by StartSharedTask also cancels the context returned to the caller.
+func TestStartSharedTaskCancelPropagation(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	ctx := context.Background()
+	ctx = aprot.WithTestConnection(ctx, 1)
+	ctx = withTaskManager(ctx, tm)
+
+	taskCtx, task := StartSharedTask[struct{}](ctx, "start-cancel")
+	if task == nil {
+		t.Fatal("StartSharedTask returned nil task")
+	}
+
+	// taskCtx should be canceled when we cancel the task.
+	done := make(chan struct{})
+	go func() {
+		<-taskCtx.Done()
+		close(done)
+	}()
+
+	tm.cancelTask(task.ID())
+
+	select {
+	case <-done:
+		// expected: taskCtx was canceled
+	case <-time.After(time.Second):
+		t.Fatal("context returned by StartSharedTask was not canceled after cancelTask")
+	}
+}
+
 // TestSharedTaskCloseIdempotent verifies that calling closeTask() on an
 // already-completed task is a no-op.
 func TestSharedTaskCloseIdempotent(t *testing.T) {

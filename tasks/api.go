@@ -358,7 +358,7 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 		slot.sharedCore = core
 	}
 
-	ctx = withSharedContext(ctx, &sharedContext{core: core})
+	ctx = withSharedContext(core.ctx, &sharedContext{core: core})
 
 	return ctx, &SharedTask[M]{core: core}
 }
