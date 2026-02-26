@@ -17,7 +17,7 @@ describe('Auth Flow (WebSocket)', () => {
     });
 
     test('login returns token and username', async () => {
-        const res = await login(client, { username: 'testuser', password: 'pass' });
+        const res = await login(client, 'testuser', 'pass');
         expect(res.token).toBeDefined();
         expect(res.token.length).toBeGreaterThan(0);
         expect(res.username).toBe('testuser');
@@ -25,7 +25,7 @@ describe('Auth Flow (WebSocket)', () => {
     });
 
     test('getProfile after login returns profile', async () => {
-        const loginRes = await login(client, { username: 'profileuser', password: 'pass' });
+        const loginRes = await login(client, 'profileuser', 'pass');
 
         // After login, the connection is authenticated — no token needed in params
         const profile = await getProfile(client);
@@ -45,14 +45,14 @@ describe('Auth Flow (WebSocket)', () => {
 
     test('sendMessage delivers DirectMessage push to recipient', async () => {
         // Client 1: sender
-        const senderLogin = await login(client, { username: 'sender', password: 'pass' });
+        const senderLogin = await login(client, 'sender', 'pass');
 
         // Client 2: recipient
         const client2 = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
         await client2.connect();
 
         try {
-            const recipientLogin = await login(client2, { username: 'recipient', password: 'pass' });
+            const recipientLogin = await login(client2, 'recipient', 'pass');
 
             const received = new Promise<{ from_user_id: string; from_user: string; message: string }>((resolve) => {
                 onDirectMessageEvent(client2, (data) => {
@@ -61,10 +61,7 @@ describe('Auth Flow (WebSocket)', () => {
             });
 
             // After login, connection is authenticated — send message directly
-            await sendMessage(client, {
-                to_user_id: recipientLogin.user_id,
-                message: 'Hello from sender',
-            });
+            await sendMessage(client, recipientLogin.user_id, 'Hello from sender');
 
             const event = await received;
             expect(event.from_user).toBe('sender');

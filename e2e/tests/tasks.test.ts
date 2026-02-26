@@ -24,7 +24,8 @@ describe('SubTask (WebSocket)', () => {
 
         const res = await processWithSubTasks(
             client,
-            { steps: ['Build', 'Test', 'Deploy'], delay: 50 },
+            ['Build', 'Test', 'Deploy'],
+            50,
             taskOptions({
                 onTaskProgress: (tasks) => {
                     taskUpdates.push(tasks);
@@ -59,7 +60,8 @@ describe('SubTask (WebSocket)', () => {
 
         const res = await processWithSubTasks(
             client,
-            { steps: ['Alpha', 'Beta'], delay: 50 },
+            ['Alpha', 'Beta'],
+            50,
             taskOptions({
                 onOutput: (output, taskId) => {
                     outputs.push({ output, taskId });
@@ -114,11 +116,7 @@ describe('SharedTask (WebSocket)', () => {
 
         try {
             // startSharedWork is now void — it blocks until work completes
-            await startSharedWork(client, {
-                title: 'E2E Shared Work',
-                steps: ['Step1', 'Step2'],
-                delay: 50,
-            });
+            await startSharedWork(client, 'E2E Shared Work', ['Step1', 'Step2'], 50);
 
             // Wait for final broadcasts to arrive
             await new Promise(resolve => setTimeout(resolve, 500));
@@ -152,11 +150,7 @@ describe('SharedTask (WebSocket)', () => {
             });
 
             // Start shared work from the FIRST client (blocks until done)
-            await startSharedWork(client, {
-                title: 'Broadcast Test',
-                steps: ['A', 'B'],
-                delay: 50,
-            });
+            await startSharedWork(client, 'Broadcast Test', ['A', 'B'], 50);
 
             // Second client should have received the task state during execution
             const tasks = await received;
@@ -190,11 +184,7 @@ describe('SharedTask (WebSocket)', () => {
 
         try {
             // startSharedWork blocks until work completes
-            await startSharedWork(client, {
-                title: 'Output Test',
-                steps: ['X', 'Y'],
-                delay: 50,
-            });
+            await startSharedWork(client, 'Output Test', ['X', 'Y'], 50);
 
             // Wait for any remaining events
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -222,11 +212,7 @@ describe('SharedTask (WebSocket)', () => {
     test('cancelSharedTask cancels a running task', async () => {
         // We need to discover the taskId from the broadcast since startSharedWork is void.
         // Start a long-running task WITHOUT awaiting (it blocks until done).
-        const workDone = startSharedWork(client, {
-            title: 'Cancel Test',
-            steps: ['Slow1', 'Slow2', 'Slow3', 'Slow4', 'Slow5'],
-            delay: 500,
-        });
+        const workDone = startSharedWork(client, 'Cancel Test', ['Slow1', 'Slow2', 'Slow3', 'Slow4', 'Slow5'], 500);
 
         // Wait for the task to appear in a TaskStateEvent broadcast
         const taskId = await new Promise<string>((resolve, reject) => {
@@ -270,11 +256,7 @@ describe('SharedTask (WebSocket)', () => {
 
     test('late joiner receives active shared tasks', async () => {
         // Start a long-running shared task from client 1 WITHOUT awaiting
-        const workDone = startSharedWork(client, {
-            title: 'Late Join Test',
-            steps: ['Long1', 'Long2', 'Long3'],
-            delay: 300,
-        });
+        const workDone = startSharedWork(client, 'Late Join Test', ['Long1', 'Long2', 'Long3'], 300);
 
         // Wait for the task to appear in broadcasts
         const taskId = await new Promise<string>((resolve, reject) => {
