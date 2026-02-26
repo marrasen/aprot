@@ -22,19 +22,10 @@ func TaskStatusValues() []TaskStatus {
 	}
 }
 
-type CreateUserRequest struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
 type CreateUserResponse struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
-}
-
-type GetUserRequest struct {
-	ID string `json:"id"`
 }
 
 type GetUserResponse struct {
@@ -53,24 +44,35 @@ type User struct {
 	Email string `json:"email"`
 }
 
-type GetTaskRequest struct {
-	ID string `json:"id"`
-}
-
 type GetTaskResponse struct {
 	ID     string     `json:"id"`
 	Name   string     `json:"name"`
 	Status TaskStatus `json:"status"`
 }
 
-type ProcessBatchRequest struct {
-	Items []string `json:"items"`
-	Delay int      `json:"delay"` // milliseconds per item
-}
-
 type ProcessBatchResponse struct {
 	Processed int      `json:"processed"`
 	Results   []string `json:"results"`
+}
+
+// SharedTask demo types
+
+type TaskMeta struct {
+	UserName string `json:"userName,omitempty"`
+}
+
+type StepResult struct {
+	Step     string `json:"step"`
+	Duration int    `json:"duration"` // milliseconds
+	Hash     string `json:"hash,omitempty"`  // computed hash of step name
+	Error    string `json:"error,omitempty"` // non-empty if the step failed
+}
+
+type StartSharedWorkResponse struct {
+	Completed     int          `json:"completed"`
+	TotalSteps    int          `json:"totalSteps"`
+	TotalDuration int          `json:"totalDuration"` // milliseconds
+	Results       []StepResult `json:"results"`
 }
 
 // Tag is used in GetDashboardResponse to exercise complex type collection:

@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	registry := api.NewRegistry()
+	registry, _ := api.NewRegistry()
 
 	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 		OutputDir: "../../client/src/api",

@@ -13,17 +13,13 @@ import (
 
 func main() {
 	// Create registry from shared API package
-	registry := api.NewRegistry()
+	registry, handlers := api.NewRegistry()
 
 	// Create server
 	server := aprot.NewServer(registry)
 
-	// Create handlers with broadcaster for push events
-	handlers := api.NewHandlers()
+	// Set broadcaster for push events
 	handlers.SetBroadcaster(server)
-
-	// Re-register with the actual handler instance
-	registry.Register(handlers)
 
 	// Serve static files (Vite build output)
 	staticDir := "../client/dist"

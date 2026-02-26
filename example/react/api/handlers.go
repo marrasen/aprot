@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/tasks"
 )
 
 // Handlers implements the API methods.
@@ -31,11 +34,11 @@ func (h *Handlers) SetBroadcaster(b aprot.Broadcaster) {
 }
 
 // CreateUser creates a new user.
-func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
-	if req.Name == "" {
+func (h *Handlers) CreateUser(ctx context.Context, name string, email string) (*CreateUserResponse, error) {
+	if name == "" {
 		return nil, aprot.ErrInvalidParams("name is required")
 	}
-	if req.Email == "" {
+	if email == "" {
 		return nil, aprot.ErrInvalidParams("email is required")
 	}
 
@@ -44,8 +47,8 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 	h.nextID++
 	user := &User{
 		ID:    id,
-		Name:  req.Name,
-		Email: req.Email,
+		Name:  name,
+		Email: email,
 	}
 	h.users[id] = user
 	h.mu.Unlock()
@@ -67,13 +70,13 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 }
 
 // GetUser retrieves a user by ID.
-func (h *Handlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
-	if req.ID == "" {
+func (h *Handlers) GetUser(ctx context.Context, id string) (*GetUserResponse, error) {
+	if id == "" {
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 
 	h.mu.RLock()
-	user, ok := h.users[req.ID]
+	user, ok := h.users[id]
 	h.mu.RUnlock()
 
 	if !ok {
@@ -101,27 +104,26 @@ func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
 }
 
 // ProcessBatch processes items with progress reporting.
-func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (*ProcessBatchResponse, error) {
-	if len(req.Items) == 0 {
+func (h *Handlers) ProcessBatch(ctx context.Context, items []string, delay int) (*ProcessBatchResponse, error) {
+	if len(items) == 0 {
 		return nil, aprot.ErrInvalidParams("items cannot be empty")
 	}
 
-	delay := req.Delay
 	if delay <= 0 {
 		delay = 500
 	}
 
 	progress := aprot.Progress(ctx)
-	results := make([]string, 0, len(req.Items))
+	results := make([]string, 0, len(items))
 
-	for i, item := range req.Items {
+	for i, item := range items {
 		select {
 		case <-ctx.Done():
 			return nil, aprot.ErrCanceled()
 		default:
 		}
 
-		progress.Update(i+1, len(req.Items), fmt.Sprintf("Processing: %s", item))
+		progress.Update(i+1, len(items), fmt.Sprintf("Processing: %s", item))
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		results = append(results, fmt.Sprintf("processed_%s", item))
 	}
@@ -133,21 +135,22 @@ func (h *Handlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (
 }
 
 // SendNotification sends a notification to the requesting client.
-func (h *Handlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
+func (h *Handlers) SendNotification(ctx context.Context, message string, level string) (*SystemNotificationEvent, error) {
+	evt := &SystemNotificationEvent{Message: message, Level: level}
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push(req)
+		conn.Push(evt)
 	}
-	return req, nil
+	return evt, nil
 }
 
 // GetTask retrieves a task by ID (demo: returns hardcoded task).
-func (h *Handlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskResponse, error) {
-	if req.ID == "" {
+func (h *Handlers) GetTask(ctx context.Context, id string) (*GetTaskResponse, error) {
+	if id == "" {
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 	return &GetTaskResponse{
-		ID:     req.ID,
+		ID:     id,
 		Name:   "Example Task",
 		Status: TaskStatusRunning,
 	}, nil
@@ -168,5 +171,85 @@ func (h *Handlers) GetDashboard(ctx context.Context) (*GetDashboardResponse, err
 		UsersByRole:   map[string][]User{"admin": users},
 		FeaturedUsers: make([]*User, 0),
 		TagsByID:      map[int]Tag{1: {ID: "1", Name: "important", Color: "#ff0000"}},
+	}, nil
+}
+
+// StartSharedWork creates a shared task visible to all clients.
+// The task auto-completes when the handler returns nil, or auto-fails on error.
+// Each step runs inside tasks.SubTask so errors are captured per-step in the
+// task tree. The "Lint" step always fails to demonstrate error handling.
+func (h *Handlers) StartSharedWork(ctx context.Context, title string, steps []string, delay int) (*StartSharedWorkResponse, error) {
+	if title == "" {
+		return nil, aprot.ErrInvalidParams("title is required")
+	}
+	if len(steps) == 0 {
+		return nil, aprot.ErrInvalidParams("steps cannot be empty")
+	}
+
+	if delay <= 0 {
+		delay = 500
+	}
+
+	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, title)
+	if task == nil {
+		return nil, aprot.ErrInternal(nil)
+	}
+
+	conn := aprot.Connection(ctx)
+	if conn != nil {
+		task.SetMeta(TaskMeta{UserName: conn.UserID()})
+	}
+
+	results := make([]StepResult, 0, len(steps))
+	totalDuration := 0
+
+	for i, step := range steps {
+		select {
+		case <-ctx.Done():
+			return nil, aprot.ErrCanceled()
+		default:
+		}
+
+		stepIdx := i
+		stepName := step
+
+		var sr StepResult
+		err := tasks.SubTask(ctx, stepName, func(ctx context.Context) error {
+			tasks.Output(ctx, fmt.Sprintf("Working on: %s", stepName))
+
+			stepStart := time.Now()
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+
+			// "Lint" step always fails to demonstrate error capture
+			if stepName == "Lint" {
+				return fmt.Errorf("lint failed: 3 warnings, 1 error in main.go")
+			}
+
+			hash := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", title, stepName, stepIdx)))
+			sr = StepResult{
+				Step:     stepName,
+				Duration: int(time.Since(stepStart).Milliseconds()),
+				Hash:     hex.EncodeToString(hash[:8]),
+			}
+			return nil
+		})
+
+		if err != nil {
+			sr = StepResult{
+				Step:  stepName,
+				Error: err.Error(),
+			}
+		}
+
+		results = append(results, sr)
+		totalDuration += sr.Duration
+		task.Progress(i+1, len(steps))
+	}
+
+	return &StartSharedWorkResponse{
+		Completed:     len(results),
+		TotalSteps:    len(steps),
+		TotalDuration: totalDuration,
+		Results:       results,
 	}, nil
 }
