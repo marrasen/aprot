@@ -367,6 +367,11 @@ func TestGenerateReact(t *testing.T) {
 			t.Error("Per-handler hooks should delegate to generic hooks, not use useState directly")
 		}
 	}
+
+	// Mutation hooks should forward AbortSignal for cancellation
+	if !strings.Contains(output, "signal: AbortSignal") {
+		t.Error("Mutation hooks should forward AbortSignal for cancellation")
+	}
 }
 
 func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
@@ -419,6 +424,11 @@ func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	}
 	if !strings.Contains(handlerContent, "usePushEvent(") {
 		t.Error("Handler file should delegate to usePushEvent")
+	}
+
+	// Mutation hooks should forward AbortSignal for cancellation
+	if !strings.Contains(handlerContent, "signal: AbortSignal") {
+		t.Error("Mutation hooks should forward AbortSignal for cancellation")
 	}
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
-import { ApiClient, ApiClientProvider, useConnection } from './api/client'
+import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, TaskNodeStatus } from './api/client'
+import type { TaskNodeStatusType } from './api/client'
 import {
   useListUsers,
   useCreateUserMutation,
@@ -7,9 +8,12 @@ import {
   useUserCreatedEvent,
   useSystemNotificationEvent,
   useGetTaskMutation,
+  useStartSharedWorkMutation,
   TaskStatus,
 } from './api/handlers'
 import type { TaskStatusType } from './api/handlers'
+import type { SharedTaskState } from './api/tasks-handler'
+import { useSharedTasks, cancelSharedTask } from './api/tasks'
 
 // Initialize client
 const client = new ApiClient(`ws://${window.location.host}/ws`)
@@ -35,7 +39,7 @@ function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void
       return
     }
     try {
-      const result = await mutate({ name, email })
+      const result = await mutate(name, email)
       onLog(`Created user: ${JSON.stringify(result)}`, 'response')
       setName('')
       setEmail('')
@@ -146,7 +150,7 @@ function TaskViewer({ onLog }: { onLog: (msg: string, type?: string) => void }) 
       return
     }
     try {
-      const result = await mutate({ id: taskId })
+      const result = await mutate(taskId)
       onLog(`Got task: ${JSON.stringify(result)}`, 'response')
 
       // Demonstrate type-safe enum comparison
@@ -201,9 +205,8 @@ function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void
   const [items, setItems] = useState('apple, banana, cherry, date, elderberry')
   const [delay, setDelay] = useState(500)
   const [progress, setProgress] = useState({ current: 0, total: 0, message: 'Ready' })
-  const abortRef = useRef<AbortController | null>(null)
 
-  const { mutate, isLoading, reset } = useProcessBatchMutation({
+  const { mutate, isLoading, cancel, reset } = useProcessBatchMutation({
     onProgress: (current, total, message) => {
       setProgress({ current, total, message })
       onLog(`Progress: ${current}/${total} - ${message}`, 'progress')
@@ -217,23 +220,20 @@ function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void
       return
     }
 
-    abortRef.current = new AbortController()
     setProgress({ current: 0, total: itemList.length, message: 'Starting...' })
 
     try {
-      const result = await mutate({ items: itemList, delay })
+      const result = await mutate(itemList, delay)
       setProgress({ current: result.processed, total: result.processed, message: 'Done!' })
       onLog(`Batch complete: ${JSON.stringify(result)}`, 'response')
     } catch (err) {
       onLog(`Batch error: ${(err as Error).message}`, 'error')
       setProgress((p) => ({ ...p, message: `Error: ${(err as Error).message}` }))
-    } finally {
-      abortRef.current = null
     }
   }
 
   const handleCancel = () => {
-    abortRef.current?.abort()
+    cancel()
     onLog('Cancellation requested', 'error')
     reset()
   }
@@ -259,6 +259,200 @@ function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void
       <div className="progress-text">
         {progress.total > 0 ? `${progress.current}/${progress.total}: ${progress.message}` : progress.message}
       </div>
+    </div>
+  )
+}
+
+function getNodeStatusLabel(status: TaskNodeStatusType): string {
+  switch (status) {
+    case TaskNodeStatus.Created:
+      return 'Created'
+    case TaskNodeStatus.Running:
+      return 'Running'
+    case TaskNodeStatus.Completed:
+      return 'Completed'
+    case TaskNodeStatus.Failed:
+      return 'Failed'
+    default:
+      return status
+  }
+}
+
+function getNodeStatusClass(status: TaskNodeStatusType): string {
+  switch (status) {
+    case TaskNodeStatus.Created:
+      return 'status-created'
+    case TaskNodeStatus.Running:
+      return 'status-running'
+    case TaskNodeStatus.Completed:
+      return 'status-completed'
+    case TaskNodeStatus.Failed:
+      return 'status-failed'
+    default:
+      return ''
+  }
+}
+
+function TaskNodeTree({ task }: { task: SharedTaskState }) {
+  const client = useApiClient()
+
+  const handleCancel = () => {
+    cancelSharedTask(client, task.id).catch(() => {})
+  }
+
+  const isActive = task.status === TaskNodeStatus.Running || task.status === TaskNodeStatus.Created
+
+  return (
+    <div style={{ padding: 10, marginBottom: 8, background: '#f8f9fa', borderRadius: 4, border: '1px solid #dee2e6' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <strong>{task.title}</strong>
+          {task.meta?.userName && <span style={{ color: '#888', marginLeft: 8 }}>by {task.meta.userName}</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className={`status-badge ${getNodeStatusClass(task.status)}`}>
+            {getNodeStatusLabel(task.status)}
+          </span>
+          {isActive && task.isOwner && (
+            <button className="danger" style={{ padding: '2px 8px', fontSize: 12 }} onClick={handleCancel}>
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+      {task.current != null && task.total != null && task.total > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <div className="progress-bar" style={{ height: 6 }}>
+            <div className="progress-bar-fill" style={{ width: `${(task.current / task.total) * 100}%` }} />
+          </div>
+          <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>{task.current}/{task.total}</div>
+        </div>
+      )}
+      {task.error && <div style={{ color: 'red', fontSize: 13, marginTop: 4 }}>{task.error}</div>}
+      {task.children && task.children.length > 0 && (
+        <div style={{ marginTop: 8, marginLeft: 16, borderLeft: '2px solid #dee2e6', paddingLeft: 10 }}>
+          {task.children.map((child) => (
+            <div key={child.id} style={{ marginBottom: 4, fontSize: 13 }}>
+              <span className={`status-badge ${getNodeStatusClass(child.status)}`} style={{ fontSize: 11, marginRight: 6 }}>
+                {getNodeStatusLabel(child.status)}
+              </span>
+              {child.title}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SharedWorkPanel({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  const [title, setTitle] = useState('Deploy Pipeline')
+  const [steps, setSteps] = useState('Build, Test, Lint, Package, Deploy')
+  const [delay, setDelay] = useState(800)
+  const sharedTasks = useSharedTasks()
+
+  const { mutate, data: result, error, isLoading, cancel, reset } = useStartSharedWorkMutation()
+
+  const handleStart = async () => {
+    const stepList = steps.split(',').map((s) => s.trim()).filter(Boolean)
+    if (!title || stepList.length === 0) {
+      onLog('Please enter a title and steps', 'error')
+      return
+    }
+    reset()
+    try {
+      const res = await mutate(title, stepList, delay)
+      onLog(`Shared task "${title}" completed: ${res.completed}/${res.totalSteps} steps in ${res.totalDuration}ms`, 'response')
+    } catch (err) {
+      if ((err as Error).message !== 'Request aborted') {
+        onLog(`Shared task error: ${(err as Error).message}`, 'error')
+      }
+    }
+  }
+
+  const handleCancel = () => {
+    cancel()
+    onLog('Shared task cancelled', 'error')
+  }
+
+  const isCanceled = error instanceof ApiError && error.isCanceled()
+
+  return (
+    <div className="card">
+      <h2>Shared Tasks (with SubTasks & Cancellation)</h2>
+      <p style={{ color: '#666', fontSize: 14, marginBottom: 15 }}>
+        Shared tasks are visible to all connected clients. Each step computes a SHA-256 hash.
+      </p>
+      <div className="form-group">
+        <label>Title</label>
+        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="My Task" />
+      </div>
+      <div className="form-group">
+        <label>Steps (comma-separated)</label>
+        <input type="text" value={steps} onChange={(e) => setSteps(e.target.value)} />
+      </div>
+      <div className="form-group">
+        <label>Delay per step (ms)</label>
+        <input type="number" value={delay} onChange={(e) => setDelay(Number(e.target.value))} />
+      </div>
+      <button onClick={handleStart} disabled={isLoading}>
+        {isLoading ? 'Running...' : 'Start Shared Task'}
+      </button>
+      <button className="danger" onClick={handleCancel} disabled={!isLoading} style={{ marginLeft: 8 }}>
+        Cancel
+      </button>
+
+      {isCanceled && (
+        <div style={{ marginTop: 12, padding: 10, background: '#fff3cd', borderRadius: 4, border: '1px solid #ffc107' }}>
+          Task was canceled.
+        </div>
+      )}
+      {error && !isCanceled && (
+        <p style={{ color: 'red', marginTop: 8 }}>{error.message}</p>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 12, padding: 10, background: '#d4edda', borderRadius: 4, border: '1px solid #28a745' }}>
+          <div>
+            <strong>Completed:</strong> {result.completed}/{result.totalSteps} steps in {result.totalDuration}ms
+            {result.results.some((r) => r.error) && (
+              <span style={{ color: '#856404', marginLeft: 8 }}>({result.results.filter((r) => r.error).length} failed)</span>
+            )}
+          </div>
+          <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #c3e6cb' }}>
+                <th style={{ padding: '4px 8px' }}>Step</th>
+                <th style={{ padding: '4px 8px' }}>Duration</th>
+                <th style={{ padding: '4px 8px' }}>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.results.map((r, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid #e8f5e9', background: r.error ? '#fff3cd' : undefined }}>
+                  <td style={{ padding: '4px 8px' }}>{r.step}</td>
+                  <td style={{ padding: '4px 8px' }}>{r.duration ? `${r.duration}ms` : '-'}</td>
+                  <td style={{ padding: '4px 8px' }}>
+                    {r.error
+                      ? <span style={{ color: '#dc3545' }}>{r.error}</span>
+                      : <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{r.hash}</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {sharedTasks.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <h3 style={{ marginBottom: 8 }}>Active Shared Tasks</h3>
+          {sharedTasks.map((task) => (
+            <TaskNodeTree key={task.id} task={task} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -318,6 +512,7 @@ function AppContent() {
       </div>
       <TaskViewer onLog={addLog} />
       <BatchProcessor onLog={addLog} />
+      <SharedWorkPanel onLog={addLog} />
       <EventLog logs={logs} onClear={() => setLogs([])} />
     </>
   )

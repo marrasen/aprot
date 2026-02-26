@@ -22,19 +22,10 @@ func TaskStatusValues() []TaskStatus {
 	}
 }
 
-type CreateUserRequest struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-}
-
 type CreateUserResponse struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Email string `json:"email"`
-}
-
-type GetUserRequest struct {
-	ID string `json:"id"`
 }
 
 type GetUserResponse struct {
@@ -53,19 +44,10 @@ type User struct {
 	Email string `json:"email"`
 }
 
-type GetTaskRequest struct {
-	ID string `json:"id"`
-}
-
 type GetTaskResponse struct {
 	ID     string     `json:"id"`
 	Name   string     `json:"name"`
 	Status TaskStatus `json:"status"`
-}
-
-type ProcessBatchRequest struct {
-	Items []string `json:"items"`
-	Delay int      `json:"delay"` // milliseconds per item
 }
 
 type ProcessBatchResponse struct {
@@ -74,11 +56,6 @@ type ProcessBatchResponse struct {
 }
 
 // Authentication types
-
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
 
 type LoginResponse struct {
 	Token    string `json:"token"`
@@ -89,11 +66,6 @@ type LoginResponse struct {
 type GetProfileResponse struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
-}
-
-type SendMessageRequest struct {
-	ToUserID string `json:"to_user_id"`
-	Message  string `json:"message"`
 }
 
 type SendMessageResponse struct {
@@ -108,11 +80,6 @@ type AuthUser struct {
 
 // SubTask demo types
 
-type ProcessWithSubTasksRequest struct {
-	Steps []string `json:"steps"`
-	Delay int      `json:"delay"` // milliseconds per step
-}
-
 type ProcessWithSubTasksResponse struct {
 	Completed int `json:"completed"`
 }
@@ -124,8 +91,3 @@ type TaskMeta struct {
 	Error    string `json:"error,omitempty"`
 }
 
-type StartSharedWorkRequest struct {
-	Title string   `json:"title"`
-	Steps []string `json:"steps"`
-	Delay int      `json:"delay"` // milliseconds per step
-}

@@ -59,11 +59,11 @@ func NewProtectedHandlers(state *SharedState) *ProtectedHandlers {
 }
 
 // CreateUser creates a new user.
-func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error) {
-	if req.Name == "" {
+func (h *PublicHandlers) CreateUser(ctx context.Context, name string, email string) (*CreateUserResponse, error) {
+	if name == "" {
 		return nil, aprot.ErrInvalidParams("name is required")
 	}
-	if req.Email == "" {
+	if email == "" {
 		return nil, aprot.ErrInvalidParams("email is required")
 	}
 
@@ -72,8 +72,8 @@ func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest)
 	h.state.NextID++
 	user := &User{
 		ID:    id,
-		Name:  req.Name,
-		Email: req.Email,
+		Name:  name,
+		Email: email,
 	}
 	h.state.Users[id] = user
 	h.state.Mu.Unlock()
@@ -95,13 +95,13 @@ func (h *PublicHandlers) CreateUser(ctx context.Context, req *CreateUserRequest)
 }
 
 // GetUser retrieves a user by ID.
-func (h *PublicHandlers) GetUser(ctx context.Context, req *GetUserRequest) (*GetUserResponse, error) {
-	if req.ID == "" {
+func (h *PublicHandlers) GetUser(ctx context.Context, id string) (*GetUserResponse, error) {
+	if id == "" {
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 
 	h.state.Mu.RLock()
-	user, ok := h.state.Users[req.ID]
+	user, ok := h.state.Users[id]
 	h.state.Mu.RUnlock()
 
 	if !ok {
@@ -129,27 +129,26 @@ func (h *PublicHandlers) ListUsers(ctx context.Context) (*ListUsersResponse, err
 }
 
 // ProcessBatch processes items with progress reporting.
-func (h *PublicHandlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequest) (*ProcessBatchResponse, error) {
-	if len(req.Items) == 0 {
+func (h *PublicHandlers) ProcessBatch(ctx context.Context, items []string, delay int) (*ProcessBatchResponse, error) {
+	if len(items) == 0 {
 		return nil, aprot.ErrInvalidParams("items cannot be empty")
 	}
 
-	delay := req.Delay
 	if delay <= 0 {
 		delay = 500
 	}
 
 	progress := aprot.Progress(ctx)
-	results := make([]string, 0, len(req.Items))
+	results := make([]string, 0, len(items))
 
-	for i, item := range req.Items {
+	for i, item := range items {
 		select {
 		case <-ctx.Done():
 			return nil, aprot.ErrCanceled()
 		default:
 		}
 
-		progress.Update(i+1, len(req.Items), fmt.Sprintf("Processing: %s", item))
+		progress.Update(i+1, len(items), fmt.Sprintf("Processing: %s", item))
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		results = append(results, fmt.Sprintf("processed_%s", item))
 	}
@@ -161,21 +160,22 @@ func (h *PublicHandlers) ProcessBatch(ctx context.Context, req *ProcessBatchRequ
 }
 
 // SendNotification sends a notification to the requesting client.
-func (h *PublicHandlers) SendNotification(ctx context.Context, req *SystemNotificationEvent) (*SystemNotificationEvent, error) {
+func (h *PublicHandlers) SendNotification(ctx context.Context, message string, level string) (*SystemNotificationEvent, error) {
+	evt := &SystemNotificationEvent{Message: message, Level: level}
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push(req)
+		conn.Push(evt)
 	}
-	return req, nil
+	return evt, nil
 }
 
 // GetTask retrieves a task by ID (demo: returns hardcoded task).
-func (h *PublicHandlers) GetTask(ctx context.Context, req *GetTaskRequest) (*GetTaskResponse, error) {
-	if req.ID == "" {
+func (h *PublicHandlers) GetTask(ctx context.Context, id string) (*GetTaskResponse, error) {
+	if id == "" {
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 	return &GetTaskResponse{
-		ID:     req.ID,
+		ID:     id,
 		Name:   "Example Task",
 		Status: TaskStatusRunning,
 	}, nil
@@ -183,26 +183,26 @@ func (h *PublicHandlers) GetTask(ctx context.Context, req *GetTaskRequest) (*Get
 
 // Login authenticates a user and returns a token.
 // This is a public method that doesn't require authentication.
-func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
-	if req.Username == "" {
+func (h *PublicHandlers) Login(ctx context.Context, username string, password string) (*LoginResponse, error) {
+	if username == "" {
 		return nil, aprot.ErrInvalidParams("username is required")
 	}
-	if req.Password == "" {
+	if password == "" {
 		return nil, aprot.ErrInvalidParams("password is required")
 	}
 
 	// Simple demo auth: any username/password combo works
 	// In production, you'd verify against a database
 	h.state.Mu.Lock()
-	user, exists := h.state.AuthUsers[req.Username]
+	user, exists := h.state.AuthUsers[username]
 	if !exists {
 		// Create new user on first login (demo only)
 		user = &AuthUser{
 			ID:       fmt.Sprintf("auth_%d", h.state.NextID),
-			Username: req.Username,
+			Username: username,
 		}
 		h.state.NextID++
-		h.state.AuthUsers[req.Username] = user
+		h.state.AuthUsers[username] = user
 	}
 	h.state.Mu.Unlock()
 
@@ -228,18 +228,17 @@ func (h *PublicHandlers) Login(ctx context.Context, req *LoginRequest) (*LoginRe
 }
 
 // ProcessWithSubTasks demonstrates hierarchical sub-tasks with progress and output.
-func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, req *ProcessWithSubTasksRequest) (*ProcessWithSubTasksResponse, error) {
-	if len(req.Steps) == 0 {
+func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, steps []string, delay int) (*ProcessWithSubTasksResponse, error) {
+	if len(steps) == 0 {
 		return nil, aprot.ErrInvalidParams("steps cannot be empty")
 	}
 
-	delay := req.Delay
 	if delay <= 0 {
 		delay = 50
 	}
 
 	completed := 0
-	for i, step := range req.Steps {
+	for i, step := range steps {
 		err := tasks.SubTask(ctx, step, func(ctx context.Context) error {
 			tasks.Output(ctx, fmt.Sprintf("Starting %s", step))
 			time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -258,20 +257,19 @@ func (h *PublicHandlers) ProcessWithSubTasks(ctx context.Context, req *ProcessWi
 // StartSharedWork creates a shared task visible to all clients.
 // The handler body is the task body — no goroutine needed.
 // The task auto-completes when the handler returns nil, or auto-fails on error.
-func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWorkRequest) error {
-	if req.Title == "" {
+func (h *PublicHandlers) StartSharedWork(ctx context.Context, title string, steps []string, delay int) error {
+	if title == "" {
 		return aprot.ErrInvalidParams("title is required")
 	}
-	if len(req.Steps) == 0 {
+	if len(steps) == 0 {
 		return aprot.ErrInvalidParams("steps cannot be empty")
 	}
 
-	delay := req.Delay
 	if delay <= 0 {
 		delay = 50
 	}
 
-	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, req.Title)
+	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, title)
 	if task == nil {
 		return aprot.ErrInternal(nil)
 	}
@@ -282,7 +280,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		task.SetMeta(TaskMeta{UserName: conn.UserID()})
 	}
 
-	for i, step := range req.Steps {
+	for i, step := range steps {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -292,7 +290,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, req *StartSharedWo
 		task.Output(fmt.Sprintf("Working on: %s", step))
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 		sub.Complete()
-		task.Progress(i+1, len(req.Steps))
+		task.Progress(i+1, len(steps))
 	}
 	return nil
 }
@@ -313,25 +311,25 @@ func (h *ProtectedHandlers) GetProfile(ctx context.Context) (*GetProfileResponse
 
 // SendMessage sends a direct message to another user.
 // This method requires authentication (middleware applied via registry).
-func (h *ProtectedHandlers) SendMessage(ctx context.Context, req *SendMessageRequest) (*SendMessageResponse, error) {
+func (h *ProtectedHandlers) SendMessage(ctx context.Context, toUserID string, message string) (*SendMessageResponse, error) {
 	sender := AuthUserFromContext(ctx)
 	if sender == nil {
 		return nil, aprot.ErrUnauthorized("not authenticated")
 	}
 
-	if req.ToUserID == "" {
+	if toUserID == "" {
 		return nil, aprot.ErrInvalidParams("to_user_id is required")
 	}
-	if req.Message == "" {
+	if message == "" {
 		return nil, aprot.ErrInvalidParams("message is required")
 	}
 
 	// Send push to the recipient
 	if h.state.UserPusher != nil {
-		h.state.UserPusher.PushToUser(req.ToUserID, &DirectMessageEvent{
+		h.state.UserPusher.PushToUser(toUserID, &DirectMessageEvent{
 			FromUserID: sender.ID,
 			FromUser:   sender.Username,
-			Message:    req.Message,
+			Message:    message,
 		})
 	}
 

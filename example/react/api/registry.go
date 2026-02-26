@@ -1,13 +1,16 @@
 package api
 
-import "github.com/marrasen/aprot"
+import (
+	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/tasks"
+)
 
 // NewRegistry creates and configures the API registry with all handlers and push events.
-func NewRegistry() *aprot.Registry {
+func NewRegistry() (*aprot.Registry, *Handlers) {
 	registry := aprot.NewRegistry()
 
 	// Register handlers
-	handlers := &Handlers{}
+	handlers := NewHandlers()
 	registry.Register(handlers)
 
 	// Register enums
@@ -18,5 +21,8 @@ func NewRegistry() *aprot.Registry {
 	registry.RegisterPushEventFor(handlers, UserUpdatedEvent{})
 	registry.RegisterPushEventFor(handlers, SystemNotificationEvent{})
 
-	return registry
+	// Enable shared tasks with typed metadata
+	tasks.EnableWithMeta[TaskMeta](registry)
+
+	return registry, handlers
 }
