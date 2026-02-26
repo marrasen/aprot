@@ -959,6 +959,100 @@ func TestStartSharedTaskCancelPropagation(t *testing.T) {
 	}
 }
 
+// TestStartSharedTaskMiddlewareFinalize verifies that a task created via
+// StartSharedTask is completed (not canceled) by finalizeTaskSlot when the
+// handler returns nil. This simulates the connection.go lifecycle where a
+// defer cancel() fires after the middleware returns.
+func TestStartSharedTaskMiddlewareFinalize(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	// Simulate connection.go: request context with defer cancel.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+
+	// Build the context the same way connection.go + middleware do.
+	ctx := aprot.WithTestConnection(reqCtx, 1)
+	ctx = aprot.WithTestRequestSender(ctx, &mockSender{})
+
+	mw := taskMiddleware(tm)
+	handler := mw(func(ctx context.Context, req *aprot.Request) (any, error) {
+		taskCtx, task := StartSharedTask[struct{}](ctx, "mw-finalize")
+		if task == nil {
+			t.Fatal("StartSharedTask returned nil")
+		}
+		// Use the task context (as a real handler would).
+		select {
+		case <-taskCtx.Done():
+			return nil, taskCtx.Err()
+		default:
+		}
+		return "ok", nil
+	})
+
+	result, err := handler(ctx, &aprot.Request{ID: "r1", Method: "test"})
+
+	// Simulate connection.go defer cancel() firing after middleware returns.
+	reqCancel()
+
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("handler returned %v, want \"ok\"", result)
+	}
+
+	// The task should be Completed, not Failed/"canceled".
+	states := tm.snapshotAll()
+	if len(states) == 0 {
+		// Task may have been removed already (200ms delay). That's fine —
+		// it means closeTask() ran (Completed path), not fail("canceled").
+		return
+	}
+	for _, s := range states {
+		if s.Title == "mw-finalize" {
+			if s.Status == TaskNodeStatusFailed {
+				t.Errorf("task was failed with %q; want Completed", s.Error)
+			}
+		}
+	}
+}
+
+// TestSharedSubTaskMiddlewareFinalize verifies that SharedSubTask completes
+// the task normally when fn returns nil, even after the request context is
+// canceled by defer cancel().
+func TestSharedSubTaskMiddlewareFinalize(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+
+	ctx := aprot.WithTestConnection(reqCtx, 1)
+	ctx = aprot.WithTestRequestSender(ctx, &mockSender{})
+
+	mw := taskMiddleware(tm)
+	handler := mw(func(ctx context.Context, req *aprot.Request) (any, error) {
+		err := SharedSubTask(ctx, "sub-mw", func(fnCtx context.Context) error {
+			return nil
+		})
+		return nil, err
+	})
+
+	_, err := handler(ctx, &aprot.Request{ID: "r2", Method: "test"})
+
+	reqCancel()
+
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	// SharedSubTask creates a non-top-level task; verify it was completed.
+	for _, s := range tm.snapshotAll() {
+		if s.Title == "sub-mw" && s.Status == TaskNodeStatusFailed {
+			t.Errorf("SharedSubTask was failed with %q; want Completed", s.Error)
+		}
+	}
+}
+
 // TestSharedTaskCloseIdempotent verifies that calling closeTask() on an
 // already-completed task is a no-op.
 func TestSharedTaskCloseIdempotent(t *testing.T) {
