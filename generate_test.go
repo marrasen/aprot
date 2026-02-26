@@ -315,7 +315,7 @@ func TestGenerateReact(t *testing.T) {
 	output := buf.String()
 
 	// Check for React imports
-	if !strings.Contains(output, "import { useState, useEffect") {
+	if !strings.Contains(output, "import { useState, useEffect, useCallback, useRef") {
 		t.Error("Missing React imports")
 	}
 
@@ -343,6 +343,82 @@ func TestGenerateReact(t *testing.T) {
 	}
 	if !strings.Contains(output, "useApiClient") {
 		t.Error("Missing useApiClient hook")
+	}
+
+	// Check for generic hooks
+	if !strings.Contains(output, "export function useQuery") {
+		t.Error("Missing generic useQuery hook")
+	}
+	if !strings.Contains(output, "export function useMutation") {
+		t.Error("Missing generic useMutation hook")
+	}
+	if !strings.Contains(output, "export function usePushEvent") {
+		t.Error("Missing generic usePushEvent hook")
+	}
+
+	// Per-handler hooks should delegate to generic hooks (no useState in wrappers)
+	// Split at the generic hooks boundary and check the per-handler section
+	parts := strings.SplitN(output, "export function usePushEvent", 2)
+	if len(parts) == 2 {
+		handlerHooksSection := parts[1]
+		// After usePushEvent definition ends, the per-handler wrappers should not use useState
+		afterGenericHooks := strings.SplitN(handlerHooksSection, "}\n", 2)
+		if len(afterGenericHooks) == 2 && strings.Contains(afterGenericHooks[1], "useState") {
+			t.Error("Per-handler hooks should delegate to generic hooks, not use useState directly")
+		}
+	}
+}
+
+func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterPushEventFor(&TestHandlers{}, UserUpdatedEvent{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// Base client file should contain generic hooks
+	clientContent, ok := files["client.ts"]
+	if !ok {
+		t.Fatal("Missing client.ts in multi-file output")
+	}
+	if !strings.Contains(clientContent, "export function useQuery") {
+		t.Error("client.ts missing generic useQuery hook")
+	}
+	if !strings.Contains(clientContent, "export function useMutation") {
+		t.Error("client.ts missing generic useMutation hook")
+	}
+	if !strings.Contains(clientContent, "export function usePushEvent") {
+		t.Error("client.ts missing generic usePushEvent hook")
+	}
+
+	// Handler file should NOT contain useState (proves delegation)
+	handlerContent, ok := files["test-handlers.ts"]
+	if !ok {
+		t.Fatalf("Missing test-handlers.ts in multi-file output, got files: %v", func() []string {
+			keys := make([]string, 0, len(files))
+			for k := range files {
+				keys = append(keys, k)
+			}
+			return keys
+		}())
+	}
+	if strings.Contains(handlerContent, "useState") {
+		t.Error("Handler file should not contain useState — hooks should delegate to generic hooks")
+	}
+	if !strings.Contains(handlerContent, "useQuery(") {
+		t.Error("Handler file should delegate to useQuery")
+	}
+	if !strings.Contains(handlerContent, "useMutation(") {
+		t.Error("Handler file should delegate to useMutation")
+	}
+	if !strings.Contains(handlerContent, "usePushEvent(") {
+		t.Error("Handler file should delegate to usePushEvent")
 	}
 }
 
