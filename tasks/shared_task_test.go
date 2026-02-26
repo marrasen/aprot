@@ -189,7 +189,7 @@ func TestSharedTaskCancelNonExistent(t *testing.T) {
 }
 
 // TestSharedTaskFail verifies that fail() sets the correct status and error
-// message in the snapshot.
+// message in the snapshot and cancels the task context.
 func TestSharedTaskFail(t *testing.T) {
 	_, tm := setupTestServer(t)
 
@@ -207,10 +207,18 @@ func TestSharedTaskFail(t *testing.T) {
 	if state.Error != "something went wrong" {
 		t.Errorf("error: got %q, want %q", state.Error, "something went wrong")
 	}
+
+	// fail() must cancel the task context.
+	select {
+	case <-core.ctx.Done():
+		// expected
+	default:
+		t.Error("task context was not canceled after fail()")
+	}
 }
 
-// TestSharedTaskErr verifies that Err(nil) completes the task and
-// Err(non-nil) fails the task.
+// TestSharedTaskErr verifies that Err(nil) completes the task and cancels its
+// context, and Err(non-nil) fails the task and cancels its context.
 func TestSharedTaskErr(t *testing.T) {
 	t.Run("nil error completes", func(t *testing.T) {
 		_, tm := setupTestServer(t)
@@ -226,6 +234,13 @@ func TestSharedTaskErr(t *testing.T) {
 		state := core.snapshot()
 		if state.Status != TaskNodeStatusCompleted {
 			t.Errorf("status: got %v, want Completed", state.Status)
+		}
+
+		select {
+		case <-core.ctx.Done():
+			// expected — Err(nil) calls Close which cancels the context
+		default:
+			t.Error("task context was not canceled after Err(nil)")
 		}
 	})
 
@@ -246,6 +261,13 @@ func TestSharedTaskErr(t *testing.T) {
 		}
 		if state.Error != "test error" {
 			t.Errorf("error: got %q, want %q", state.Error, "test error")
+		}
+
+		select {
+		case <-core.ctx.Done():
+			// expected — Err(err) calls Fail which cancels the context
+		default:
+			t.Error("task context was not canceled after Err(non-nil)")
 		}
 	})
 }
@@ -700,7 +722,8 @@ func TestSharedSubTaskRoutesThroughSharedContext(t *testing.T) {
 }
 
 // TestCancelSharedTaskViaAPI verifies that CancelSharedTask returns an error
-// for an unknown task ID and succeeds for a known one.
+// for an unknown task ID, and for a known one it sets failed status and
+// cancels the task context.
 func TestCancelSharedTaskViaAPI(t *testing.T) {
 	_, tm := setupTestServer(t)
 
@@ -726,6 +749,14 @@ func TestCancelSharedTaskViaAPI(t *testing.T) {
 	state := core.snapshot()
 	if state.Status != TaskNodeStatusFailed {
 		t.Errorf("status after CancelSharedTask: got %v, want Failed", state.Status)
+	}
+
+	// CancelSharedTask must cancel the task context.
+	select {
+	case <-core.ctx.Done():
+		// expected
+	default:
+		t.Error("task context was not canceled after CancelSharedTask")
 	}
 }
 
