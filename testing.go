@@ -8,3 +8,9 @@ import "context"
 func WithTestConnection(ctx context.Context, id uint64) context.Context {
 	return withConnection(ctx, &Conn{id: id})
 }
+
+// WithTestRequestSender returns a context carrying the given [RequestSender].
+// Intended exclusively for use in tests.
+func WithTestRequestSender(ctx context.Context, rs RequestSender) context.Context {
+	return withRequestSender(ctx, rs)
+}
