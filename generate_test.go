@@ -41,13 +41,13 @@ type UserUpdatedEvent struct {
 type TaskStatus string
 
 const (
-	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusCreated   TaskStatus = "created"
 	TaskStatusRunning   TaskStatus = "running"
 	TaskStatusCompleted TaskStatus = "completed"
 )
 
 func TaskStatusValues() []TaskStatus {
-	return []TaskStatus{TaskStatusPending, TaskStatusRunning, TaskStatusCompleted}
+	return []TaskStatus{TaskStatusCreated, TaskStatusRunning, TaskStatusCompleted}
 }
 
 // Int-based enum for testing (with Stringer interface)
@@ -471,8 +471,8 @@ func TestGenerateWithEnums(t *testing.T) {
 	if !strings.Contains(output, "export const TaskStatus = {") {
 		t.Error("Missing TaskStatus enum const")
 	}
-	if !strings.Contains(output, `Pending: "pending"`) {
-		t.Error("Missing Pending enum value")
+	if !strings.Contains(output, `Created: "created"`) {
+		t.Error("Missing Created enum value")
 	}
 	if !strings.Contains(output, "export type TaskStatusType = typeof TaskStatus[keyof typeof TaskStatus]") {
 		t.Error("Missing TaskStatusType type alias")

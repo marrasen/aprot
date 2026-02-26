@@ -107,8 +107,8 @@ function UsersList() {
 // Helper to get status label using enum - demonstrates type-safe enum usage
 function getStatusLabel(status: TaskStatusType): string {
   switch (status) {
-    case TaskStatus.Pending:
-      return '⏳ Pending'
+    case TaskStatus.Created:
+      return '⏳ Created'
     case TaskStatus.Running:
       return '🔄 Running'
     case TaskStatus.Completed:
@@ -123,8 +123,8 @@ function getStatusLabel(status: TaskStatusType): string {
 // Helper to get status badge class using enum
 function getStatusClass(status: TaskStatusType): string {
   switch (status) {
-    case TaskStatus.Pending:
-      return 'status-pending'
+    case TaskStatus.Created:
+      return 'status-created'
     case TaskStatus.Running:
       return 'status-running'
     case TaskStatus.Completed:

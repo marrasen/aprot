@@ -349,10 +349,10 @@ func StartSharedTask[M any](ctx context.Context, title string) (context.Context,
 		return ctx, nil
 	}
 	core := tm.create(title, conn.ID(), true, ctx)
+	tm.broadcastNow() // first message shows CREATED
 	core.mu.Lock()
 	core.status = TaskNodeStatusRunning
 	core.mu.Unlock()
-	tm.broadcastNow()
 
 	if slot := taskSlotFromContext(ctx); slot != nil {
 		slot.sharedCore = core
@@ -380,10 +380,10 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	}
 
 	core := tm.create(title, conn.ID(), false, ctx)
+	tm.broadcastNow() // first message shows CREATED
 	core.mu.Lock()
 	core.status = TaskNodeStatusRunning
 	core.mu.Unlock()
-	tm.broadcastNow()
 	sc := &sharedContext{core: core}
 	childCtx := withSharedContext(ctx, sc)
 
