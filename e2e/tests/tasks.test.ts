@@ -1,8 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
 import { ApiClient } from '../api/client';
-import type { TaskNode } from '../api/client';
-import type { SharedTaskState } from '../api/tasks-handler';
+import type { TaskNode, SharedTaskState } from '../api/tasks-handler';
 import { onTaskStateEvent, onTaskUpdateEvent } from '../api/tasks-handler';
 import { processWithSubTasks, startSharedWork } from '../api/public-handlers';
 import { cancelSharedTask, taskOptions } from '../api/tasks';
@@ -26,7 +25,7 @@ describe('SubTask (WebSocket)', () => {
             client,
             ['Build', 'Test', 'Deploy'],
             50,
-            taskOptions({
+            taskOptions(client, {
                 onTaskProgress: (tasks) => {
                     taskUpdates.push(tasks);
                 },
@@ -62,7 +61,7 @@ describe('SubTask (WebSocket)', () => {
             client,
             ['Alpha', 'Beta'],
             50,
-            taskOptions({
+            taskOptions(client, {
                 onOutput: (output, taskId) => {
                     outputs.push({ output, taskId });
                 },
