@@ -480,7 +480,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
         (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal, onProgress: options?.onProgress }),
         [options?.onProgress],
     );
-    return useMutation(wrappedFn, options);
+    return useMutation(wrappedFn);
 }
 {{- else}}
 export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
@@ -492,7 +492,7 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
         (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal, onProgress: options?.onProgress }),
         [options?.onProgress],
     );
-    return useMutation(wrappedFn, options);
+    return useMutation(wrappedFn);
 }
 {{- end}}
 {{end}}
