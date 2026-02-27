@@ -776,7 +776,6 @@ export function useQuery<TArgs extends unknown[], TRes>(
 // Generic mutation hook
 export function useMutation<TArgs extends unknown[], TRes>(
     fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => Promise<TRes>,
-    _options?: UseMutationOptions,
 ): UseMutationResult<TArgs, TRes> {
     const client = useApiClient();
     const [data, setData] = useState<TRes | null>(null);
