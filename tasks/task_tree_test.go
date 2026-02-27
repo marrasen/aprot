@@ -63,10 +63,10 @@ func extractTasks(t *testing.T, msg capturedMessage) []*TaskNode {
 	return msg.Tasks
 }
 
-// newTestCtx returns a context that has a task tree backed by sender.
+// newTestCtx returns a context that has a request delivery backed by sender.
 func newTestCtx(sender aprot.RequestSender) context.Context {
-	tree := newTaskTree(sender)
-	return withTaskTree(context.Background(), tree)
+	d := newRequestDelivery(sender)
+	return withDelivery(context.Background(), d)
 }
 
 // --- SubTask ---
@@ -264,8 +264,9 @@ func TestOutputWriter(t *testing.T) {
 	}
 
 	// Verify the final snapshot shows the task as completed.
-	tree := taskTreeFromContext(ctx)
-	snapshot := tree.snapshot()
+	d := deliveryFromContext(ctx).(*requestDelivery)
+	root := d.root
+	snapshot := root.snapshotChildren()
 	if len(snapshot) == 0 {
 		t.Fatal("expected at least one node in snapshot after Close")
 	}
@@ -315,8 +316,8 @@ func TestWriterProgress(t *testing.T) {
 		t.Fatalf("Close error: %v", err)
 	}
 
-	tree := taskTreeFromContext(ctx)
-	snapshot := tree.snapshot()
+	rd := deliveryFromContext(ctx).(*requestDelivery)
+	snapshot := rd.root.snapshotChildren()
 	if len(snapshot) == 0 {
 		t.Fatal("expected at least one node in snapshot after Close")
 	}
@@ -363,8 +364,8 @@ func TestTaskErr(t *testing.T) {
 		}
 		task.Err(nil)
 
-		tree := taskTreeFromContext(ctx)
-		snapshot := tree.snapshot()
+		rd := deliveryFromContext(ctx).(*requestDelivery)
+		snapshot := rd.root.snapshotChildren()
 		if len(snapshot) == 0 {
 			t.Fatal("expected at least one node in snapshot")
 		}
@@ -383,8 +384,8 @@ func TestTaskErr(t *testing.T) {
 		}
 		task.Err(errors.New("oh no"))
 
-		tree := taskTreeFromContext(ctx)
-		snapshot := tree.snapshot()
+		rd := deliveryFromContext(ctx).(*requestDelivery)
+		snapshot := rd.root.snapshotChildren()
 		if len(snapshot) == 0 {
 			t.Fatal("expected at least one node in snapshot")
 		}

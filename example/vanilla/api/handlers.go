@@ -269,7 +269,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, title string, step
 		delay = 50
 	}
 
-	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, title)
+	ctx, task := tasks.StartTask[TaskMeta](ctx, title, tasks.Shared())
 	if task == nil {
 		return aprot.ErrInternal(nil)
 	}
@@ -289,7 +289,7 @@ func (h *PublicHandlers) StartSharedWork(ctx context.Context, title string, step
 		sub := task.SubTask(step)
 		task.Output(fmt.Sprintf("Working on: %s", step))
 		time.Sleep(time.Duration(delay) * time.Millisecond)
-		sub.Complete()
+		sub.Close()
 		task.Progress(i+1, len(steps))
 	}
 	return nil

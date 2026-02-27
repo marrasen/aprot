@@ -119,12 +119,16 @@ func (h *Handlers) ProcessBatch(ctx context.Context, items []string, delay int) 
 	for i, item := range items {
 		select {
 		case <-ctx.Done():
-			return nil, aprot.ErrCanceled()
+			return nil, ctx.Err()
 		default:
 		}
 
 		progress.Update(i+1, len(items), fmt.Sprintf("Processing: %s", item))
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(delay) * time.Millisecond):
+		}
 		results = append(results, fmt.Sprintf("processed_%s", item))
 	}
 
@@ -190,7 +194,7 @@ func (h *Handlers) StartSharedWork(ctx context.Context, title string, steps []st
 		delay = 500
 	}
 
-	ctx, task := tasks.StartSharedTask[TaskMeta](ctx, title)
+	ctx, task := tasks.StartTask[TaskMeta](ctx, title, tasks.Shared())
 	if task == nil {
 		return nil, aprot.ErrInternal(nil)
 	}
@@ -206,7 +210,7 @@ func (h *Handlers) StartSharedWork(ctx context.Context, title string, steps []st
 	for i, step := range steps {
 		select {
 		case <-ctx.Done():
-			return nil, aprot.ErrCanceled()
+			return nil, ctx.Err()
 		default:
 		}
 
@@ -218,7 +222,11 @@ func (h *Handlers) StartSharedWork(ctx context.Context, title string, steps []st
 			tasks.Output(ctx, fmt.Sprintf("Working on: %s", stepName))
 
 			stepStart := time.Now()
-			time.Sleep(time.Duration(delay) * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(delay) * time.Millisecond):
+			}
 
 			// "Lint" step always fails to demonstrate error capture
 			if stepName == "Lint" {
@@ -231,7 +239,7 @@ func (h *Handlers) StartSharedWork(ctx context.Context, title string, steps []st
 				Duration: int(time.Since(stepStart).Milliseconds()),
 				Hash:     hex.EncodeToString(hash[:8]),
 			}
-			return nil
+			return ctx.Err()
 		})
 
 		if err != nil {
