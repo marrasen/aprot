@@ -1059,6 +1059,93 @@ func TestSharedSubTaskMiddlewareFinalize(t *testing.T) {
 	}
 }
 
+// TestSharedTaskCancelFailsChildren verifies that canceling a root task marks
+// all running/created subtasks as failed before the final broadcast.
+func TestSharedTaskCancelFailsChildren(t *testing.T) {
+	t.Run("direct children", func(t *testing.T) {
+		_, tm := setupTestServer(t)
+
+		root := tm.create("root", 1, true, context.Background())
+		root.mu.Lock()
+		root.status = TaskNodeStatusRunning
+		root.mu.Unlock()
+
+		running := root.createChild("running child")
+		completed := root.createChild("completed child")
+		completed.mu.Lock()
+		completed.status = TaskNodeStatusCompleted
+		completed.mu.Unlock()
+
+		root.failTop("canceled")
+
+		state := root.sharedSnapshot()
+
+		// Running child should now be failed.
+		var runningState, completedState *TaskNode
+		for i := range state.Children {
+			switch state.Children[i].Title {
+			case "running child":
+				runningState = state.Children[i]
+			case "completed child":
+				completedState = state.Children[i]
+			}
+		}
+		if runningState == nil {
+			t.Fatal("running child not found in snapshot")
+		}
+		if runningState.Status != TaskNodeStatusFailed {
+			t.Errorf("running child status: got %v, want Failed", runningState.Status)
+		}
+		if runningState.Error != "canceled" {
+			t.Errorf("running child error: got %q, want %q", runningState.Error, "canceled")
+		}
+
+		// Completed child should remain completed.
+		if completedState == nil {
+			t.Fatal("completed child not found in snapshot")
+		}
+		if completedState.Status != TaskNodeStatusCompleted {
+			t.Errorf("completed child status: got %v, want Completed", completedState.Status)
+		}
+
+		_ = running // suppress unused warning
+	})
+
+	t.Run("nested grandchildren", func(t *testing.T) {
+		_, tm := setupTestServer(t)
+
+		root := tm.create("root", 1, true, context.Background())
+		root.mu.Lock()
+		root.status = TaskNodeStatusRunning
+		root.mu.Unlock()
+
+		child := root.createChild("child")
+		grandchild := child.createChild("grandchild")
+
+		root.failTop("canceled")
+
+		state := root.sharedSnapshot()
+
+		childState := state.Children[0]
+		if childState.Status != TaskNodeStatusFailed {
+			t.Errorf("child status: got %v, want Failed", childState.Status)
+		}
+		if childState.Error != "canceled" {
+			t.Errorf("child error: got %q, want %q", childState.Error, "canceled")
+		}
+
+		grandchildState := childState.Children[0]
+		if grandchildState.Status != TaskNodeStatusFailed {
+			t.Errorf("grandchild status: got %v, want Failed", grandchildState.Status)
+		}
+		if grandchildState.Error != "canceled" {
+			t.Errorf("grandchild error: got %q, want %q", grandchildState.Error, "canceled")
+		}
+
+		_ = grandchild // suppress unused warning
+	})
+}
+
 // TestSharedTaskCloseIdempotent verifies that calling completeTop() on an
 // already-completed task is a no-op.
 func TestSharedTaskCloseIdempotent(t *testing.T) {
