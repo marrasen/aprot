@@ -1,54 +1,10 @@
 package tasks
 
 import (
+	"context"
 	"sync"
-	"sync/atomic"
-
-	"github.com/marrasen/aprot"
+	"time"
 )
-
-// taskTree is the mutable state for a request's task hierarchy.
-// It is created per-request and stored in the context.
-type taskTree struct {
-	sender aprot.RequestSender
-	root   *taskNode
-	mu     sync.Mutex
-	nextID atomic.Int64
-}
-
-func newTaskTree(sender aprot.RequestSender) *taskTree {
-	return &taskTree{
-		sender: sender,
-	}
-}
-
-// snapshot returns the current task tree as a slice of TaskNodes.
-func (t *taskTree) snapshot() []*TaskNode {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.root == nil {
-		return nil
-	}
-	return t.root.snapshotChildren()
-}
-
-// send sends the current task tree snapshot to the client.
-func (t *taskTree) send() {
-	nodes := t.snapshot()
-	if nodes != nil {
-		t.sender.SendJSON(taskTreeMessage{
-			Type:  aprot.TypeProgress,
-			ID:    t.sender.RequestID(),
-			Tasks: nodes,
-		})
-	}
-}
-
-// allocID returns a unique task node ID within this tree.
-func (t *taskTree) allocID() string {
-	n := t.nextID.Add(1)
-	return "t" + itoa(n)
-}
 
 // itoa converts an int64 to string without importing strconv.
 func itoa(n int64) string {
@@ -65,9 +21,10 @@ func itoa(n int64) string {
 	return string(buf[i:])
 }
 
-// taskNode is the internal mutable tree node.
+// taskNode is the internal mutable tree node used by both request-scoped and
+// shared task systems. The delivery field determines how updates are sent.
 type taskNode struct {
-	tree     *taskTree
+	delivery taskDelivery
 	id       string
 	title    string
 	status   TaskNodeStatus
@@ -77,6 +34,14 @@ type taskNode struct {
 	meta     any
 	children []*taskNode
 	mu       sync.Mutex
+
+	// Shared-task-only fields:
+	cancel      context.CancelFunc // non-nil for top-level shared tasks
+	ctx         context.Context    // task-scoped context for shared tasks
+	manager     *taskManager       // back-reference to manager (shared only)
+	ownerConnID uint64             // connection that created this task
+	topLevel    bool               // true if created by StartTask with Shared()
+
 }
 
 func (n *taskNode) snapshot() *TaskNode {
@@ -140,15 +105,130 @@ func (n *taskNode) stepProgress(step int) (current, total int) {
 	return n.current, n.total
 }
 
-// ensureRoot lazily creates the implicit root node.
-func (t *taskTree) ensureRoot() *taskNode {
-	if t.root == nil {
-		t.root = &taskNode{
-			tree:   t,
-			id:     "root",
-			title:  "",
-			status: TaskNodeStatusRunning,
-		}
+// output sends a text output message for this node.
+func (n *taskNode) output(msg string) {
+	n.delivery.sendOutput(n.id, msg)
+}
+
+// progress updates progress counters and sends an update.
+func (n *taskNode) progress(current, total int) {
+	n.setProgress(current, total)
+	n.delivery.sendProgress(n.id, current, total)
+}
+
+// createChild creates a child node under this node, broadcasts, and transitions to running.
+func (n *taskNode) createChild(title string) *taskNode {
+	child := &taskNode{
+		delivery: n.delivery,
+		id:       n.delivery.allocID(),
+		title:    title,
+		status:   TaskNodeStatusCreated,
 	}
-	return t.root
+	n.addChild(child)
+	n.delivery.sendSnapshot(nil)
+	child.setStatus(TaskNodeStatusRunning)
+	return child
+}
+
+// closeNode marks this child node as completed and broadcasts.
+func (n *taskNode) closeNode() {
+	n.delivery.onComplete(n)
+	n.delivery.sendSnapshot(nil)
+}
+
+// failNode marks this child node as failed and broadcasts.
+func (n *taskNode) failNode(msg string) {
+	n.setFailed(msg)
+	n.delivery.onFail(n)
+	n.delivery.sendSnapshot(nil)
+}
+
+// completeTop marks a top-level shared task as completed.
+// Idempotent: no-op if already completed or failed.
+func (n *taskNode) completeTop() {
+	n.mu.Lock()
+	if n.status != TaskNodeStatusRunning && n.status != TaskNodeStatusCreated {
+		n.mu.Unlock()
+		return
+	}
+	n.status = TaskNodeStatusCompleted
+	n.mu.Unlock()
+	if n.cancel != nil {
+		n.cancel()
+	}
+	n.delivery.sendSnapshot(nil)
+	if n.manager != nil {
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			n.manager.remove(n.id)
+		}()
+	}
+}
+
+// failTop marks a top-level shared task as failed.
+// Idempotent: no-op if already completed or failed.
+func (n *taskNode) failTop(msg string) {
+	n.mu.Lock()
+	if n.status != TaskNodeStatusRunning && n.status != TaskNodeStatusCreated {
+		n.mu.Unlock()
+		return
+	}
+	n.status = TaskNodeStatusFailed
+	n.error = msg
+	n.mu.Unlock()
+	if n.cancel != nil {
+		n.cancel()
+	}
+	n.delivery.sendSnapshot(nil)
+	if n.manager != nil {
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			n.manager.remove(n.id)
+		}()
+	}
+}
+
+// IsShared returns true if this node uses shared delivery.
+func (n *taskNode) IsShared() bool {
+	return n.delivery.isShared()
+}
+
+// sharedSnapshot returns a SharedTaskState for this node.
+func (n *taskNode) sharedSnapshot() SharedTaskState {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	state := SharedTaskState{
+		ID:      n.id,
+		Title:   n.title,
+		Status:  n.status,
+		Error:   n.error,
+		Current: n.current,
+		Total:   n.total,
+		Meta:    n.meta,
+	}
+	for _, child := range n.children {
+		state.Children = append(state.Children, child.snapshot())
+	}
+	return state
+}
+
+// sharedSnapshotForConn returns a SharedTaskState with IsOwner set.
+func (n *taskNode) sharedSnapshotForConn(connID uint64) SharedTaskState {
+	state := n.sharedSnapshot()
+	state.IsOwner = n.topLevel && (n.ownerConnID == connID)
+	return state
+}
+
+// ensureRoot lazily creates an implicit root node for a request delivery.
+func ensureRoot(d *requestDelivery) *taskNode {
+	if d.root != nil {
+		return d.root
+	}
+	d.root = &taskNode{
+		delivery: d,
+		id:       "root",
+		title:    "",
+		status:   TaskNodeStatusRunning,
+	}
+	return d.root
 }

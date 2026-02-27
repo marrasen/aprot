@@ -19,7 +19,7 @@ type eventOrderHandler struct {
 }
 
 func (h *eventOrderHandler) StartShared(ctx context.Context, title string) error {
-	_, task := StartSharedTask[struct{}](ctx, title)
+	ctx, task := StartTask[struct{}](ctx, title, Shared())
 	if task == nil {
 		return aprot.NewError(aprot.CodeInternalError, "task not created")
 	}

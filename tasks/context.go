@@ -5,19 +5,23 @@ import "context"
 type contextKey int
 
 const (
-	taskTreeKey contextKey = iota
+	deliveryKey    contextKey = iota
 	taskNodeKey
-	sharedContextKey
 	taskSlotKey
 	taskManagerKey
 )
 
-// taskTreeFromContext returns the taskTree from the context.
-func taskTreeFromContext(ctx context.Context) *taskTree {
-	if t, ok := ctx.Value(taskTreeKey).(*taskTree); ok {
-		return t
+// deliveryFromContext returns the taskDelivery from the context.
+func deliveryFromContext(ctx context.Context) taskDelivery {
+	if d, ok := ctx.Value(deliveryKey).(taskDelivery); ok {
+		return d
 	}
 	return nil
+}
+
+// withDelivery returns a context with the given delivery.
+func withDelivery(ctx context.Context, d taskDelivery) context.Context {
+	return context.WithValue(ctx, deliveryKey, d)
 }
 
 // taskNodeFromContext returns the current taskNode from the context.
@@ -28,35 +32,16 @@ func taskNodeFromContext(ctx context.Context) *taskNode {
 	return nil
 }
 
-// withTaskTree returns a context with the given task tree.
-func withTaskTree(ctx context.Context, t *taskTree) context.Context {
-	return context.WithValue(ctx, taskTreeKey, t)
-}
-
 // withTaskNode returns a context with the given task node.
 func withTaskNode(ctx context.Context, n *taskNode) context.Context {
 	return context.WithValue(ctx, taskNodeKey, n)
 }
 
-// sharedCtxFromContext returns the sharedContext from the context.
-func sharedCtxFromContext(ctx context.Context) *sharedContext {
-	if sc, ok := ctx.Value(sharedContextKey).(*sharedContext); ok {
-		return sc
-	}
-	return nil
-}
-
-// withSharedContext returns a context with the given shared context.
-func withSharedContext(ctx context.Context, sc *sharedContext) context.Context {
-	return context.WithValue(ctx, sharedContextKey, sc)
-}
-
 // taskSlot is a mutable slot placed on the context by the task middleware.
-// StartTask and StartSharedTask populate it so the middleware can detect
-// inline tasks after the handler returns and auto-manage their lifecycle.
+// StartTask populates it so the middleware can detect inline tasks after the
+// handler returns and auto-manage their lifecycle.
 type taskSlot struct {
-	sharedCore *sharedTaskCore
-	taskNode   *taskNode
+	node *taskNode // inline task (shared or request-scoped)
 }
 
 // taskSlotFromContext returns the taskSlot from the context.
