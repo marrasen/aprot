@@ -9,7 +9,6 @@ const (
 	connectionKey
 	handlerInfoKey
 	requestKey
-	requestSenderKey
 )
 
 // Progress returns the ProgressReporter from the context.
@@ -68,16 +67,3 @@ func withRequest(ctx context.Context, req *Request) context.Context {
 	return context.WithValue(ctx, requestKey, req)
 }
 
-// RequestSenderFromContext returns the RequestSender from the context.
-// Returns nil if not present.
-func RequestSenderFromContext(ctx context.Context) RequestSender {
-	if rs, ok := ctx.Value(requestSenderKey).(RequestSender); ok {
-		return rs
-	}
-	return nil
-}
-
-// withRequestSender returns a context with the given request sender.
-func withRequestSender(ctx context.Context, rs RequestSender) context.Context {
-	return context.WithValue(ctx, requestSenderKey, rs)
-}

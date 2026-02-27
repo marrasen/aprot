@@ -5,10 +5,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ApiClient, RequestOptions } from './client';
 import { useApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode, RequestTaskTreeEvent, RequestTaskOutputEvent } from './tasks-handler';
 {{- else -}}
 import type { ApiClient, RequestOptions } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode, RequestTaskTreeEvent, RequestTaskOutputEvent } from './tasks-handler';
 {{- end}}
 
 {{end -}}
@@ -17,17 +17,28 @@ export interface TaskRequestOptions extends RequestOptions {
     onOutput?: (output: string, taskId?: string) => void;
 }
 
-export function taskOptions(opts: TaskRequestOptions): RequestOptions {
+export function taskOptions(client: ApiClient, opts: TaskRequestOptions): RequestOptions {
     const { onTaskProgress, onOutput, ...base } = opts;
     if (!onTaskProgress && !onOutput) return opts;
-    const prevOnMessage = base.onMessage;
+
+    const unsubs: (() => void)[] = [];
+    let requestId: string | null = null;
+
+    if (onTaskProgress) {
+        unsubs.push(client.onPush<RequestTaskTreeEvent>('RequestTaskTreeEvent', (e) => {
+            if (e.requestId === requestId) onTaskProgress(e.tasks);
+        }));
+    }
+    if (onOutput) {
+        unsubs.push(client.onPush<RequestTaskOutputEvent>('RequestTaskOutputEvent', (e) => {
+            if (e.requestId === requestId) onOutput(e.output, e.taskId);
+        }));
+    }
+
     return {
         ...base,
-        onMessage: (msg: any) => {
-            if (msg.tasks && onTaskProgress) onTaskProgress(msg.tasks);
-            if (msg.output != null && onOutput) onOutput(msg.output, msg.taskId);
-            prevOnMessage?.(msg);
-        },
+        _onStart: (id: string) => { requestId = id; },
+        _onSettle: () => { unsubs.forEach(fn => fn()); },
     };
 }
 

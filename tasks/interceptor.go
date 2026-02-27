@@ -11,11 +11,11 @@ import (
 func taskMiddleware(tm *taskManager) aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
-			rs := aprot.RequestSenderFromContext(ctx)
-			if rs == nil {
+			conn := aprot.Connection(ctx)
+			if conn == nil {
 				return next(ctx, req)
 			}
-			d := newRequestDelivery(rs)
+			d := newRequestDelivery(conn, req.ID)
 			ctx = withDelivery(ctx, d)
 			slot := &taskSlot{}
 			ctx = withTaskSlot(ctx, slot)

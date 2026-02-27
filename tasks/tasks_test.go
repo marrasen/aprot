@@ -80,7 +80,7 @@ func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 	if !strings.Contains(tasksCode, "import type { ApiClient, RequestOptions } from './client'") {
 		t.Error("missing client imports")
 	}
-	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler'") {
+	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode, RequestTaskTreeEvent, RequestTaskOutputEvent } from './tasks-handler'") {
 		t.Error("missing handler type imports")
 	}
 	if !strings.Contains(tasksCode, "export interface TaskRequestOptions") {
@@ -118,7 +118,7 @@ func TestAppendTaskConvenienceCode_MultiFileReact(t *testing.T) {
 	if !strings.Contains(tasksCode, "import type { ApiClient, RequestOptions } from './client'") {
 		t.Error("missing client type imports")
 	}
-	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler'") {
+	if !strings.Contains(tasksCode, "import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode, RequestTaskTreeEvent, RequestTaskOutputEvent } from './tasks-handler'") {
 		t.Error("missing handler type imports (TaskNode should come from tasks-handler)")
 	}
 	if !strings.Contains(tasksCode, "import { useApiClient } from './client'") {

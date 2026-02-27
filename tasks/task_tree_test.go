@@ -4,69 +4,89 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/go-json-experiment/json"
 	"github.com/marrasen/aprot"
 )
 
-// capturedMessage is a test-only superset of all progress-like fields so that
-// the mock sender can capture any message type (tree snapshot, output, or
-// node-level progress) in a single struct.
+// capturedMessage is a test-only superset of all push event fields so that
+// we can capture any message type (tree snapshot, output, or progress) in a
+// single struct.
 type capturedMessage struct {
-	Type    string      `json:"type"`
-	ID      string      `json:"id"`
-	Tasks   []*TaskNode `json:"tasks,omitempty"`
-	TaskID  string      `json:"taskId,omitempty"`
-	Output  *string     `json:"output,omitempty"`
-	Current *int        `json:"current,omitempty"`
-	Total   *int        `json:"total,omitempty"`
-	Message string      `json:"message,omitempty"`
+	// Push envelope
+	Type  string `json:"type"`
+	Event string `json:"event"`
+
+	// Embedded data — we decode the .data field into these.
+	RequestID string      `json:"requestId,omitempty"`
+	Tasks     []*TaskNode `json:"tasks,omitempty"`
+	TaskID    string      `json:"taskId,omitempty"`
+	Output    *string     `json:"output,omitempty"`
+	Current   *int        `json:"current,omitempty"`
+	Total     *int        `json:"total,omitempty"`
 }
 
-// mockSender is a test double for aprot.RequestSender that records every
-// message passed to SendJSON.
-type mockSender struct {
-	captured []capturedMessage
-	mu       sync.Mutex
-}
-
-func (m *mockSender) SendJSON(v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return err
+// parsePushMessages decodes raw JSON messages from a TestPushConn into
+// capturedMessage structs. It only parses push messages (type=push) and
+// extracts fields from the data envelope.
+func parsePushMessages(raw [][]byte) []capturedMessage {
+	var msgs []capturedMessage
+	for _, b := range raw {
+		// First pass: extract the envelope type and event.
+		var envelope struct {
+			Type  string `json:"type"`
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(b, &envelope); err != nil {
+			continue
+		}
+		if envelope.Type != "push" {
+			continue
+		}
+		// Second pass: extract the data object. We marshal the whole push
+		// message into a map so we can reach the nested data.
+		var full map[string]any
+		if err := json.Unmarshal(b, &full); err != nil {
+			continue
+		}
+		dataRaw, ok := full["data"]
+		if !ok {
+			continue
+		}
+		// Re-encode data and decode into capturedMessage to get typed fields.
+		dataBytes, err := json.Marshal(dataRaw)
+		if err != nil {
+			continue
+		}
+		msg := capturedMessage{Type: envelope.Type, Event: envelope.Event}
+		json.Unmarshal(dataBytes, &msg)
+		msgs = append(msgs, msg)
 	}
-	var msg capturedMessage
-	if err := json.Unmarshal(data, &msg); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.captured = append(m.captured, msg)
-	m.mu.Unlock()
-	return nil
+	return msgs
 }
 
-func (m *mockSender) RequestID() string { return "req-1" }
+// newTestPushConn creates a TestPushConn with the request task push events
+// registered.
+func newTestPushConn() *aprot.TestPushConn {
+	return aprot.NewTestPushConn(1,
+		RequestTaskTreeEvent{},
+		RequestTaskOutputEvent{},
+		RequestTaskProgressEvent{},
+	)
+}
 
-func (m *mockSender) messages() []capturedMessage {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]capturedMessage, len(m.captured))
-	copy(out, m.captured)
-	return out
+// newTestCtx returns a context that has a request delivery backed by a
+// TestPushConn.
+func newTestCtx(tc *aprot.TestPushConn) context.Context {
+	d := newRequestDelivery(tc.Conn, "req-1")
+	return withDelivery(context.Background(), d)
 }
 
 // extractTasks returns the Tasks field from a captured message.
 func extractTasks(t *testing.T, msg capturedMessage) []*TaskNode {
 	t.Helper()
 	return msg.Tasks
-}
-
-// newTestCtx returns a context that has a request delivery backed by sender.
-func newTestCtx(sender aprot.RequestSender) context.Context {
-	d := newRequestDelivery(sender)
-	return withDelivery(context.Background(), d)
 }
 
 // --- SubTask ---
@@ -90,8 +110,8 @@ func TestSubTaskBasic(t *testing.T) {
 // TestSubTaskWithTree verifies that SubTask with a tree emits two progress
 // messages: one with the task in "created" status and one in "completed".
 func TestSubTaskWithTree(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	err := SubTask(ctx, "my task", func(ctx context.Context) error {
 		return nil
@@ -100,14 +120,21 @@ func TestSubTaskWithTree(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msgs := sender.messages()
-	// Expect at least two messages: created then completed.
-	if len(msgs) < 2 {
-		t.Fatalf("expected >= 2 messages, got %d", len(msgs))
+	msgs := parsePushMessages(tc.Messages())
+	// Filter for tree events only.
+	var treeMsgs []capturedMessage
+	for _, m := range msgs {
+		if m.Event == "RequestTaskTreeEvent" {
+			treeMsgs = append(treeMsgs, m)
+		}
+	}
+	// Expect at least two tree messages: created then completed.
+	if len(treeMsgs) < 2 {
+		t.Fatalf("expected >= 2 tree messages, got %d", len(treeMsgs))
 	}
 
 	// First message should show the task as "created".
-	firstNodes := extractTasks(t, msgs[0])
+	firstNodes := extractTasks(t, treeMsgs[0])
 	if len(firstNodes) == 0 {
 		t.Fatal("first message has no task nodes")
 	}
@@ -119,7 +146,7 @@ func TestSubTaskWithTree(t *testing.T) {
 	}
 
 	// Last message should show the task as "completed".
-	lastNodes := extractTasks(t, msgs[len(msgs)-1])
+	lastNodes := extractTasks(t, treeMsgs[len(treeMsgs)-1])
 	if len(lastNodes) == 0 {
 		t.Fatal("last message has no task nodes")
 	}
@@ -131,8 +158,8 @@ func TestSubTaskWithTree(t *testing.T) {
 // TestSubTaskError verifies that when fn returns an error, the task is marked
 // "failed" and the error message is propagated.
 func TestSubTaskError(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	boom := errors.New("something went wrong")
 	err := SubTask(ctx, "failing task", func(ctx context.Context) error {
@@ -142,12 +169,18 @@ func TestSubTaskError(t *testing.T) {
 		t.Fatalf("expected original error returned, got %v", err)
 	}
 
-	msgs := sender.messages()
-	if len(msgs) < 2 {
-		t.Fatalf("expected >= 2 messages, got %d", len(msgs))
+	msgs := parsePushMessages(tc.Messages())
+	var treeMsgs []capturedMessage
+	for _, m := range msgs {
+		if m.Event == "RequestTaskTreeEvent" {
+			treeMsgs = append(treeMsgs, m)
+		}
+	}
+	if len(treeMsgs) < 2 {
+		t.Fatalf("expected >= 2 tree messages, got %d", len(treeMsgs))
 	}
 
-	lastNodes := extractTasks(t, msgs[len(msgs)-1])
+	lastNodes := extractTasks(t, treeMsgs[len(treeMsgs)-1])
 	if len(lastNodes) == 0 {
 		t.Fatal("last message has no task nodes")
 	}
@@ -162,8 +195,8 @@ func TestSubTaskError(t *testing.T) {
 // TestSubTaskNested verifies that nested SubTask calls are reflected as child
 // nodes in the snapshot.
 func TestSubTaskNested(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	err := SubTask(ctx, "parent", func(parentCtx context.Context) error {
 		return SubTask(parentCtx, "child", func(childCtx context.Context) error {
@@ -174,9 +207,12 @@ func TestSubTaskNested(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Find a message that has both parent and child nodes.
+	// Find a tree message that has both parent and child nodes.
 	var foundNested bool
-	for _, msg := range sender.messages() {
+	for _, msg := range parsePushMessages(tc.Messages()) {
+		if msg.Event != "RequestTaskTreeEvent" {
+			continue
+		}
 		nodes := extractTasks(t, msg)
 		if len(nodes) == 0 {
 			continue
@@ -196,11 +232,11 @@ func TestSubTaskNested(t *testing.T) {
 
 // --- Output ---
 
-// TestOutput verifies that Output sends a progress message with Output set and
+// TestOutput verifies that Output sends a push event with output set and
 // the correct TaskID when inside a task node context.
 func TestOutput(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	// Run inside a SubTask so a node is on the context.
 	_ = SubTask(ctx, "the task", func(innerCtx context.Context) error {
@@ -209,8 +245,8 @@ func TestOutput(t *testing.T) {
 	})
 
 	var found bool
-	for _, msg := range sender.messages() {
-		if msg.Output != nil && *msg.Output == "hello world" {
+	for _, msg := range parsePushMessages(tc.Messages()) {
+		if msg.Event == "RequestTaskOutputEvent" && msg.Output != nil && *msg.Output == "hello world" {
 			found = true
 			if msg.TaskID == "" {
 				t.Error("expected TaskID to be set on output message")
@@ -235,8 +271,8 @@ func TestOutputWithoutTree(t *testing.T) {
 // TestOutputWriter verifies that writes are forwarded as output messages and
 // that Close marks the task node completed.
 func TestOutputWriter(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	w := OutputWriter(ctx, "log writer")
 
@@ -254,8 +290,8 @@ func TestOutputWriter(t *testing.T) {
 
 	// Verify an output message was sent.
 	var outputFound bool
-	for _, msg := range sender.messages() {
-		if msg.Output != nil && *msg.Output == "line one\n" {
+	for _, msg := range parsePushMessages(tc.Messages()) {
+		if msg.Event == "RequestTaskOutputEvent" && msg.Output != nil && *msg.Output == "line one\n" {
 			outputFound = true
 		}
 	}
@@ -296,8 +332,8 @@ func TestOutputWriterWithoutTree(t *testing.T) {
 // TestWriterProgress verifies that closing the writer marks the task completed
 // and that the final snapshot reflects the total bytes as current progress.
 func TestWriterProgress(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	const content = "hello bytes"
 	const size = len(content)
@@ -355,8 +391,8 @@ func TestWriterProgressWithoutTree(t *testing.T) {
 // non-nil error fails the task with the error message.
 func TestTaskErr(t *testing.T) {
 	t.Run("nil error completes task", func(t *testing.T) {
-		sender := &mockSender{}
-		ctx := newTestCtx(sender)
+		tc := newTestPushConn()
+		ctx := newTestCtx(tc)
 
 		_, task := StartTask[any](ctx, "op")
 		if task == nil {
@@ -375,8 +411,8 @@ func TestTaskErr(t *testing.T) {
 	})
 
 	t.Run("non-nil error fails task", func(t *testing.T) {
-		sender := &mockSender{}
-		ctx := newTestCtx(sender)
+		tc := newTestPushConn()
+		ctx := newTestCtx(tc)
 
 		_, task := StartTask[any](ctx, "op")
 		if task == nil {
@@ -403,18 +439,18 @@ func TestTaskErr(t *testing.T) {
 // TestTaskProgressBasic verifies that TaskProgress sets Current and Total on
 // the node and sends a targeted progress message.
 func TestTaskProgressBasic(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	_ = SubTask(ctx, "download", func(innerCtx context.Context) error {
 		TaskProgress(innerCtx, 3, 10)
 		return nil
 	})
 
-	// Confirm a message with Current=3, Total=10 was sent.
+	// Confirm a push message with Current=3, Total=10 was sent.
 	var found bool
-	for _, msg := range sender.messages() {
-		if msg.Current != nil && msg.Total != nil && *msg.Current == 3 && *msg.Total == 10 {
+	for _, msg := range parsePushMessages(tc.Messages()) {
+		if msg.Event == "RequestTaskProgressEvent" && msg.Current != nil && msg.Total != nil && *msg.Current == 3 && *msg.Total == 10 {
 			found = true
 			if msg.TaskID == "" {
 				t.Error("expected TaskID to be set on progress message")
@@ -429,8 +465,8 @@ func TestTaskProgressBasic(t *testing.T) {
 // TestStepTaskProgressBasic verifies that StepTaskProgress increments the
 // current progress counter and sends an update.
 func TestStepTaskProgressBasic(t *testing.T) {
-	sender := &mockSender{}
-	ctx := newTestCtx(sender)
+	tc := newTestPushConn()
+	ctx := newTestCtx(tc)
 
 	_ = SubTask(ctx, "work", func(innerCtx context.Context) error {
 		TaskProgress(innerCtx, 0, 5)
@@ -441,8 +477,8 @@ func TestStepTaskProgressBasic(t *testing.T) {
 
 	// After two steps the current value should be 3.
 	var maxCurrent int
-	for _, msg := range sender.messages() {
-		if msg.Current != nil && *msg.Current > maxCurrent {
+	for _, msg := range parsePushMessages(tc.Messages()) {
+		if msg.Event == "RequestTaskProgressEvent" && msg.Current != nil && *msg.Current > maxCurrent {
 			maxCurrent = *msg.Current
 		}
 	}
