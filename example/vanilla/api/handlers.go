@@ -164,7 +164,7 @@ func (h *PublicHandlers) SendNotification(ctx context.Context, message string, l
 	evt := &SystemNotificationEvent{Message: message, Level: level}
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push(evt)
+		_ = conn.Push(evt)
 	}
 	return evt, nil
 }
@@ -208,7 +208,7 @@ func (h *PublicHandlers) Login(ctx context.Context, username string, password st
 
 	// Generate token
 	tokenBytes := make([]byte, 32)
-	rand.Read(tokenBytes)
+	_, _ = rand.Read(tokenBytes)
 	token := hex.EncodeToString(tokenBytes)
 
 	// Store token

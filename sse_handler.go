@@ -67,7 +67,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Run connect hooks
 	if err := h.server.runConnectHooks(r.Context(), conn); err != nil {
 		code := CodeConnectionRejected
-		message := "connection rejected"
+		var message string
 		if perr, ok := err.(*ProtocolError); ok {
 			code = perr.Code
 			message = perr.Message
@@ -209,6 +209,6 @@ func (h *sseHandler) handleCancel(w http.ResponseWriter, r *http.Request) {
 
 func generateConnectionID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

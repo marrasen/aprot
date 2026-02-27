@@ -143,7 +143,7 @@ func (h *Handlers) SendNotification(ctx context.Context, message string, level s
 	evt := &SystemNotificationEvent{Message: message, Level: level}
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		conn.Push(evt)
+		_ = conn.Push(evt)
 	}
 	return evt, nil
 }

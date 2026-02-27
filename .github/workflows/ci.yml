@@ -19,6 +19,39 @@ jobs:
       - name: Run Go tests
         run: go test -race -v ./...
 
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Lint root module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10
+          working-directory: .
+
+      - name: Lint example/vanilla module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10
+          working-directory: example/vanilla
+
+      - name: Lint example/react module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10
+          working-directory: example/react
+
+      - name: Lint e2e module
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.10
+          working-directory: e2e
+
   typescript-compile:
     runs-on: ubuntu-latest
     steps:
@@ -70,6 +103,9 @@ jobs:
 
       - name: Install E2E deps
         run: cd e2e && npm ci
+
+      - name: Lint E2E tests
+        run: cd e2e && npm run lint
 
       - name: Run E2E tests
         run: cd e2e && npm test

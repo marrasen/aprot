@@ -210,7 +210,7 @@ func (s *Server) PushToUser(userID string, data any) {
 
 	if conns, ok := s.userConns[userID]; ok {
 		for conn := range conns {
-			conn.push(event, data)
+			_ = conn.push(event, data)
 		}
 	}
 }
@@ -303,7 +303,7 @@ func (s *Server) Broadcast(data any) {
 	defer s.mu.RUnlock()
 
 	for conn := range s.conns {
-		conn.push(event, data)
+		_ = conn.push(event, data)
 	}
 }
 
@@ -424,7 +424,7 @@ func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
 		Message: message,
 	}
 	data, _ := json.Marshal(msg)
-	ws.WriteMessage(websocket.TextMessage, data)
+	_ = ws.WriteMessage(websocket.TextMessage, data)
 }
 
 // sendConfigWS sends the server configuration directly to a WebSocket connection.
@@ -439,5 +439,5 @@ func sendConfigWS(ws *websocket.Conn, opts ServerOptions) {
 		HeartbeatTimeout:     opts.HeartbeatTimeout,
 	}
 	data, _ := json.Marshal(msg)
-	ws.WriteMessage(websocket.TextMessage, data)
+	_ = ws.WriteMessage(websocket.TextMessage, data)
 }

@@ -35,7 +35,7 @@ func (t *wsTransport) Close() error {
 
 func (t *wsTransport) CloseGracefully() error {
 	// Send a WebSocket close frame to notify the client
-	t.ws.WriteControl(
+	_ = t.ws.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
 		time.Now().Add(5*time.Second),
@@ -69,10 +69,4 @@ func (t *wsTransport) writePump() {
 			return
 		}
 	}
-}
-
-// writeMessage writes a message directly to the WebSocket, bypassing the send channel.
-// Used for sending messages before the write pump is started.
-func (t *wsTransport) writeMessage(data []byte) error {
-	return t.ws.WriteMessage(websocket.TextMessage, data)
 }
