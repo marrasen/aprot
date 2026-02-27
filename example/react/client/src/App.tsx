@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
-import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, TaskNodeStatus } from './api/client'
-import type { TaskNodeStatusType } from './api/client'
+import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection } from './api/client'
+import { TaskNodeStatus } from './api/tasks-handler'
+import type { TaskNodeStatusType } from './api/tasks-handler'
 import {
   useListUsers,
   useCreateUserMutation,

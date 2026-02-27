@@ -182,11 +182,9 @@ type errorCodeData struct {
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
 
-	// Phase 1: collect base types (protocol types like TaskNode)
+	// Phase 1: collect base types
 	g.types = make(map[reflect.Type]string)
 	g.collectedEnums = make(map[reflect.Type]*EnumInfo)
-	g.collectType(reflect.TypeOf(TaskNode{}))
-	g.collectTaskNodeStatusEnum()
 
 	// Build base interfaces and enums
 	baseData := templateData{
@@ -312,10 +310,6 @@ func (g *Generator) Generate() (map[string]string, error) {
 // GenerateTo writes TypeScript client code to a single writer.
 // This combines all handler groups into one file (legacy behavior).
 func (g *Generator) GenerateTo(w io.Writer) error {
-	// Collect TaskNode (protocol type) and its enum first
-	g.collectType(reflect.TypeOf(TaskNode{}))
-	g.collectTaskNodeStatusEnum()
-
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
@@ -616,26 +610,6 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 	}
 	sort.Strings(result)
 	return result
-}
-
-// collectTaskNodeStatusEnum adds the TaskNodeStatus enum to g.collectedEnums.
-// TaskNodeStatus is a protocol enum (used by TaskNode.Status) and must always
-// be available in generated output, regardless of whether the task system is enabled.
-func (g *Generator) collectTaskNodeStatusEnum() {
-	vals := TaskNodeStatusValues()
-	t := reflect.TypeOf(vals[0])
-	info := &EnumInfo{
-		Name:     "TaskNodeStatus",
-		Type:     t,
-		IsString: true,
-	}
-	for _, v := range vals {
-		info.Values = append(info.Values, EnumValueInfo{
-			Name:  capitalize(string(v)),
-			Value: string(v),
-		})
-	}
-	g.collectedEnums[t] = info
 }
 
 // collectInterfaceFields collects fields from a struct, flattening anonymous (embedded)

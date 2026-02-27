@@ -148,8 +148,7 @@ export class ApiClient {
         resolve: (value: unknown) => void;
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
-        onTaskProgress?: (tasks: TaskNode[]) => void;
-        onOutput?: (output: string) => void;
+        onMessage?: (msg: Record<string, unknown>) => void;
     }>();
     private buffer: Array<{
         method: string;
@@ -339,15 +338,10 @@ export class ApiClient {
             case 'progress': {
                 const p = this.pending.get(msg.id);
                 if (p) {
-                    if (msg.tasks && p.onTaskProgress) {
-                        p.onTaskProgress(msg.tasks);
-                    }
-                    if (msg.output && p.onOutput) {
-                        p.onOutput(msg.output);
-                    }
                     if (p.onProgress && (msg.current || msg.total || msg.message)) {
                         p.onProgress(msg.current, msg.total, msg.message);
                     }
+                    p.onMessage?.(msg);
                 }
                 break;
             }
@@ -399,8 +393,7 @@ export class ApiClient {
         this.pending.set(id, {
             resolve, reject,
             onProgress: options?.onProgress,
-            onTaskProgress: options?.onTaskProgress,
-            onOutput: options?.onOutput,
+            onMessage: options?.onMessage,
         });
         if (options?.signal) {
             if (options.signal.aborted) {

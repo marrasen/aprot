@@ -1,27 +1,36 @@
 package tasks
 
-import "github.com/marrasen/aprot"
+// TaskNodeStatus represents the current state of a task node.
+type TaskNodeStatus string
 
-// TaskNodeStatus is an alias for aprot.TaskNodeStatus.
-// The type lives in the root package because the generator and base client
-// template reference it unconditionally.
-type TaskNodeStatus = aprot.TaskNodeStatus
-
-// Re-export status constants so callers can use tasks.TaskNodeStatusCreated, etc.
 const (
-	TaskNodeStatusCreated   = aprot.TaskNodeStatusCreated
-	TaskNodeStatusRunning   = aprot.TaskNodeStatusRunning
-	TaskNodeStatusCompleted = aprot.TaskNodeStatusCompleted
-	TaskNodeStatusFailed    = aprot.TaskNodeStatusFailed
+	TaskNodeStatusCreated   TaskNodeStatus = "created"
+	TaskNodeStatusRunning   TaskNodeStatus = "running"
+	TaskNodeStatusCompleted TaskNodeStatus = "completed"
+	TaskNodeStatusFailed    TaskNodeStatus = "failed"
 )
 
-// TaskNodeStatusValues re-exports aprot.TaskNodeStatusValues.
+// TaskNodeStatusValues returns all possible TaskNodeStatus values.
 func TaskNodeStatusValues() []TaskNodeStatus {
-	return aprot.TaskNodeStatusValues()
+	return []TaskNodeStatus{
+		TaskNodeStatusCreated,
+		TaskNodeStatusRunning,
+		TaskNodeStatusCompleted,
+		TaskNodeStatusFailed,
+	}
 }
 
-// TaskNode is an alias for aprot.TaskNode.
-type TaskNode = aprot.TaskNode
+// TaskNode is the JSON-serializable snapshot of a task sent to the client.
+type TaskNode struct {
+	ID       string         `json:"id"`
+	Title    string         `json:"title"`
+	Status   TaskNodeStatus `json:"status"`
+	Error    string         `json:"error,omitempty"`
+	Current  int            `json:"current,omitempty"`
+	Total    int            `json:"total,omitempty"`
+	Meta     any            `json:"meta,omitempty"`
+	Children []*TaskNode    `json:"children,omitempty"`
+}
 
 // TaskStateEvent is the push event broadcast to all clients when shared tasks change.
 type TaskStateEvent struct {

@@ -3,12 +3,12 @@
 
 {{if .IsReact -}}
 import { useState, useEffect, useCallback } from 'react';
-import type { ApiClient, RequestOptions, TaskNode } from './client';
+import type { ApiClient, RequestOptions } from './client';
 import { useApiClient } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler';
 {{- else -}}
-import type { ApiClient, RequestOptions, TaskNode } from './client';
-import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent } from './tasks-handler';
+import type { ApiClient, RequestOptions } from './client';
+import type { SharedTaskState, TaskStateEvent, TaskUpdateEvent, TaskNode } from './tasks-handler';
 {{- end}}
 
 {{end -}}

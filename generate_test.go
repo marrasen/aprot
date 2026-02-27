@@ -1164,7 +1164,7 @@ func TestGenerateNoRequestMultipleFiles(t *testing.T) {
 	t.Logf("Generated TypeScript (no-request, multi-file):\n%s", handlerContent)
 }
 
-func TestGenerateTaskNodeInterface(t *testing.T) {
+func TestGenerateWithoutTasksHasNoTaskTypes(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})
 
@@ -1178,41 +1178,24 @@ func TestGenerateTaskNodeInterface(t *testing.T) {
 
 	output := buf.String()
 
-	// TaskNodeStatus enum should always be present
-	if !strings.Contains(output, "export const TaskNodeStatus = {") {
-		t.Error("Missing TaskNodeStatus enum const")
+	// Without Enable(), no task types should be present
+	mustNotContain := []struct {
+		label string
+		want  string
+	}{
+		{"TaskNodeStatus enum", "export const TaskNodeStatus = {"},
+		{"TaskNodeStatusType type", "export type TaskNodeStatusType"},
+		{"TaskNode interface", "export interface TaskNode"},
+		{"SharedTaskState interface", "export interface SharedTaskState"},
+		{"TaskRef interface", "export interface TaskRef"},
+		{"cancelSharedTask function", "cancelSharedTask"},
+		{"onTaskProgress field", "onTaskProgress"},
+		{"onOutput field", "onOutput"},
 	}
-	if !strings.Contains(output, "export type TaskNodeStatusType") {
-		t.Error("Missing TaskNodeStatusType type")
-	}
-
-	// TaskNode should always be present (used by SubTask progress)
-	if !strings.Contains(output, "export interface TaskNode") {
-		t.Error("Missing TaskNode interface")
-	}
-	// TaskNode.status should use the enum type, not a hardcoded union
-	if !strings.Contains(output, "status: TaskNodeStatusType") {
-		t.Error("TaskNode.status should use TaskNodeStatusType")
-	}
-	if strings.Contains(output, "'running' | 'completed' | 'failed'") {
-		t.Error("Should not have hardcoded status union — use TaskNodeStatusType instead")
-	}
-	if !strings.Contains(output, "onTaskProgress?: (tasks: TaskNode[]) => void") {
-		t.Error("Missing onTaskProgress in RequestOptions")
-	}
-	if !strings.Contains(output, "onOutput?: (output: string) => void") {
-		t.Error("Missing onOutput in RequestOptions")
-	}
-
-	// Without EnableTasks(), shared task types should NOT be present
-	if strings.Contains(output, "export interface SharedTaskState") {
-		t.Error("SharedTaskState should not be present without EnableTasks()")
-	}
-	if strings.Contains(output, "export interface TaskRef") {
-		t.Error("TaskRef should not be present without EnableTasks()")
-	}
-	if strings.Contains(output, "cancelSharedTask") {
-		t.Error("cancelSharedTask should not be present without EnableTasks()")
+	for _, tc := range mustNotContain {
+		if strings.Contains(output, tc.want) {
+			t.Errorf("%s should not be present without tasks.Enable(): found %q", tc.label, tc.want)
+		}
 	}
 }
 
