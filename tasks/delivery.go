@@ -36,16 +36,16 @@ func (d *requestDelivery) sendSnapshot(_ *taskNode) {
 	}
 	nodes := d.root.snapshotChildren()
 	if nodes != nil {
-		d.conn.Push(RequestTaskTreeEvent{RequestID: d.requestID, Tasks: nodes})
+		_ = d.conn.Push(RequestTaskTreeEvent{RequestID: d.requestID, Tasks: nodes})
 	}
 }
 
 func (d *requestDelivery) sendOutput(taskID, msg string) {
-	d.conn.Push(RequestTaskOutputEvent{RequestID: d.requestID, TaskID: taskID, Output: msg})
+	_ = d.conn.Push(RequestTaskOutputEvent{RequestID: d.requestID, TaskID: taskID, Output: msg})
 }
 
 func (d *requestDelivery) sendProgress(taskID string, current, total int) {
-	d.conn.Push(RequestTaskProgressEvent{RequestID: d.requestID, TaskID: taskID, Current: current, Total: total})
+	_ = d.conn.Push(RequestTaskProgressEvent{RequestID: d.requestID, TaskID: taskID, Current: current, Total: total})
 }
 
 func (d *requestDelivery) onComplete(node *taskNode) {

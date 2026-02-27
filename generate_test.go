@@ -639,8 +639,7 @@ func TestVoidHandlerCall(t *testing.T) {
 func TestVoidHandlerCallError(t *testing.T) {
 	registry := NewRegistry()
 
-	type FailHandlers struct{}
-	// Can't add method to FailHandlers in test, use VoidHandlers and test via the existing handler
+	// Can't add method to a test-local type, use VoidHandlers and test via the existing handler
 	registry.Register(&VoidHandlers{})
 
 	info, _ := registry.Get("VoidHandlers.DeleteItem")

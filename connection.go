@@ -193,7 +193,7 @@ func (c *Conn) sendResponse(id string, result any) {
 		ID:     id,
 		Result: result,
 	}
-	c.sendJSON(msg)
+	_ = c.sendJSON(msg)
 }
 
 func (c *Conn) sendError(id string, code int, message string) {
@@ -203,7 +203,7 @@ func (c *Conn) sendError(id string, code int, message string) {
 		Code:    code,
 		Message: message,
 	}
-	c.sendJSON(msg)
+	_ = c.sendJSON(msg)
 }
 
 func (c *Conn) sendProgress(id string, current, total int, message string) {
@@ -214,14 +214,14 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 		Total:   &total,
 		Message: message,
 	}
-	c.sendJSON(msg)
+	_ = c.sendJSON(msg)
 }
 
 func (c *Conn) sendPong() {
 	msg := PongMessage{
 		Type: TypePong,
 	}
-	c.sendJSON(msg)
+	_ = c.sendJSON(msg)
 }
 
 func (c *Conn) registerRequest(id string, cancel context.CancelFunc) {
@@ -348,5 +348,5 @@ func (c *Conn) closeGracefully() {
 		cancel()
 	}
 	c.mu.Unlock()
-	c.transport.CloseGracefully()
+	_ = c.transport.CloseGracefully()
 }

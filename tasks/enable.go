@@ -33,7 +33,7 @@ func Enable(r *aprot.Registry) {
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {
-				conn.Push(TaskStateEvent{Tasks: states})
+				_ = conn.Push(TaskStateEvent{Tasks: states})
 			}
 			return nil
 		})
@@ -61,7 +61,7 @@ func EnableWithMeta[M any](r *aprot.Registry) {
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())
 			if len(states) > 0 {
-				conn.Push(TaskStateEvent{Tasks: states})
+				_ = conn.Push(TaskStateEvent{Tasks: states})
 			}
 			return nil
 		})

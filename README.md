@@ -1322,13 +1322,27 @@ cd .. && npm install && npm test
 
 Tests cover: request/response, error handling, progress reporting, request cancellation, push events, broadcast, authentication middleware, and enum types.
 
+### Linting
+
+```bash
+# Go (requires golangci-lint v2)
+golangci-lint run ./...
+cd example/vanilla && golangci-lint run ./...
+cd example/react && golangci-lint run ./...
+cd e2e && golangci-lint run ./...
+
+# TypeScript (E2E tests)
+cd e2e && npm run lint
+```
+
 ### CI
 
-GitHub Actions runs three jobs on every push/PR to `master`:
+GitHub Actions runs four jobs on every push/PR to `master`:
 
 1. **go-tests** - Go unit and integration tests with race detection
-2. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
-3. **e2e-tests** - Runs the full E2E suite against a live server
+2. **go-lint** - Runs golangci-lint across all Go modules
+3. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
+4. **e2e-tests** - Runs the full E2E suite (with ESLint) against a live server
 
 ## License
 

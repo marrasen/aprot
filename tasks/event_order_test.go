@@ -67,13 +67,6 @@ func connectEventOrderWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
 	return ws
 }
 
-// rawPush is a minimal struct to parse just the type and event fields of any
-// message off the wire.
-type rawPush struct {
-	Type  string `json:"type"`
-	Event string `json:"event"`
-}
-
 // taskStatePush is the expected shape of a TaskStateEvent push message's data.
 type taskStatePush struct {
 	Tasks []SharedTaskState `json:"tasks"`
