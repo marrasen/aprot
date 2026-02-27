@@ -286,7 +286,6 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	progress := newProgressReporter(c, msg.ID)
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
-	ctx = withRequestSender(ctx, progress)
 
 	// Add handler info to context for middleware
 	ctx = withHandlerInfo(ctx, info)

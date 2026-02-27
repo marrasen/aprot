@@ -21,6 +21,9 @@ func Enable(r *aprot.Registry) {
 	r.RegisterEnumFor(handler, TaskNodeStatusValues())
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskTreeEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskOutputEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskProgressEvent{})
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
 		appendTaskConvenienceCode(results, mode, nil)
 	})
@@ -46,6 +49,9 @@ func EnableWithMeta[M any](r *aprot.Registry) {
 	r.RegisterEnumFor(handler, TaskNodeStatusValues())
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskTreeEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskOutputEvent{})
+	r.RegisterPushEventFor(handler, RequestTaskProgressEvent{})
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
 		appendTaskConvenienceCode(results, mode, metaType)
 	})

@@ -674,8 +674,8 @@ func TestSharedSubTaskStandalone(t *testing.T) {
 // request-scoped task tree when one is available.
 func TestSharedSubTaskWithoutConnection(t *testing.T) {
 	// Supply a request delivery so the SubTask fallback has something to work with.
-	sender := &mockSender{}
-	d := newRequestDelivery(sender)
+	tc := newTestPushConn()
+	d := newRequestDelivery(tc.Conn, "req-1")
 	ctx := withDelivery(context.Background(), d)
 
 	var innerCtx context.Context
@@ -977,8 +977,8 @@ func TestStartSharedTaskMiddlewareFinalize(t *testing.T) {
 	defer reqCancel()
 
 	// Build the context the same way connection.go + middleware do.
-	ctx := aprot.WithTestConnection(reqCtx, 1)
-	ctx = aprot.WithTestRequestSender(ctx, &mockSender{})
+	tc := newTestPushConn()
+	ctx := tc.WithContext(reqCtx)
 
 	mw := taskMiddleware(tm)
 	handler := mw(func(ctx context.Context, req *aprot.Request) (any, error) {
@@ -1032,8 +1032,8 @@ func TestSharedSubTaskMiddlewareFinalize(t *testing.T) {
 	reqCtx, reqCancel := context.WithCancel(context.Background())
 	defer reqCancel()
 
-	ctx := aprot.WithTestConnection(reqCtx, 1)
-	ctx = aprot.WithTestRequestSender(ctx, &mockSender{})
+	tc := newTestPushConn()
+	ctx := tc.WithContext(reqCtx)
 
 	mw := taskMiddleware(tm)
 	handler := mw(func(ctx context.Context, req *aprot.Request) (any, error) {

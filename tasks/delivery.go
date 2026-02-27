@@ -20,13 +20,14 @@ type taskDelivery interface {
 
 // requestDelivery sends task updates to a single requesting client.
 type requestDelivery struct {
-	sender aprot.RequestSender
-	nextID atomic.Int64
-	root   *taskNode // lazily created implicit root
+	conn      *aprot.Conn
+	requestID string
+	nextID    atomic.Int64
+	root      *taskNode // lazily created implicit root
 }
 
-func newRequestDelivery(sender aprot.RequestSender) *requestDelivery {
-	return &requestDelivery{sender: sender}
+func newRequestDelivery(conn *aprot.Conn, requestID string) *requestDelivery {
+	return &requestDelivery{conn: conn, requestID: requestID}
 }
 
 func (d *requestDelivery) sendSnapshot(_ *taskNode) {
@@ -35,31 +36,16 @@ func (d *requestDelivery) sendSnapshot(_ *taskNode) {
 	}
 	nodes := d.root.snapshotChildren()
 	if nodes != nil {
-		d.sender.SendJSON(taskTreeMessage{
-			Type:  aprot.TypeProgress,
-			ID:    d.sender.RequestID(),
-			Tasks: nodes,
-		})
+		d.conn.Push(RequestTaskTreeEvent{RequestID: d.requestID, Tasks: nodes})
 	}
 }
 
 func (d *requestDelivery) sendOutput(taskID, msg string) {
-	d.sender.SendJSON(taskNodeOutputMessage{
-		Type:   aprot.TypeProgress,
-		ID:     d.sender.RequestID(),
-		TaskID: taskID,
-		Output: msg,
-	})
+	d.conn.Push(RequestTaskOutputEvent{RequestID: d.requestID, TaskID: taskID, Output: msg})
 }
 
 func (d *requestDelivery) sendProgress(taskID string, current, total int) {
-	d.sender.SendJSON(taskNodeProgressMessage{
-		Type:    aprot.TypeProgress,
-		ID:      d.sender.RequestID(),
-		TaskID:  taskID,
-		Current: current,
-		Total:   total,
-	})
+	d.conn.Push(RequestTaskProgressEvent{RequestID: d.requestID, TaskID: taskID, Current: current, Total: total})
 }
 
 func (d *requestDelivery) onComplete(node *taskNode) {

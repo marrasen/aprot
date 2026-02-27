@@ -149,6 +149,7 @@ export class ApiClient {
         reject: (error: Error) => void;
         onProgress?: (current: number, total: number, message: string) => void;
         onMessage?: (msg: Record<string, unknown>) => void;
+        onSettle?: () => void;
     }>();
     private buffer: Array<{
         method: string;
@@ -204,6 +205,7 @@ export class ApiClient {
         this.stopHeartbeat();
 
         for (const [, p] of this.pending) {
+            p.onSettle?.();
             p.reject(new Error('Connection closed'));
         }
         this.pending.clear();
@@ -323,6 +325,7 @@ export class ApiClient {
                 const p = this.pending.get(msg.id);
                 if (p) {
                     this.pending.delete(msg.id);
+                    p.onSettle?.();
                     p.resolve(msg.result);
                 }
                 break;
@@ -331,6 +334,7 @@ export class ApiClient {
                 const p = this.pending.get(msg.id);
                 if (p) {
                     this.pending.delete(msg.id);
+                    p.onSettle?.();
                     p.reject(new ApiError(msg.code, msg.message));
                 }
                 break;
@@ -390,20 +394,28 @@ export class ApiClient {
     private sendRequest(method: string, params: unknown[], options: RequestOptions | undefined,
         resolve: (value: unknown) => void, reject: (error: Error) => void): void {
         const id = String(++this.requestId);
+        const onSettle = options?._onSettle;
         this.pending.set(id, {
             resolve, reject,
             onProgress: options?.onProgress,
             onMessage: options?.onMessage,
+            onSettle,
         });
+        options?._onStart?.(id);
         if (options?.signal) {
             if (options.signal.aborted) {
                 this.pending.delete(id);
+                onSettle?.();
                 reject(new Error('Request aborted'));
                 return;
             }
             options.signal.addEventListener('abort', () => {
+                const p = this.pending.get(id);
+                if (p) {
+                    this.pending.delete(id);
+                    p.onSettle?.();
+                }
                 this.transport.send({ type: 'cancel', id });
-                this.pending.delete(id);
                 reject(new Error('Request aborted'));
             }, { once: true });
         }

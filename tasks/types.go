@@ -60,6 +60,30 @@ type SharedTaskState struct {
 	IsOwner  bool           `json:"isOwner"`
 }
 
+// RequestTaskTreeEvent is the push event sent to the requesting client with
+// a full task tree snapshot for a request-scoped task.
+type RequestTaskTreeEvent struct {
+	RequestID string      `json:"requestId"`
+	Tasks     []*TaskNode `json:"tasks"`
+}
+
+// RequestTaskOutputEvent is the push event sent to the requesting client with
+// text output for a specific task node within a request-scoped task.
+type RequestTaskOutputEvent struct {
+	RequestID string `json:"requestId"`
+	TaskID    string `json:"taskId"`
+	Output    string `json:"output"`
+}
+
+// RequestTaskProgressEvent is the push event sent to the requesting client with
+// progress for a specific task node within a request-scoped task.
+type RequestTaskProgressEvent struct {
+	RequestID string `json:"requestId"`
+	TaskID    string `json:"taskId"`
+	Current   int    `json:"current"`
+	Total     int    `json:"total"`
+}
+
 // TaskRef is the reference returned to the client from a handler
 // when a shared task is created.
 type TaskRef struct {
