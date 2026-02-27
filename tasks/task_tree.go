@@ -179,12 +179,31 @@ func (n *taskNode) failTop(msg string) {
 	if n.cancel != nil {
 		n.cancel()
 	}
+	n.failChildren(msg)
 	n.delivery.sendSnapshot(nil)
 	if n.manager != nil {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			n.manager.remove(n.id)
 		}()
+	}
+}
+
+// failChildren recursively marks all running/created children as failed.
+func (n *taskNode) failChildren(msg string) {
+	n.mu.Lock()
+	children := make([]*taskNode, len(n.children))
+	copy(children, n.children)
+	n.mu.Unlock()
+
+	for _, child := range children {
+		child.mu.Lock()
+		if child.status == TaskNodeStatusRunning || child.status == TaskNodeStatusCreated {
+			child.status = TaskNodeStatusFailed
+			child.error = msg
+		}
+		child.mu.Unlock()
+		child.failChildren(msg)
 	}
 }
 
