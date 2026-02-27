@@ -164,7 +164,9 @@ func (h *PublicHandlers) SendNotification(ctx context.Context, message string, l
 	evt := &SystemNotificationEvent{Message: message, Level: level}
 	conn := aprot.Connection(ctx)
 	if conn != nil {
-		_ = conn.Push(evt)
+		if err := conn.Push(evt); err != nil {
+			return nil, err
+		}
 	}
 	return evt, nil
 }
