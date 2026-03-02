@@ -3,6 +3,7 @@ package tasks
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -311,5 +312,57 @@ func TestEnableRegistersEnum(t *testing.T) {
 		if !found {
 			t.Errorf("missing expected enum value: %q", status)
 		}
+	}
+}
+
+// CustomID is a type with a custom JSON marshaler that produces a string.
+type CustomID [16]byte
+
+func (c CustomID) MarshalJSON() ([]byte, error) {
+	return json.Marshal("custom-id-value")
+}
+
+// MetaWithCustomMarshaler uses a custom marshaler field in the task meta type.
+type MetaWithCustomMarshaler struct {
+	RequestID CustomID `json:"requestId"`
+	Label     string   `json:"label"`
+}
+
+func TestGenerateWithMetaCustomMarshal(t *testing.T) {
+	registry := aprot.NewRegistry()
+	registry.Register(&genTestHandler{})
+	EnableWithMeta[MetaWithCustomMarshaler](registry)
+
+	gen := aprot.NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// Extract just the MetaWithCustomMarshaler interface from the output
+	metaStart := strings.Index(out, "interface MetaWithCustomMarshaler")
+	if metaStart == -1 {
+		t.Fatal("MetaWithCustomMarshaler interface not found in output")
+	}
+	metaBlock := out[metaStart:]
+	// Find the closing brace of the interface
+	braceEnd := strings.Index(metaBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for MetaWithCustomMarshaler")
+	}
+	metaBlock = metaBlock[:braceEnd+1]
+
+	// The requestId field should be typed as "string", not as "any"
+	if !strings.Contains(metaBlock, "requestId: string") {
+		t.Errorf("expected MetaWithCustomMarshaler.requestId to be 'string' (from CustomID marshaler), got:\n%s", metaBlock)
+	}
+	// CustomID should not generate its own interface
+	if strings.Contains(out, "interface CustomID") {
+		t.Error("CustomID should not generate an interface — it marshals to string")
+	}
+	// label field should still be string
+	if !strings.Contains(metaBlock, "label: string") {
+		t.Error("expected MetaWithCustomMarshaler.label to be 'string'")
 	}
 }

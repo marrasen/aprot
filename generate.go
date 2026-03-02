@@ -2,6 +2,8 @@ package aprot
 
 import (
 	"embed"
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -13,11 +15,73 @@ import (
 	"sort"
 	"strings"
 	"text/template"
-	"time"
 	"unicode"
 )
 
-var timeType = reflect.TypeOf(time.Time{})
+var (
+	jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	textMarshalerType = reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+)
+
+// MarshalTSType is the result of inferring a TypeScript type from a Go type's
+// JSON marshaling behavior.
+type MarshalTSType struct {
+	TSType string // "string", "number", or "boolean"
+}
+
+// InferTypeFromMarshal checks whether t implements json.Marshaler or
+// encoding.TextMarshaler and, if so, marshals a zero value to determine the
+// TypeScript primitive type.  Returns nil when the type does not implement
+// either interface, when marshaling produces a non-primitive (object/array),
+// or when the type is an interface.
+func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
+	if t.Kind() == reflect.Interface {
+		return nil
+	}
+
+	// Check for TextMarshaler-only (no json.Marshaler).
+	// encoding/json uses TextMarshaler to produce a JSON string.
+	hasJSONMarshaler := t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType)
+	hasTextMarshaler := t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType)
+
+	if !hasJSONMarshaler && hasTextMarshaler {
+		return &MarshalTSType{TSType: "string"}
+	}
+	if !hasJSONMarshaler {
+		return nil
+	}
+
+	// json.Marshaler: create zero value and marshal it.
+	var data []byte
+	func() {
+		defer func() { recover() }() // guard against panics on zero-value marshal
+		v := reflect.New(t)
+		var err error
+		data, err = json.Marshal(v.Interface())
+		if err != nil {
+			data = nil
+		}
+	}()
+
+	if len(data) == 0 {
+		return nil
+	}
+
+	switch data[0] {
+	case '"':
+		return &MarshalTSType{TSType: "string"}
+	case 't', 'f':
+		return &MarshalTSType{TSType: "boolean"}
+	case '{', '[', 'n':
+		return nil
+	default:
+		// digit or '-' → number
+		if (data[0] >= '0' && data[0] <= '9') || data[0] == '-' {
+			return &MarshalTSType{TSType: "number"}
+		}
+		return nil
+	}
+}
 
 //go:embed templates/*.tmpl
 var templateFS embed.FS
@@ -88,6 +152,8 @@ type Generator struct {
 	options        GeneratorOptions
 	types          map[reflect.Type]string
 	collectedEnums map[reflect.Type]*EnumInfo // enums used by current handler
+	marshalCache   map[reflect.Type]*MarshalTSType
+	marshalChecked map[reflect.Type]bool
 }
 
 // NewGenerator creates a new TypeScript generator.
@@ -99,6 +165,8 @@ func NewGenerator(registry *Registry) *Generator {
 		},
 		types:          make(map[reflect.Type]string),
 		collectedEnums: make(map[reflect.Type]*EnumInfo),
+		marshalCache:   make(map[reflect.Type]*MarshalTSType),
+		marshalChecked: make(map[reflect.Type]bool),
 	}
 }
 
@@ -657,7 +725,7 @@ func (g *Generator) collectType(t reflect.Type) {
 			if ft.Kind() == reflect.Ptr {
 				ft = ft.Elem()
 			}
-			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
+			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !g.marshalsToPrimitive(ft) {
 				// Don't register as separate interface — fields are flattened.
 				// But recurse into its fields to collect nested types.
 				for j := 0; j < ft.NumField(); j++ {
@@ -683,7 +751,7 @@ func (g *Generator) collectNestedType(ft reflect.Type) {
 
 	switch ft.Kind() {
 	case reflect.Struct:
-		if ft.PkgPath() != "" && ft != timeType {
+		if ft.PkgPath() != "" && !g.marshalsToPrimitive(ft) {
 			g.collectType(ft)
 		}
 	case reflect.Slice:
@@ -716,6 +784,24 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 	return false
 }
 
+// inferTypeFromMarshalCached wraps InferTypeFromMarshal with per-Generator caching.
+func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
+	if g.marshalChecked[t] {
+		return g.marshalCache[t]
+	}
+	result := InferTypeFromMarshal(t)
+	g.marshalChecked[t] = true
+	g.marshalCache[t] = result
+	return result
+}
+
+// marshalsToPrimitive returns true if t has a custom JSON/text marshaler that
+// produces a primitive (string, number, boolean). Used by type collection to
+// skip struct-field recursion for types that serialize as primitives.
+func (g *Generator) marshalsToPrimitive(t reflect.Type) bool {
+	return g.inferTypeFromMarshalCached(t) != nil
+}
+
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.
 // Fields with json:"-" are skipped to match encoding/json behavior.
 func shouldSkipField(field reflect.StructField) bool {
@@ -730,6 +816,11 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	// Also check collected enums (for built-in protocol enums like TaskNodeStatus)
 	if enumInfo, ok := g.collectedEnums[t]; ok {
 		return enumInfo.Name + "Type"
+	}
+
+	// Check if the type has a custom JSON/text marshaler that produces a primitive.
+	if mt := g.inferTypeFromMarshalCached(t); mt != nil {
+		return mt.TSType
 	}
 
 	switch t.Kind() {
@@ -751,9 +842,6 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	case reflect.Ptr:
 		return g.goTypeToTS(t.Elem())
 	case reflect.Struct:
-		if t == timeType {
-			return "string"
-		}
 		if t.PkgPath() == "" {
 			return "any"
 		}
