@@ -366,3 +366,119 @@ func TestGenerateWithMetaCustomMarshal(t *testing.T) {
 		t.Error("expected MetaWithCustomMarshaler.label to be 'string'")
 	}
 }
+
+// MetaNestedInfo is a plain struct with no custom marshaler.
+type MetaNestedInfo struct {
+	Source   string `json:"source"`
+	Priority int    `json:"priority"`
+}
+
+// MetaWithMixedFields has both a plain struct field and a custom marshaler field.
+type MetaWithMixedFields struct {
+	Info      MetaNestedInfo   `json:"info"`
+	Items     []MetaNestedInfo `json:"items"`
+	RequestID CustomID         `json:"requestId"`
+}
+
+func TestGenerateWithMetaMixedFields(t *testing.T) {
+	registry := aprot.NewRegistry()
+	registry.Register(&genTestHandler{})
+	EnableWithMeta[MetaWithMixedFields](registry)
+
+	gen := aprot.NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// MetaNestedInfo (non-marshaler struct) MUST generate an interface
+	if !strings.Contains(out, "interface MetaNestedInfo") {
+		t.Error("expected MetaNestedInfo interface to be generated (plain struct used as field type)")
+	}
+
+	// Extract MetaWithMixedFields interface block
+	metaStart := strings.Index(out, "interface MetaWithMixedFields")
+	if metaStart == -1 {
+		t.Fatal("MetaWithMixedFields interface not found in output")
+	}
+	metaBlock := out[metaStart:]
+	braceEnd := strings.Index(metaBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for MetaWithMixedFields")
+	}
+	metaBlock = metaBlock[:braceEnd+1]
+
+	// info field should resolve to MetaNestedInfo, not any
+	if !strings.Contains(metaBlock, "info: MetaNestedInfo") {
+		t.Errorf("expected MetaWithMixedFields.info to be 'MetaNestedInfo', got:\n%s", metaBlock)
+	}
+	// items field should resolve to MetaNestedInfo[], not any[]
+	if !strings.Contains(metaBlock, "items: MetaNestedInfo[]") {
+		t.Errorf("expected MetaWithMixedFields.items to be 'MetaNestedInfo[]', got:\n%s", metaBlock)
+	}
+	// requestId field should resolve to string (CustomID marshaler)
+	if !strings.Contains(metaBlock, "requestId: string") {
+		t.Errorf("expected MetaWithMixedFields.requestId to be 'string' (from CustomID marshaler), got:\n%s", metaBlock)
+	}
+}
+
+// NonNilSlice is a generic wrapper that ensures nil slices marshal as [] not null.
+type NonNilSlice[T any] []T
+
+func (s NonNilSlice[T]) MarshalJSON() ([]byte, error) {
+	if s == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]T(s))
+}
+
+// MetaWithWrappedSlice uses NonNilSlice wrapper fields in the task meta type.
+type MetaWithWrappedSlice struct {
+	Items     NonNilSlice[MetaNestedInfo] `json:"items"`
+	Tags      NonNilSlice[string]         `json:"tags"`
+	RequestID CustomID                    `json:"requestId"`
+}
+
+func TestGenerateWithMetaSliceMarshalerWrapper(t *testing.T) {
+	registry := aprot.NewRegistry()
+	registry.Register(&genTestHandler{})
+	EnableWithMeta[MetaWithWrappedSlice](registry)
+
+	gen := aprot.NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// MetaNestedInfo MUST generate an interface even when only used inside NonNilSlice
+	if !strings.Contains(out, "interface MetaNestedInfo") {
+		t.Error("expected MetaNestedInfo interface to be generated (used as element type in NonNilSlice)")
+	}
+
+	// Extract MetaWithWrappedSlice interface block
+	metaStart := strings.Index(out, "interface MetaWithWrappedSlice")
+	if metaStart == -1 {
+		t.Fatal("MetaWithWrappedSlice interface not found in output")
+	}
+	metaBlock := out[metaStart:]
+	braceEnd := strings.Index(metaBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for MetaWithWrappedSlice")
+	}
+	metaBlock = metaBlock[:braceEnd+1]
+
+	// items field: NonNilSlice[MetaNestedInfo] should resolve to MetaNestedInfo[], not any[]
+	if !strings.Contains(metaBlock, "items: MetaNestedInfo[]") {
+		t.Errorf("expected MetaWithWrappedSlice.items to be 'MetaNestedInfo[]', got:\n%s", metaBlock)
+	}
+	// tags field: NonNilSlice[string] should resolve to string[], not any[]
+	if !strings.Contains(metaBlock, "tags: string[]") {
+		t.Errorf("expected MetaWithWrappedSlice.tags to be 'string[]', got:\n%s", metaBlock)
+	}
+	// requestId field should still resolve to string (CustomID marshaler)
+	if !strings.Contains(metaBlock, "requestId: string") {
+		t.Errorf("expected MetaWithWrappedSlice.requestId to be 'string', got:\n%s", metaBlock)
+	}
+}
