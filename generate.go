@@ -54,7 +54,7 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 	// json.Marshaler: create zero value and marshal it.
 	var data []byte
 	func() {
-		defer func() { recover() }() // guard against panics on zero-value marshal
+		defer func() { _ = recover() }() // guard against panics on zero-value marshal
 		v := reflect.New(t)
 		var err error
 		data, err = json.Marshal(v.Interface())
