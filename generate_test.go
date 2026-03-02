@@ -2077,3 +2077,177 @@ func TestGenerateCustomMarshalerTypes(t *testing.T) {
 		t.Error("Expected MarshalerResponse.score to be 'number' (from NumberMarshaler)")
 	}
 }
+
+// Types for TestGenerateMixedMarshalerAndStructFields
+
+// NestedDetail is a plain exported struct (no marshaler).
+type NestedDetail struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
+type MixedFieldsRequest struct {
+	ID      UUIDLike        `json:"id"`
+	Score   NumberMarshaler `json:"score"`
+	Detail  NestedDetail    `json:"detail"`
+	Details []NestedDetail  `json:"details"`
+}
+
+type MixedFieldsResponse struct {
+	ID      UUIDLike        `json:"id"`
+	Score   NumberMarshaler `json:"score"`
+	Detail  NestedDetail    `json:"detail"`
+	Details []NestedDetail  `json:"details"`
+}
+
+type MixedFieldsHandlers struct{}
+
+func (h *MixedFieldsHandlers) ProcessMixed(ctx context.Context, req *MixedFieldsRequest) (*MixedFieldsResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateMixedMarshalerAndStructFields(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&MixedFieldsHandlers{})
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// NestedDetail (non-marshaler struct used as field type) MUST generate an interface
+	if !strings.Contains(out, "export interface NestedDetail") {
+		t.Error("expected NestedDetail interface to be generated (plain struct used as field type)")
+	}
+
+	// Extract MixedFieldsRequest interface block to check field types
+	reqStart := strings.Index(out, "interface MixedFieldsRequest")
+	if reqStart == -1 {
+		t.Fatal("MixedFieldsRequest interface not found in output")
+	}
+	reqBlock := out[reqStart:]
+	braceEnd := strings.Index(reqBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for MixedFieldsRequest")
+	}
+	reqBlock = reqBlock[:braceEnd+1]
+
+	// detail field should resolve to NestedDetail, not any
+	if !strings.Contains(reqBlock, "detail: NestedDetail") {
+		t.Errorf("expected MixedFieldsRequest.detail to be 'NestedDetail', got:\n%s", reqBlock)
+	}
+	// details field should resolve to NestedDetail[], not any[]
+	if !strings.Contains(reqBlock, "details: NestedDetail[]") {
+		t.Errorf("expected MixedFieldsRequest.details to be 'NestedDetail[]', got:\n%s", reqBlock)
+	}
+	// id field should resolve to string (UUIDLike marshaler)
+	if !strings.Contains(reqBlock, "id: string") {
+		t.Errorf("expected MixedFieldsRequest.id to be 'string' (from UUIDLike marshaler), got:\n%s", reqBlock)
+	}
+	// score field should resolve to number (NumberMarshaler)
+	if !strings.Contains(reqBlock, "score: number") {
+		t.Errorf("expected MixedFieldsRequest.score to be 'number' (from NumberMarshaler), got:\n%s", reqBlock)
+	}
+
+	// Marshaler types should NOT generate interfaces
+	if strings.Contains(out, "export interface UUIDLike") {
+		t.Error("UUIDLike should not generate an interface — it marshals to string")
+	}
+	if strings.Contains(out, "export interface NumberMarshaler") {
+		t.Error("NumberMarshaler should not generate an interface — it marshals to number")
+	}
+}
+
+// NonNilSlice is a generic wrapper that ensures nil slices marshal as [] not null.
+type NonNilSlice[T any] []T
+
+func (s NonNilSlice[T]) MarshalJSON() ([]byte, error) {
+	if s == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]T(s))
+}
+
+// Types for TestGenerateSliceMarshalerWrapper
+
+type WrappedSliceRequest struct {
+	ID      UUIDLike                  `json:"id"`
+	Details NonNilSlice[NestedDetail] `json:"details"`
+	Tags    NonNilSlice[string]       `json:"tags"`
+}
+
+type WrappedSliceResponse struct {
+	Items NonNilSlice[NestedDetail] `json:"items"`
+}
+
+type WrappedSliceHandlers struct{}
+
+func (h *WrappedSliceHandlers) ListItems(ctx context.Context, req *WrappedSliceRequest) (*WrappedSliceResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateSliceMarshalerWrapper(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&WrappedSliceHandlers{})
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// NestedDetail MUST generate an interface even when only used inside NonNilSlice
+	if !strings.Contains(out, "export interface NestedDetail") {
+		t.Error("expected NestedDetail interface to be generated (used as element type in NonNilSlice)")
+	}
+
+	// NonNilSlice itself should NOT generate an interface
+	if strings.Contains(out, "interface NonNilSlice") {
+		t.Error("NonNilSlice should not generate an interface — it's a slice wrapper with a marshaler")
+	}
+
+	// Extract WrappedSliceRequest interface block
+	reqStart := strings.Index(out, "interface WrappedSliceRequest")
+	if reqStart == -1 {
+		t.Fatal("WrappedSliceRequest interface not found in output")
+	}
+	reqBlock := out[reqStart:]
+	braceEnd := strings.Index(reqBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for WrappedSliceRequest")
+	}
+	reqBlock = reqBlock[:braceEnd+1]
+
+	// details field: NonNilSlice[NestedDetail] should resolve to NestedDetail[], not any[]
+	if !strings.Contains(reqBlock, "details: NestedDetail[]") {
+		t.Errorf("expected WrappedSliceRequest.details to be 'NestedDetail[]', got:\n%s", reqBlock)
+	}
+	// tags field: NonNilSlice[string] should resolve to string[], not any[]
+	if !strings.Contains(reqBlock, "tags: string[]") {
+		t.Errorf("expected WrappedSliceRequest.tags to be 'string[]', got:\n%s", reqBlock)
+	}
+	// id field should still resolve to string (UUIDLike marshaler)
+	if !strings.Contains(reqBlock, "id: string") {
+		t.Errorf("expected WrappedSliceRequest.id to be 'string', got:\n%s", reqBlock)
+	}
+
+	// Extract WrappedSliceResponse interface block
+	respStart := strings.Index(out, "interface WrappedSliceResponse")
+	if respStart == -1 {
+		t.Fatal("WrappedSliceResponse interface not found in output")
+	}
+	respBlock := out[respStart:]
+	braceEnd = strings.Index(respBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for WrappedSliceResponse")
+	}
+	respBlock = respBlock[:braceEnd+1]
+
+	// items field: NonNilSlice[NestedDetail] should resolve to NestedDetail[], not any[]
+	if !strings.Contains(respBlock, "items: NestedDetail[]") {
+		t.Errorf("expected WrappedSliceResponse.items to be 'NestedDetail[]', got:\n%s", respBlock)
+	}
+}

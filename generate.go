@@ -882,6 +882,12 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 
 	// Check if the type has a custom JSON/text marshaler that produces a primitive.
 	if mt := g.inferTypeFromMarshalCached(t); mt != nil {
+		// For slice-kind types with marshalers (e.g. NonNilSlice[T]), refine
+		// the element type using Go reflection instead of the zero-value marshal
+		// output, which can only produce any[].
+		if t.Kind() == reflect.Slice && strings.HasSuffix(mt.TSType, "[]") {
+			return g.goTypeToTS(t.Elem()) + "[]"
+		}
 		return mt.TSType
 	}
 
