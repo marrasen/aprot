@@ -63,9 +63,9 @@ func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode,
 	}
 }
 
-// marshalsToPrimitive returns true if t has a custom JSON/text marshaler that
-// produces a primitive (string, number, boolean).
-func marshalsToPrimitive(t reflect.Type) bool {
+// hasMarshalOverride returns true if t has a custom JSON/text marshaler that
+// overrides the default struct serialization.
+func hasMarshalOverride(t reflect.Type) bool {
 	return aprot.InferTypeFromMarshal(t) != nil
 }
 
@@ -156,7 +156,7 @@ func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[refle
 				ft = ft.Elem()
 			}
 		}
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !marshalsToPrimitive(ft) {
+		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !hasMarshalOverride(ft) {
 			collectNestedStructs(ft, nested, seen)
 			*nested = append(*nested, ft)
 		}

@@ -26,14 +26,13 @@ var (
 // MarshalTSType is the result of inferring a TypeScript type from a Go type's
 // JSON marshaling behavior.
 type MarshalTSType struct {
-	TSType string // "string", "number", or "boolean"
+	TSType string // e.g. "string", "number", "boolean", "Record<string, number>", "string[]"
 }
 
 // InferTypeFromMarshal checks whether t implements json.Marshaler or
 // encoding.TextMarshaler and, if so, marshals a zero value to determine the
-// TypeScript primitive type.  Returns nil when the type does not implement
-// either interface, when marshaling produces a non-primitive (object/array),
-// or when the type is an interface.
+// TypeScript type.  Returns nil when the type does not implement either
+// interface, when marshaling produces null, or when the type is an interface.
 func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 	if t.Kind() == reflect.Interface {
 		return nil
@@ -72,7 +71,11 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 		return &MarshalTSType{TSType: "string"}
 	case 't', 'f':
 		return &MarshalTSType{TSType: "boolean"}
-	case '{', '[', 'n':
+	case '{':
+		return inferObjectType(data)
+	case '[':
+		return inferArrayType(data)
+	case 'n':
 		return nil
 	default:
 		// digit or '-' → number
@@ -80,6 +83,65 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 			return &MarshalTSType{TSType: "number"}
 		}
 		return nil
+	}
+}
+
+// inferObjectType unmarshals JSON object data and infers a Record<string, T> type.
+// Returns Record<string, any> for empty or heterogeneous objects.
+func inferObjectType(data []byte) *MarshalTSType {
+	var obj map[string]interface{}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil
+	}
+	if len(obj) == 0 {
+		return &MarshalTSType{TSType: "Record<string, any>"}
+	}
+	var common string
+	for _, v := range obj {
+		ts := jsonValueToTS(v)
+		if common == "" {
+			common = ts
+		} else if ts != common {
+			return &MarshalTSType{TSType: "Record<string, any>"}
+		}
+	}
+	return &MarshalTSType{TSType: "Record<string, " + common + ">"}
+}
+
+// inferArrayType unmarshals JSON array data and infers a T[] type.
+// Returns any[] for empty or heterogeneous arrays.
+func inferArrayType(data []byte) *MarshalTSType {
+	var arr []interface{}
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return nil
+	}
+	if len(arr) == 0 {
+		return &MarshalTSType{TSType: "any[]"}
+	}
+	var common string
+	for _, v := range arr {
+		ts := jsonValueToTS(v)
+		if common == "" {
+			common = ts
+		} else if ts != common {
+			return &MarshalTSType{TSType: "any[]"}
+		}
+	}
+	return &MarshalTSType{TSType: common + "[]"}
+}
+
+// jsonValueToTS maps a single JSON value (from json.Unmarshal into interface{})
+// to a TypeScript type string. Nested objects and arrays return "any".
+func jsonValueToTS(v interface{}) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	default:
+		return "any"
 	}
 }
 
@@ -725,7 +787,7 @@ func (g *Generator) collectType(t reflect.Type) {
 			if ft.Kind() == reflect.Ptr {
 				ft = ft.Elem()
 			}
-			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !g.marshalsToPrimitive(ft) {
+			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !g.hasMarshalOverride(ft) {
 				// Don't register as separate interface — fields are flattened.
 				// But recurse into its fields to collect nested types.
 				for j := 0; j < ft.NumField(); j++ {
@@ -751,7 +813,7 @@ func (g *Generator) collectNestedType(ft reflect.Type) {
 
 	switch ft.Kind() {
 	case reflect.Struct:
-		if ft.PkgPath() != "" && !g.marshalsToPrimitive(ft) {
+		if ft.PkgPath() != "" && !g.hasMarshalOverride(ft) {
 			g.collectType(ft)
 		}
 	case reflect.Slice:
@@ -795,10 +857,10 @@ func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
 	return result
 }
 
-// marshalsToPrimitive returns true if t has a custom JSON/text marshaler that
-// produces a primitive (string, number, boolean). Used by type collection to
-// skip struct-field recursion for types that serialize as primitives.
-func (g *Generator) marshalsToPrimitive(t reflect.Type) bool {
+// hasMarshalOverride returns true if t has a custom JSON/text marshaler that
+// overrides the default struct serialization. Used by type collection to skip
+// struct-field recursion for types whose wire format differs from their Go fields.
+func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 	return g.inferTypeFromMarshalCached(t) != nil
 }
 

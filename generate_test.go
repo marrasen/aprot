@@ -1832,6 +1832,48 @@ func (o ObjectMarshaler) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]int{"x": o.X})
 }
 
+// ArrayOfStringsMarshaler always marshals to a JSON array of strings.
+type ArrayOfStringsMarshaler struct{}
+
+func (a ArrayOfStringsMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string{"a", "b"})
+}
+
+// ArrayOfNumbersMarshaler always marshals to a JSON array of numbers.
+type ArrayOfNumbersMarshaler struct{}
+
+func (a ArrayOfNumbersMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]float64{1, 2, 3})
+}
+
+// EmptyArrayMarshaler always marshals to an empty JSON array.
+type EmptyArrayMarshaler struct{}
+
+func (a EmptyArrayMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]any{})
+}
+
+// HomogeneousObjectMarshaler always marshals to a JSON object with number values.
+type HomogeneousObjectMarshaler struct{}
+
+func (o HomogeneousObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]int{"a": 1, "b": 2})
+}
+
+// EmptyObjectMarshaler always marshals to an empty JSON object.
+type EmptyObjectMarshaler struct{}
+
+func (o EmptyObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{})
+}
+
+// HeterogeneousObjectMarshaler always marshals to a JSON object with mixed value types.
+type HeterogeneousObjectMarshaler struct{}
+
+func (o HeterogeneousObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"a": 1, "b": "x"})
+}
+
 // PtrReceiverMarshaler has MarshalJSON on *T, not T.
 type PtrReceiverMarshaler struct{ Value string }
 
@@ -1872,9 +1914,39 @@ func TestInferTypeFromMarshal(t *testing.T) {
 			wantType: "string",
 		},
 		{
-			name:    "ObjectMarshaler → nil (fall through)",
-			typ:     reflect.TypeOf(ObjectMarshaler{}),
-			wantNil: true,
+			name:     "ObjectMarshaler → Record<string, number>",
+			typ:      reflect.TypeOf(ObjectMarshaler{}),
+			wantType: "Record<string, number>",
+		},
+		{
+			name:     "HomogeneousObjectMarshaler → Record<string, number>",
+			typ:      reflect.TypeOf(HomogeneousObjectMarshaler{}),
+			wantType: "Record<string, number>",
+		},
+		{
+			name:     "EmptyObjectMarshaler → Record<string, any>",
+			typ:      reflect.TypeOf(EmptyObjectMarshaler{}),
+			wantType: "Record<string, any>",
+		},
+		{
+			name:     "HeterogeneousObjectMarshaler → Record<string, any>",
+			typ:      reflect.TypeOf(HeterogeneousObjectMarshaler{}),
+			wantType: "Record<string, any>",
+		},
+		{
+			name:     "ArrayOfStringsMarshaler → string[]",
+			typ:      reflect.TypeOf(ArrayOfStringsMarshaler{}),
+			wantType: "string[]",
+		},
+		{
+			name:     "ArrayOfNumbersMarshaler → number[]",
+			typ:      reflect.TypeOf(ArrayOfNumbersMarshaler{}),
+			wantType: "number[]",
+		},
+		{
+			name:     "EmptyArrayMarshaler → any[]",
+			typ:      reflect.TypeOf(EmptyArrayMarshaler{}),
+			wantType: "any[]",
 		},
 		{
 			name:     "PtrReceiverMarshaler → string",
@@ -1932,6 +2004,12 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 		{"TextMarshalerType", reflect.TypeOf(TextMarshalerType{}), "string"},
 		{"UUIDLike", reflect.TypeOf(UUIDLike{}), "string"},
 		{"PtrReceiverMarshaler", reflect.TypeOf(PtrReceiverMarshaler{}), "string"},
+		{"ArrayOfStringsMarshaler", reflect.TypeOf(ArrayOfStringsMarshaler{}), "string[]"},
+		{"ArrayOfNumbersMarshaler", reflect.TypeOf(ArrayOfNumbersMarshaler{}), "number[]"},
+		{"EmptyArrayMarshaler", reflect.TypeOf(EmptyArrayMarshaler{}), "any[]"},
+		{"HomogeneousObjectMarshaler", reflect.TypeOf(HomogeneousObjectMarshaler{}), "Record<string, number>"},
+		{"EmptyObjectMarshaler", reflect.TypeOf(EmptyObjectMarshaler{}), "Record<string, any>"},
+		{"HeterogeneousObjectMarshaler", reflect.TypeOf(HeterogeneousObjectMarshaler{}), "Record<string, any>"},
 		{"time.Time still string", reflect.TypeOf(time.Time{}), "string"},
 		{"plain struct unchanged", reflect.TypeOf(CreateUserRequest{}), "CreateUserRequest"},
 		{"int unchanged", reflect.TypeOf(0), "number"},
