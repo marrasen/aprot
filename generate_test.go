@@ -3,7 +3,9 @@ package aprot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1783,5 +1785,295 @@ func TestArbitraryReturnTypeGenerate(t *testing.T) {
 		if strings.Contains(content, bad) {
 			t.Errorf("Should not generate %s", bad)
 		}
+	}
+}
+
+// --- Custom marshaler test types ---
+
+// StringMarshaler is a type whose JSON representation is always a string.
+type StringMarshaler struct{ Value string }
+
+func (s StringMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.Value)
+}
+
+// NumberMarshaler is a type whose JSON representation is always a number.
+type NumberMarshaler struct{ Value float64 }
+
+func (n NumberMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(n.Value)
+}
+
+// BoolMarshaler is a type whose JSON representation is always a boolean.
+type BoolMarshaler struct{ Value bool }
+
+func (b BoolMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(b.Value)
+}
+
+// TextMarshalerType implements only encoding.TextMarshaler (not json.Marshaler).
+type TextMarshalerType struct{ Text string }
+
+func (t TextMarshalerType) MarshalText() ([]byte, error) {
+	return []byte(t.Text), nil
+}
+
+// UUIDLike is a [16]byte that marshals to a string, similar to google/uuid.
+type UUIDLike [16]byte
+
+func (u UUIDLike) MarshalJSON() ([]byte, error) {
+	return json.Marshal("00000000-0000-0000-0000-000000000000")
+}
+
+// ObjectMarshaler always marshals to a JSON object — should fall through.
+type ObjectMarshaler struct{ X int }
+
+func (o ObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]int{"x": o.X})
+}
+
+// ArrayOfStringsMarshaler always marshals to a JSON array of strings.
+type ArrayOfStringsMarshaler struct{}
+
+func (a ArrayOfStringsMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]string{"a", "b"})
+}
+
+// ArrayOfNumbersMarshaler always marshals to a JSON array of numbers.
+type ArrayOfNumbersMarshaler struct{}
+
+func (a ArrayOfNumbersMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]float64{1, 2, 3})
+}
+
+// EmptyArrayMarshaler always marshals to an empty JSON array.
+type EmptyArrayMarshaler struct{}
+
+func (a EmptyArrayMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]any{})
+}
+
+// HomogeneousObjectMarshaler always marshals to a JSON object with number values.
+type HomogeneousObjectMarshaler struct{}
+
+func (o HomogeneousObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]int{"a": 1, "b": 2})
+}
+
+// EmptyObjectMarshaler always marshals to an empty JSON object.
+type EmptyObjectMarshaler struct{}
+
+func (o EmptyObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{})
+}
+
+// HeterogeneousObjectMarshaler always marshals to a JSON object with mixed value types.
+type HeterogeneousObjectMarshaler struct{}
+
+func (o HeterogeneousObjectMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"a": 1, "b": "x"})
+}
+
+// PtrReceiverMarshaler has MarshalJSON on *T, not T.
+type PtrReceiverMarshaler struct{ Value string }
+
+func (p *PtrReceiverMarshaler) MarshalJSON() ([]byte, error) {
+	return json.Marshal(p.Value)
+}
+
+func TestInferTypeFromMarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		typ      reflect.Type
+		wantNil  bool
+		wantType string
+	}{
+		{
+			name:     "StringMarshaler → string",
+			typ:      reflect.TypeOf(StringMarshaler{}),
+			wantType: "string",
+		},
+		{
+			name:     "NumberMarshaler → number",
+			typ:      reflect.TypeOf(NumberMarshaler{}),
+			wantType: "number",
+		},
+		{
+			name:     "BoolMarshaler → boolean",
+			typ:      reflect.TypeOf(BoolMarshaler{}),
+			wantType: "boolean",
+		},
+		{
+			name:     "TextMarshalerType → string",
+			typ:      reflect.TypeOf(TextMarshalerType{}),
+			wantType: "string",
+		},
+		{
+			name:     "UUIDLike → string",
+			typ:      reflect.TypeOf(UUIDLike{}),
+			wantType: "string",
+		},
+		{
+			name:     "ObjectMarshaler → Record<string, number>",
+			typ:      reflect.TypeOf(ObjectMarshaler{}),
+			wantType: "Record<string, number>",
+		},
+		{
+			name:     "HomogeneousObjectMarshaler → Record<string, number>",
+			typ:      reflect.TypeOf(HomogeneousObjectMarshaler{}),
+			wantType: "Record<string, number>",
+		},
+		{
+			name:     "EmptyObjectMarshaler → Record<string, any>",
+			typ:      reflect.TypeOf(EmptyObjectMarshaler{}),
+			wantType: "Record<string, any>",
+		},
+		{
+			name:     "HeterogeneousObjectMarshaler → Record<string, any>",
+			typ:      reflect.TypeOf(HeterogeneousObjectMarshaler{}),
+			wantType: "Record<string, any>",
+		},
+		{
+			name:     "ArrayOfStringsMarshaler → string[]",
+			typ:      reflect.TypeOf(ArrayOfStringsMarshaler{}),
+			wantType: "string[]",
+		},
+		{
+			name:     "ArrayOfNumbersMarshaler → number[]",
+			typ:      reflect.TypeOf(ArrayOfNumbersMarshaler{}),
+			wantType: "number[]",
+		},
+		{
+			name:     "EmptyArrayMarshaler → any[]",
+			typ:      reflect.TypeOf(EmptyArrayMarshaler{}),
+			wantType: "any[]",
+		},
+		{
+			name:     "PtrReceiverMarshaler → string",
+			typ:      reflect.TypeOf(PtrReceiverMarshaler{}),
+			wantType: "string",
+		},
+		{
+			name:     "time.Time → string",
+			typ:      reflect.TypeOf(time.Time{}),
+			wantType: "string",
+		},
+		{
+			name:    "plain struct (no marshaler) → nil",
+			typ:     reflect.TypeOf(CreateUserRequest{}),
+			wantNil: true,
+		},
+		{
+			name:    "interface{} / any → nil",
+			typ:     reflect.TypeOf((*interface{})(nil)).Elem(),
+			wantNil: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := InferTypeFromMarshal(tc.typ)
+			if tc.wantNil {
+				if result != nil {
+					t.Errorf("expected nil, got %+v", result)
+				}
+				return
+			}
+			if result == nil {
+				t.Fatal("expected non-nil result, got nil")
+			}
+			if result.TSType != tc.wantType {
+				t.Errorf("expected TSType=%q, got %q", tc.wantType, result.TSType)
+			}
+		})
+	}
+}
+
+func TestGoTypeToTSCustomMarshalers(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		{"StringMarshaler", reflect.TypeOf(StringMarshaler{}), "string"},
+		{"NumberMarshaler", reflect.TypeOf(NumberMarshaler{}), "number"},
+		{"BoolMarshaler", reflect.TypeOf(BoolMarshaler{}), "boolean"},
+		{"TextMarshalerType", reflect.TypeOf(TextMarshalerType{}), "string"},
+		{"UUIDLike", reflect.TypeOf(UUIDLike{}), "string"},
+		{"PtrReceiverMarshaler", reflect.TypeOf(PtrReceiverMarshaler{}), "string"},
+		{"ArrayOfStringsMarshaler", reflect.TypeOf(ArrayOfStringsMarshaler{}), "string[]"},
+		{"ArrayOfNumbersMarshaler", reflect.TypeOf(ArrayOfNumbersMarshaler{}), "number[]"},
+		{"EmptyArrayMarshaler", reflect.TypeOf(EmptyArrayMarshaler{}), "any[]"},
+		{"HomogeneousObjectMarshaler", reflect.TypeOf(HomogeneousObjectMarshaler{}), "Record<string, number>"},
+		{"EmptyObjectMarshaler", reflect.TypeOf(EmptyObjectMarshaler{}), "Record<string, any>"},
+		{"HeterogeneousObjectMarshaler", reflect.TypeOf(HeterogeneousObjectMarshaler{}), "Record<string, any>"},
+		{"time.Time still string", reflect.TypeOf(time.Time{}), "string"},
+		{"plain struct unchanged", reflect.TypeOf(CreateUserRequest{}), "CreateUserRequest"},
+		{"int unchanged", reflect.TypeOf(0), "number"},
+		{"string unchanged", reflect.TypeOf(""), "string"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := g.goTypeToTS(tc.typ)
+			if got != tc.want {
+				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
+			}
+		})
+	}
+}
+
+// Types for TestGenerateCustomMarshalerTypes
+
+type MarshalerRequest struct {
+	ID   UUIDLike       `json:"id"`
+	Name StringMarshaler `json:"name"`
+}
+
+type MarshalerResponse struct {
+	ID    UUIDLike       `json:"id"`
+	Score NumberMarshaler `json:"score"`
+}
+
+type MarshalerHandlers struct{}
+
+func (h *MarshalerHandlers) DoThing(ctx context.Context, req *MarshalerRequest) (*MarshalerResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateCustomMarshalerTypes(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&MarshalerHandlers{})
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// The MarshalerRequest should have string fields, not interfaces for UUIDLike/StringMarshaler
+	if strings.Contains(out, "export interface UUIDLike") {
+		t.Error("UUIDLike should not generate an interface — it marshals to string")
+	}
+	if strings.Contains(out, "export interface StringMarshaler") {
+		t.Error("StringMarshaler should not generate an interface — it marshals to string")
+	}
+	if strings.Contains(out, "export interface NumberMarshaler") {
+		t.Error("NumberMarshaler should not generate an interface — it marshals to number")
+	}
+
+	// The fields in MarshalerRequest/MarshalerResponse should be primitives
+	if !strings.Contains(out, "id: string") {
+		t.Error("Expected MarshalerRequest.id to be 'string' (from UUIDLike marshaler)")
+	}
+	if !strings.Contains(out, "name: string") {
+		t.Error("Expected MarshalerRequest.name to be 'string' (from StringMarshaler)")
+	}
+	if !strings.Contains(out, "score: number") {
+		t.Error("Expected MarshalerResponse.score to be 'number' (from NumberMarshaler)")
 	}
 }

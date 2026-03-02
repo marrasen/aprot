@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"text/template"
-	"time"
 
 	"github.com/marrasen/aprot"
 )
@@ -64,7 +63,11 @@ func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode,
 	}
 }
 
-var timeType = reflect.TypeOf(time.Time{})
+// hasMarshalOverride returns true if t has a custom JSON/text marshaler that
+// overrides the default struct serialization.
+func hasMarshalOverride(t reflect.Type) bool {
+	return aprot.InferTypeFromMarshal(t) != nil
+}
 
 // buildMetaInterfaces converts a meta type to template data via reflection.
 func buildMetaInterfaces(t reflect.Type) []metaInterfaceData {
@@ -153,7 +156,7 @@ func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[refle
 				ft = ft.Elem()
 			}
 		}
-		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && ft != timeType {
+		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !hasMarshalOverride(ft) {
 			collectNestedStructs(ft, nested, seen)
 			*nested = append(*nested, ft)
 		}
@@ -164,6 +167,12 @@ func goTypeToTS(t reflect.Type) string {
 	if t.Kind() == reflect.Ptr {
 		return goTypeToTS(t.Elem())
 	}
+
+	// Check if the type has a custom JSON/text marshaler that produces a primitive.
+	if mt := aprot.InferTypeFromMarshal(t); mt != nil {
+		return mt.TSType
+	}
+
 	switch t.Kind() {
 	case reflect.String:
 		return "string"
@@ -178,9 +187,6 @@ func goTypeToTS(t reflect.Type) string {
 	case reflect.Map:
 		return fmt.Sprintf("Record<%s, %s>", goTypeToTS(t.Key()), goTypeToTS(t.Elem()))
 	case reflect.Struct:
-		if t == timeType {
-			return "string"
-		}
 		if t.PkgPath() == "" {
 			return "any"
 		}
