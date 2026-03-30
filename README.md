@@ -1131,6 +1131,67 @@ function getStatusLabel(status: TaskStatusType): string {
 }
 ```
 
+## Naming Plugins
+
+By default, aprot converts Go PascalCase names to idiomatic TypeScript conventions: kebab-case filenames (`PublicHandlers` -> `public-handlers.ts`) and camelCase methods (`CreateUser` -> `createUser`). Naming plugins let you customize this behavior.
+
+### NamingPlugin Interface
+
+```go
+type NamingPlugin interface {
+    FileName(groupName string) string        // handler struct name -> filename stem
+    MethodName(name string) string            // handler method name -> TS function name
+    HookName(name string) string              // handler/event name -> React hook name
+    HandlerName(eventName string) string      // push event name -> event handler name
+    ErrorMethodName(errorName string) string  // error code name -> type-guard method name
+}
+```
+
+### Built-in Plugins
+
+**DefaultNaming** - reproduces current behavior, with an option to fix acronym splitting:
+
+```go
+// Without FixAcronyms (default): BulkXMLHandlers -> bulk-x-m-l-handlers.ts
+gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+    OutputDir: "./client/api",
+    Mode:      aprot.OutputVanilla,
+    Naming:    aprot.DefaultNaming{FixAcronyms: false},
+})
+
+// With FixAcronyms: BulkXMLHandlers -> bulk-xml-handlers.ts, XMLParser -> xmlParser
+gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+    OutputDir: "./client/api",
+    Mode:      aprot.OutputVanilla,
+    Naming:    aprot.DefaultNaming{FixAcronyms: true},
+})
+```
+
+**PreserveNaming** - keeps Go method names unchanged (PascalCase) in generated TypeScript:
+
+```go
+// CreateUser stays CreateUser (not createUser), filenames still kebab-case
+gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+    OutputDir: "./client/api",
+    Mode:      aprot.OutputVanilla,
+    Naming:    aprot.PreserveNaming{FixAcronyms: true},
+})
+```
+
+### Custom Plugins
+
+Implement the `NamingPlugin` interface for full control:
+
+```go
+type MyNaming struct{}
+
+func (m MyNaming) FileName(groupName string) string     { return strings.ToLower(groupName) }
+func (m MyNaming) MethodName(name string) string         { return name }
+func (m MyNaming) HookName(name string) string           { return "use" + name }
+func (m MyNaming) HandlerName(eventName string) string   { return "on" + eventName }
+func (m MyNaming) ErrorMethodName(errorName string) string { return "is" + errorName }
+```
+
 ## Type Mapping
 
 Go types are mapped to TypeScript types during code generation:
