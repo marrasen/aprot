@@ -206,6 +206,10 @@ type GeneratorOptions struct {
 
 	// Mode specifies vanilla or react output.
 	Mode OutputMode
+
+	// Naming controls how Go names are transformed into TypeScript names.
+	// If nil, DefaultNaming{} is used (preserving current behavior).
+	Naming NamingPlugin
 }
 
 // Generator generates TypeScript client code from a registry.
@@ -230,6 +234,13 @@ func NewGenerator(registry *Registry) *Generator {
 		marshalCache:   make(map[reflect.Type]*MarshalTSType),
 		marshalChecked: make(map[reflect.Type]bool),
 	}
+}
+
+func (g *Generator) naming() NamingPlugin {
+	if g.options.Naming != nil {
+		return g.options.Naming
+	}
+	return DefaultNaming{}
 }
 
 // WithOptions sets generator options.
@@ -327,7 +338,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
 			Code:       ec.Code,
-			MethodName: "is" + ec.Name,
+			MethodName: g.naming().ErrorMethodName(ec.Name),
 		})
 	}
 
@@ -492,8 +503,8 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		data.Methods = append(data.Methods, methodData{
 			Name:         shortName,
 			WireMethod:   qualifiedName,
-			MethodName:   toLowerCamel(shortName),
-			HookName:     "use" + shortName,
+			MethodName:   g.naming().MethodName(shortName),
+			HookName:     g.naming().HookName(shortName),
 			ResponseType: respType,
 			IsVoid:       isVoid,
 			Params:       g.buildParamData(info, paramNames),
@@ -504,8 +515,8 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	for _, event := range g.registry.PushEvents() {
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
-			HandlerName: "on" + event.Name,
-			HookName:    "use" + event.Name,
+			HandlerName: g.naming().HandlerName(event.Name),
+			HookName:    g.naming().HookName(event.Name),
 			DataType:    event.DataType.Name(),
 		})
 	}
@@ -515,7 +526,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
 			Code:       ec.Code,
-			MethodName: "is" + ec.Name,
+			MethodName: g.naming().ErrorMethodName(ec.Name),
 		})
 	}
 
@@ -551,7 +562,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string]map[string][]string) templateData {
 	data := templateData{
 		StructName: group.Name,
-		FileName:   toKebab(group.Name) + ".ts",
+		FileName:   g.naming().FileName(group.Name) + ".ts",
 	}
 
 	// Build interfaces
@@ -586,8 +597,8 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 		data.Methods = append(data.Methods, methodData{
 			Name:         name,
 			WireMethod:   group.Name + "." + name,
-			MethodName:   toLowerCamel(name),
-			HookName:     "use" + name,
+			MethodName:   g.naming().MethodName(name),
+			HookName:     g.naming().HookName(name),
 			ResponseType: respType,
 			IsVoid:       isVoid,
 			Params:       g.buildParamData(info, paramNames),
@@ -598,8 +609,8 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 	for _, event := range group.PushEvents {
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
-			HandlerName: "on" + event.Name,
-			HookName:    "use" + event.Name,
+			HandlerName: g.naming().HandlerName(event.Name),
+			HookName:    g.naming().HookName(event.Name),
 			DataType:    event.DataType.Name(),
 		})
 	}
@@ -609,7 +620,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
 			Code:       ec.Code,
-			MethodName: "is" + ec.Name,
+			MethodName: g.naming().ErrorMethodName(ec.Name),
 		})
 	}
 
