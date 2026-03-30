@@ -66,7 +66,7 @@ func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode,
 // hasMarshalOverride returns true if t has a custom JSON/text marshaler that
 // overrides the default struct serialization.
 func hasMarshalOverride(t reflect.Type) bool {
-	return aprot.InferTypeFromMarshal(t) != nil
+	return aprot.InferTypeFromMarshal(t) != nil || aprot.SQLNullTSType(t, goTypeToTS) != ""
 }
 
 // buildMetaInterfaces converts a meta type to template data via reflection.
@@ -174,9 +174,18 @@ func goTypeToTS(t reflect.Type) string {
 		// the element type using Go reflection instead of the zero-value marshal
 		// output, which can only produce any[].
 		if t.Kind() == reflect.Slice && strings.HasSuffix(mt.TSType, "[]") {
-			return goTypeToTS(t.Elem()) + "[]"
+			elemType := goTypeToTS(t.Elem())
+			if strings.Contains(elemType, " | ") {
+				return "(" + elemType + ")[]"
+			}
+			return elemType + "[]"
 		}
 		return mt.TSType
+	}
+
+	// Check for database/sql nullable types.
+	if tsType := aprot.SQLNullTSType(t, goTypeToTS); tsType != "" {
+		return tsType
 	}
 
 	switch t.Kind() {
@@ -189,7 +198,11 @@ func goTypeToTS(t reflect.Type) string {
 	case reflect.Bool:
 		return "boolean"
 	case reflect.Slice:
-		return goTypeToTS(t.Elem()) + "[]"
+		elemType := goTypeToTS(t.Elem())
+		if strings.Contains(elemType, " | ") {
+			return "(" + elemType + ")[]"
+		}
+		return elemType + "[]"
 	case reflect.Map:
 		return fmt.Sprintf("Record<%s, %s>", goTypeToTS(t.Key()), goTypeToTS(t.Elem()))
 	case reflect.Struct:

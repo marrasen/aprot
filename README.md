@@ -1205,10 +1205,17 @@ Go types are mapped to TypeScript types during code generation:
 | `map[K]V` | `Record<K, V>` | |
 | `*T` | `T` (optional) | Pointer fields become optional (`?`) |
 | `time.Time` | `string` | RFC 3339 format (Go's `encoding/json` default) |
+| `sql.NullString` | `string \| null` | All `database/sql` nullable types supported |
+| `sql.NullInt64`, etc. | `number \| null` | `NullInt32`, `NullInt16`, `NullFloat64`, `NullByte` |
+| `sql.NullBool` | `boolean \| null` | |
+| `sql.NullTime` | `string \| null` | Underlying `time.Time` marshals as string |
+| `sql.Null[T]` | `T \| null` | Generic nullable (Go 1.22+) |
 | `struct` | `interface` | Named structs become TypeScript interfaces |
 | Registered enum | Const object + type | See [Enum Support](#enum-support) |
 
 `time.Time` fields (including `*time.Time`) are generated as `string` because Go's `encoding/json` marshals them as RFC 3339 strings. This applies anywhere `time.Time` appears: direct fields, slices (`[]time.Time` → `string[]`), map values, etc.
+
+`database/sql` nullable types (`sql.NullString`, `sql.NullInt64`, `sql.NullBool`, `sql.NullFloat64`, `sql.NullInt32`, `sql.NullInt16`, `sql.NullByte`, `sql.NullTime`, and the generic `sql.Null[T]`) are generated as `T | null`. These fields are **not** optional — they are always present in the JSON but may be `null`. Slices of nullable types use parenthesized syntax: `[]sql.NullString` → `(string | null)[]`.
 
 ## Generated Output
 
