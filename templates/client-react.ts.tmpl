@@ -472,7 +472,11 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
 {{range .Methods}}
 {{- if not (hasParams .Params)}}
 export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
-    return useQuery({{.MethodName}}, options);
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),
+        [],
+    );
+    return useQuery(wrappedFn, options);
 }
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
@@ -484,7 +488,11 @@ export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutation
 }
 {{- else}}
 export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
-    return useQuery({{.MethodName}}, { ...options, params: [{{paramNames .Params}}] });
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal }),
+        [],
+    );
+    return useQuery(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
 }
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {

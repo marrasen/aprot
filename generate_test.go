@@ -374,6 +374,27 @@ func TestGenerateReact(t *testing.T) {
 	if !strings.Contains(output, "signal: AbortSignal") {
 		t.Error("Mutation hooks should forward AbortSignal for cancellation")
 	}
+
+	// useQuery should use AbortController to cancel in-flight requests
+	useQuerySection := strings.SplitN(output, "export function useQuery", 2)
+	if len(useQuerySection) == 2 {
+		useQueryEnd := strings.SplitN(useQuerySection[1], "export function useMutation", 2)
+		if len(useQueryEnd) == 2 && !strings.Contains(useQueryEnd[0], "AbortController") {
+			t.Error("useQuery should use AbortController for request cancellation")
+		}
+	}
+
+	// Per-handler query hooks should also forward signal (not just mutation hooks)
+	if len(parts) == 2 {
+		handlerHooksSection := parts[1]
+		// Count occurrences of signal: AbortSignal — should appear in both query and mutation hooks
+		signalCount := strings.Count(handlerHooksSection, "signal: AbortSignal")
+		// We expect at least 2 per method (one for query hook, one for mutation hook)
+		// With 2 methods (GetUser, CreateUser), that's at least 4
+		if signalCount < 4 {
+			t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
+		}
+	}
 }
 
 func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
@@ -431,6 +452,22 @@ func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	// Mutation hooks should forward AbortSignal for cancellation
 	if !strings.Contains(handlerContent, "signal: AbortSignal") {
 		t.Error("Mutation hooks should forward AbortSignal for cancellation")
+	}
+
+	// useQuery in client.ts should use AbortController to cancel in-flight requests
+	useQuerySection := strings.SplitN(clientContent, "export function useQuery", 2)
+	if len(useQuerySection) == 2 {
+		useQueryEnd := strings.SplitN(useQuerySection[1], "export function useMutation", 2)
+		if len(useQueryEnd) == 2 && !strings.Contains(useQueryEnd[0], "AbortController") {
+			t.Error("useQuery should use AbortController for request cancellation")
+		}
+	}
+
+	// Per-handler query hooks should also forward signal (not just mutation hooks)
+	signalCount := strings.Count(handlerContent, "signal: AbortSignal")
+	// Each method should have signal in both query and mutation hooks
+	if signalCount < 4 {
+		t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
 	}
 }
 
