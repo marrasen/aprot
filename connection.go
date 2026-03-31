@@ -21,7 +21,7 @@ type ConnInfo struct {
 type Conn struct {
 	transport transport
 	server    *Server
-	requests  map[string]context.CancelFunc
+	requests  map[string]context.CancelCauseFunc
 	mu        sync.Mutex
 	closed    bool
 	userID    string          // associated user ID (set by middleware)
@@ -134,7 +134,7 @@ func newConn(t transport, server *Server, id uint64, r *http.Request, ctx contex
 	return &Conn{
 		transport: t,
 		server:    server,
-		requests:  make(map[string]context.CancelFunc),
+		requests:  make(map[string]context.CancelCauseFunc),
 		id:        id,
 		ctx:       ctx,
 		info: ConnInfo{
@@ -224,7 +224,7 @@ func (c *Conn) sendPong() {
 	_ = c.sendJSON(msg)
 }
 
-func (c *Conn) registerRequest(id string, cancel context.CancelFunc) {
+func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.requests[id] = cancel
@@ -241,7 +241,7 @@ func (c *Conn) cancelRequest(id string) {
 	cancel, ok := c.requests[id]
 	c.mu.Unlock()
 	if ok {
-		cancel()
+		cancel(ErrClientCanceled)
 	}
 }
 
@@ -275,11 +275,11 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	c.registerRequest(msg.ID, cancel)
 	defer func() {
 		c.unregisterRequest(msg.ID)
-		cancel()
+		cancel(nil)
 	}()
 
 	// Add progress reporter and connection to context
@@ -331,7 +331,7 @@ func (c *Conn) close() {
 	c.closed = true
 	// Cancel all pending requests
 	for _, cancel := range c.requests {
-		cancel()
+		cancel(ErrConnectionClosed)
 	}
 	c.mu.Unlock()
 	c.transport.Close()
@@ -345,7 +345,7 @@ func (c *Conn) closeGracefully() {
 	}
 	c.closed = true
 	for _, cancel := range c.requests {
-		cancel()
+		cancel(ErrServerShutdown)
 	}
 	c.mu.Unlock()
 	_ = c.transport.CloseGracefully()

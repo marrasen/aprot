@@ -67,7 +67,7 @@ func NewTestPushConn(id uint64, pushEvents ...any) *TestPushConn {
 	conn := &Conn{
 		transport: rt,
 		server:    server,
-		requests:  make(map[string]context.CancelFunc),
+		requests:  make(map[string]context.CancelCauseFunc),
 		id:        id,
 	}
 	return &TestPushConn{Conn: conn, transport: rt}

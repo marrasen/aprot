@@ -67,3 +67,11 @@ func withRequest(ctx context.Context, req *Request) context.Context {
 	return context.WithValue(ctx, requestKey, req)
 }
 
+// CancelCause returns the reason the request context was canceled.
+// Returns nil if the context has not been canceled or no cause was set.
+// The returned error will be one of ErrClientCanceled, ErrConnectionClosed,
+// or ErrServerShutdown.
+func CancelCause(ctx context.Context) error {
+	return context.Cause(ctx)
+}
+
