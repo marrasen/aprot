@@ -711,39 +711,51 @@ export interface UsePushResult<T> {
 
 {{define "react-generic-hooks"}}
 // Generic query hook
-export function useQuery<TRes>(fn: (client: ApiClient) => Promise<TRes>, options?: UseQueryOptions): UseQueryResult<TRes>;
-export function useQuery<TArgs extends unknown[], TRes>(fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>, options: UseQueryOptions & { params: TArgs }): UseQueryResult<TRes>;
+export function useQuery<TRes>(fn: (client: ApiClient, signal: AbortSignal) => Promise<TRes>, options?: UseQueryOptions): UseQueryResult<TRes>;
+export function useQuery<TArgs extends unknown[], TRes>(fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => Promise<TRes>, options: UseQueryOptions & { params: TArgs }): UseQueryResult<TRes>;
 export function useQuery<TArgs extends unknown[], TRes>(
-    fn: (client: ApiClient, ...args: TArgs) => Promise<TRes>,
+    fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => Promise<TRes>,
     options?: UseQueryOptions & { params?: TArgs },
 ): UseQueryResult<TRes> {
     const client = useApiClient();
     const [data, setData] = useState<TRes | null>(null);
     const [error, setError] = useState<Error | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    const abortRef = useRef<AbortController | null>(null);
 
     const params = options?.params;
     const paramsKey = params ? JSON.stringify(params) : '[]';
 
     const fetch = useCallback(async () => {
         if (options?.enabled === false) return;
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
         setIsLoading(true);
         setError(null);
         try {
             const result = params
-                ? await fn(client, ...params)
-                : await (fn as unknown as (client: ApiClient) => Promise<TRes>)(client);
+                ? await fn(client, controller.signal, ...params)
+                : await (fn as unknown as (client: ApiClient, signal: AbortSignal) => Promise<TRes>)(client, controller.signal);
+            if (abortRef.current !== controller) return;
             setData(result);
         } catch (err) {
+            if (abortRef.current !== controller) return;
+            if (controller.signal.aborted) return;
             setError(err as Error);
         } finally {
-            setIsLoading(false);
+            if (abortRef.current === controller) {
+                setIsLoading(false);
+            }
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, fn, options?.enabled, paramsKey]);
 
     useEffect(() => {
         fetch();
+        return () => {
+            abortRef.current?.abort();
+        };
     }, [fetch]);
 
     useEffect(() => {
