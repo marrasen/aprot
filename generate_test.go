@@ -3,6 +3,7 @@ package aprot
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -2286,5 +2287,182 @@ func TestGenerateSliceMarshalerWrapper(t *testing.T) {
 	// items field: NonNilSlice[NestedDetail] should resolve to NestedDetail[], not any[]
 	if !strings.Contains(respBlock, "items: NestedDetail[]") {
 		t.Errorf("expected WrappedSliceResponse.items to be 'NestedDetail[]', got:\n%s", respBlock)
+	}
+}
+
+// --- sql.Null type tests ---
+
+func TestSQLNullTSType(t *testing.T) {
+	resolver := func(t reflect.Type) string {
+		switch t.Kind() {
+		case reflect.String:
+			return "string"
+		case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Float32, reflect.Float64, reflect.Uint8:
+			return "number"
+		case reflect.Bool:
+			return "boolean"
+		default:
+			return "any"
+		}
+	}
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		{"NullString", reflect.TypeOf(sql.NullString{}), "string | null"},
+		{"NullInt64", reflect.TypeOf(sql.NullInt64{}), "number | null"},
+		{"NullInt32", reflect.TypeOf(sql.NullInt32{}), "number | null"},
+		{"NullInt16", reflect.TypeOf(sql.NullInt16{}), "number | null"},
+		{"NullFloat64", reflect.TypeOf(sql.NullFloat64{}), "number | null"},
+		{"NullBool", reflect.TypeOf(sql.NullBool{}), "boolean | null"},
+		{"NullByte", reflect.TypeOf(sql.NullByte{}), "number | null"},
+		{"NullTime", reflect.TypeOf(sql.NullTime{}), "string | null"},
+		{"Null[string]", reflect.TypeOf(sql.Null[string]{}), "string | null"},
+		{"Null[int]", reflect.TypeOf(sql.Null[int]{}), "number | null"},
+		{"Null[bool]", reflect.TypeOf(sql.Null[bool]{}), "boolean | null"},
+		{"Null[float64]", reflect.TypeOf(sql.Null[float64]{}), "number | null"},
+		{"plain struct → empty", reflect.TypeOf(CreateUserRequest{}), ""},
+		{"time.Time → empty", reflect.TypeOf(time.Time{}), ""},
+		{"int → empty", reflect.TypeOf(0), ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SQLNullTSType(tc.typ, resolver)
+			if got != tc.want {
+				t.Errorf("SQLNullTSType(%v) = %q, want %q", tc.typ, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGoTypeToTSSQLNull(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		{"NullString", reflect.TypeOf(sql.NullString{}), "string | null"},
+		{"NullInt64", reflect.TypeOf(sql.NullInt64{}), "number | null"},
+		{"NullInt32", reflect.TypeOf(sql.NullInt32{}), "number | null"},
+		{"NullInt16", reflect.TypeOf(sql.NullInt16{}), "number | null"},
+		{"NullFloat64", reflect.TypeOf(sql.NullFloat64{}), "number | null"},
+		{"NullBool", reflect.TypeOf(sql.NullBool{}), "boolean | null"},
+		{"NullByte", reflect.TypeOf(sql.NullByte{}), "number | null"},
+		{"NullTime", reflect.TypeOf(sql.NullTime{}), "string | null"},
+		{"Null[string]", reflect.TypeOf(sql.Null[string]{}), "string | null"},
+		{"Null[int]", reflect.TypeOf(sql.Null[int]{}), "number | null"},
+		{"slice of NullString", reflect.TypeOf([]sql.NullString{}), "(string | null)[]"},
+		{"pointer to NullString", reflect.TypeOf((*sql.NullString)(nil)), "string | null"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := g.goTypeToTS(tc.typ)
+			if got != tc.want {
+				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
+			}
+		})
+	}
+}
+
+// Types for TestGenerateSQLNullTypes
+
+type SQLNullRequest struct {
+	Name   sql.NullString   `json:"name"`
+	Age    sql.NullInt64    `json:"age"`
+	Active sql.NullBool     `json:"active"`
+	Score  sql.NullFloat64  `json:"score"`
+	Rank   sql.NullInt32    `json:"rank"`
+	Level  sql.NullInt16    `json:"level"`
+	Code   sql.NullByte     `json:"code"`
+	Born   sql.NullTime     `json:"born"`
+	Tags   []sql.NullString `json:"tags"`
+	Note   sql.Null[string] `json:"note"`
+}
+
+type SQLNullResponse struct {
+	ID string `json:"id"`
+}
+
+type SQLNullHandlers struct{}
+
+func (h *SQLNullHandlers) DoThing(ctx context.Context, req *SQLNullRequest) (*SQLNullResponse, error) {
+	return nil, nil
+}
+
+func TestGenerateSQLNullTypes(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&SQLNullHandlers{})
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// Must NOT generate interfaces for sql.Null types
+	for _, bad := range []string{
+		"export interface NullString",
+		"export interface NullInt64",
+		"export interface NullInt32",
+		"export interface NullInt16",
+		"export interface NullFloat64",
+		"export interface NullBool",
+		"export interface NullByte",
+		"export interface NullTime",
+	} {
+		if strings.Contains(out, bad) {
+			t.Errorf("Should not generate %s — sql.Null types are primitives", bad)
+		}
+	}
+
+	// Extract SQLNullRequest interface block
+	reqStart := strings.Index(out, "interface SQLNullRequest")
+	if reqStart == -1 {
+		t.Fatal("SQLNullRequest interface not found in output")
+	}
+	reqBlock := out[reqStart:]
+	braceEnd := strings.Index(reqBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for SQLNullRequest")
+	}
+	reqBlock = reqBlock[:braceEnd+1]
+
+	// Fields should be nullable primitives, not optional
+	expectations := []struct {
+		field string
+		want  string
+	}{
+		{"name", "name: string | null;"},
+		{"age", "age: number | null;"},
+		{"active", "active: boolean | null;"},
+		{"score", "score: number | null;"},
+		{"rank", "rank: number | null;"},
+		{"level", "level: number | null;"},
+		{"code", "code: number | null;"},
+		{"born", "born: string | null;"},
+		{"tags", "tags: (string | null)[];"},
+		{"note", "note: string | null;"},
+	}
+
+	for _, exp := range expectations {
+		if !strings.Contains(reqBlock, exp.want) {
+			t.Errorf("Expected field %q to be %q in:\n%s", exp.field, exp.want, reqBlock)
+		}
+	}
+
+	// Fields should NOT be optional (no ? marker)
+	for _, field := range []string{"name", "age", "active", "score", "rank", "level", "code", "born", "tags", "note"} {
+		if strings.Contains(reqBlock, field+"?:") {
+			t.Errorf("sql.Null field %q should not be optional", field)
+		}
 	}
 }

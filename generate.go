@@ -86,6 +86,40 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 	}
 }
 
+// SQLNullTSType checks whether t is a database/sql nullable type (NullString,
+// NullInt64, NullBool, NullFloat64, NullInt32, NullInt16, NullByte, NullTime,
+// or the generic Null[T]) and returns the corresponding TypeScript type
+// (e.g. "string | null"). Returns "" if t is not a sql.Null type.
+//
+// typeResolver is called for the generic Null[T] case to convert the inner
+// Go type to its TypeScript representation.
+func SQLNullTSType(t reflect.Type, typeResolver func(reflect.Type) string) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.PkgPath() != "database/sql" {
+		return ""
+	}
+	switch t.Name() {
+	case "NullString":
+		return "string | null"
+	case "NullInt64", "NullInt32", "NullInt16", "NullFloat64", "NullByte":
+		return "number | null"
+	case "NullBool":
+		return "boolean | null"
+	case "NullTime":
+		return "string | null"
+	default:
+		// Generic sql.Null[T] — has fields V (of type T) and Valid (bool).
+		if strings.HasPrefix(t.Name(), "Null[") {
+			if vField, ok := t.FieldByName("V"); ok {
+				return typeResolver(vField.Type) + " | null"
+			}
+		}
+		return ""
+	}
+}
+
 // inferObjectType unmarshals JSON object data and infers a Record<string, T> type.
 // Returns Record<string, any> for empty or heterogeneous objects.
 func inferObjectType(data []byte) *MarshalTSType {
@@ -872,7 +906,7 @@ func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
 // overrides the default struct serialization. Used by type collection to skip
 // struct-field recursion for types whose wire format differs from their Go fields.
 func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
-	return g.inferTypeFromMarshalCached(t) != nil
+	return g.inferTypeFromMarshalCached(t) != nil || SQLNullTSType(t, g.goTypeToTS) != ""
 }
 
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.
@@ -897,9 +931,18 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		// the element type using Go reflection instead of the zero-value marshal
 		// output, which can only produce any[].
 		if t.Kind() == reflect.Slice && strings.HasSuffix(mt.TSType, "[]") {
-			return g.goTypeToTS(t.Elem()) + "[]"
+			elemType := g.goTypeToTS(t.Elem())
+			if strings.Contains(elemType, " | ") {
+				return "(" + elemType + ")[]"
+			}
+			return elemType + "[]"
 		}
 		return mt.TSType
+	}
+
+	// Check for database/sql nullable types.
+	if tsType := SQLNullTSType(t, g.goTypeToTS); tsType != "" {
+		return tsType
 	}
 
 	switch t.Kind() {
@@ -913,6 +956,9 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		return "boolean"
 	case reflect.Slice:
 		elemType := g.goTypeToTS(t.Elem())
+		if strings.Contains(elemType, " | ") {
+			return "(" + elemType + ")[]"
+		}
 		return elemType + "[]"
 	case reflect.Map:
 		keyType := g.goTypeToTS(t.Key())
