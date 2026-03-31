@@ -77,3 +77,19 @@ func ErrForbidden(message string) *ProtocolError {
 func ErrConnectionRejected(message string) *ProtocolError {
 	return NewError(CodeConnectionRejected, message)
 }
+
+// CancelReason represents why a request context was canceled.
+type CancelReason struct {
+	reason string
+}
+
+func (r *CancelReason) Error() string { return r.reason }
+
+var (
+	// ErrClientCanceled indicates the client explicitly canceled the request.
+	ErrClientCanceled = &CancelReason{"client canceled"}
+	// ErrConnectionClosed indicates the client disconnected.
+	ErrConnectionClosed = &CancelReason{"connection closed"}
+	// ErrServerShutdown indicates the server is shutting down.
+	ErrServerShutdown = &CancelReason{"server shutdown"}
+)

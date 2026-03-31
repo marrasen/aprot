@@ -19,7 +19,7 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 - **Progress reporting** - Built-in support for long-running operations with progress updates
 - **Hierarchical sub-tasks** - Nested task trees with progress tracking, streamed to clients during handler execution
 - **Shared tasks** - Server-wide tasks visible to all clients via push events, with cancel support
-- **Request cancellation** - Clients can cancel in-flight requests via AbortController
+- **Request cancellation** - Clients can cancel in-flight requests via AbortController, with cancel cause reporting (client cancel, disconnect, server shutdown)
 - **Server push** - Broadcast events to all connected clients
 - **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
 - **Dual transport** - WebSocket and SSE+HTTP transports with identical API
@@ -285,7 +285,38 @@ info := aprot.HandlerInfoFromContext(ctx)  // Handler metadata and options
 req := aprot.RequestFromContext(ctx)       // Request ID, method, params
 conn := aprot.Connection(ctx)              // WebSocket connection
 progress := aprot.Progress(ctx)            // Progress reporter
+cause := aprot.CancelCause(ctx)           // Why the request was canceled (nil if not canceled)
 ```
+
+### Cancel Cause
+
+When a handler's context is canceled, `aprot.CancelCause(ctx)` returns the reason. Use `errors.Is` to distinguish between the three cancellation sources:
+
+```go
+func (h *Handlers) LongRunning(ctx context.Context, req *Request) (*Response, error) {
+    select {
+    case <-ctx.Done():
+        cause := aprot.CancelCause(ctx)
+        switch {
+        case errors.Is(cause, aprot.ErrClientCanceled):
+            // Client explicitly canceled the request (AbortController, TypeCancel message)
+        case errors.Is(cause, aprot.ErrConnectionClosed):
+            // Client disconnected (closed tab, network loss)
+        case errors.Is(cause, aprot.ErrServerShutdown):
+            // Server is shutting down via server.Stop()
+        }
+        return nil, aprot.ErrCanceled()
+    case result := <-doWork(ctx):
+        return result, nil
+    }
+}
+```
+
+| Sentinel | Trigger |
+|---|---|
+| `aprot.ErrClientCanceled` | Client sends a cancel message |
+| `aprot.ErrConnectionClosed` | Client disconnects |
+| `aprot.ErrServerShutdown` | `server.Stop()` is called |
 
 ### Sub-Tasks
 

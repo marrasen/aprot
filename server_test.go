@@ -47,7 +47,8 @@ type NotificationEvent struct {
 
 // Integration test handlers
 type IntegrationHandlers struct {
-	server *Server
+	server      *Server
+	cancelCause chan error // receives cancel cause from CancelCauseCapture handler
 }
 
 func (h *IntegrationHandlers) Echo(ctx context.Context, req *EchoRequest) (*EchoResponse, error) {
@@ -78,6 +79,18 @@ func (h *IntegrationHandlers) TriggerPush(ctx context.Context, req *BroadcastReq
 		conn.Push(&NotificationEvent{Message: req.Message})
 	}
 	return &BroadcastResponse{Sent: true}, nil
+}
+
+func (h *IntegrationHandlers) CancelCauseCapture(ctx context.Context, req *SlowRequest) (*SlowResponse, error) {
+	for i := 1; i <= req.Steps; i++ {
+		select {
+		case <-ctx.Done():
+			h.cancelCause <- CancelCause(ctx)
+			return nil, ErrCanceled()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return &SlowResponse{Completed: true}, nil
 }
 
 func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandlers) {
@@ -1430,5 +1443,112 @@ func TestServerOptionsDefaults(t *testing.T) {
 	}
 	if msg.HeartbeatTimeout != 5000 {
 		t.Errorf("Expected default HeartbeatTimeout 5000, got %d", msg.HeartbeatTimeout)
+	}
+}
+
+func TestCancelCause_ClientCancel(t *testing.T) {
+	ts, _, handlers := setupTestServer(t)
+	defer ts.Close()
+	handlers.cancelCause = make(chan error, 1)
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Start slow request
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.CancelCauseCapture",
+		Params: jsontext.Value(`[{"steps":100}]`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Wait a bit then cancel
+	time.Sleep(50 * time.Millisecond)
+
+	cancel := IncomingMessage{
+		Type: TypeCancel,
+		ID:   "1",
+	}
+	if err := ws.WriteJSON(cancel); err != nil {
+		t.Fatalf("Write cancel failed: %v", err)
+	}
+
+	select {
+	case cause := <-handlers.cancelCause:
+		if !errors.Is(cause, ErrClientCanceled) {
+			t.Errorf("Expected ErrClientCanceled, got %v", cause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for cancel cause")
+	}
+}
+
+func TestCancelCause_ConnectionClose(t *testing.T) {
+	ts, _, handlers := setupTestServer(t)
+	defer ts.Close()
+	handlers.cancelCause = make(chan error, 1)
+
+	ws := connectWS(t, ts)
+
+	// Start slow request
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.CancelCauseCapture",
+		Params: jsontext.Value(`[{"steps":100}]`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Wait a bit then close the connection
+	time.Sleep(50 * time.Millisecond)
+	ws.Close()
+
+	select {
+	case cause := <-handlers.cancelCause:
+		if !errors.Is(cause, ErrConnectionClosed) {
+			t.Errorf("Expected ErrConnectionClosed, got %v", cause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for cancel cause")
+	}
+}
+
+func TestCancelCause_ServerShutdown(t *testing.T) {
+	ts, server, handlers := setupTestServer(t)
+	handlers.cancelCause = make(chan error, 1)
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Start slow request
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "IntegrationHandlers.CancelCauseCapture",
+		Params: jsontext.Value(`[{"steps":100}]`),
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	// Wait a bit then shutdown the server
+	time.Sleep(50 * time.Millisecond)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelCtx()
+	server.Stop(ctx)
+	ts.Close()
+
+	select {
+	case cause := <-handlers.cancelCause:
+		if !errors.Is(cause, ErrServerShutdown) {
+			t.Errorf("Expected ErrServerShutdown, got %v", cause)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timed out waiting for cancel cause")
 	}
 }
