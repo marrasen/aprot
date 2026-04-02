@@ -1252,17 +1252,19 @@ Go types are mapped to TypeScript types during code generation:
 
 The generator creates split files for better organization:
 
-- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`, and any TypeScript types shared across multiple handler groups
+- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`
 - **`{handler-name}.ts`** - Handler-specific interfaces and standalone exported functions
+- **`{package}.ts`** - Shared types used by multiple handler groups (only generated when needed)
 
 ```
 api/
-├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl, shared types
+├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl
+├── models.ts           # Shared types from Go package "models" (auto-generated when shared)
 ├── user-handlers.ts    # UserHandlers interfaces + functions
 └── order-handlers.ts   # OrderHandlers interfaces + functions
 ```
 
-When a Go struct is used as a request or response type by two or more handler groups, its TypeScript interface is automatically placed in `client.ts` and imported by the handler files that reference it. Types used by only one handler group stay in that handler's file.
+When a Go struct is used as a request or response type by two or more handler groups, its TypeScript interface is automatically placed in a separate file named after the Go package it belongs to (e.g., `models.ts` for types from the `models` package). Handler files import shared types from the package file. Types used by only one handler group stay in that handler's file.
 
 Each handler file exports standalone functions that take `ApiClient` as the first argument. This enables tree-shaking and namespace imports when multiple handlers have overlapping method names:
 
