@@ -1252,15 +1252,17 @@ Go types are mapped to TypeScript types during code generation:
 
 The generator creates split files for better organization:
 
-- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`
+- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`, and any TypeScript types shared across multiple handler groups
 - **`{handler-name}.ts`** - Handler-specific interfaces and standalone exported functions
 
 ```
 api/
-├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl
+├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl, shared types
 ├── user-handlers.ts    # UserHandlers interfaces + functions
 └── order-handlers.ts   # OrderHandlers interfaces + functions
 ```
+
+When a Go struct is used as a request or response type by two or more handler groups, its TypeScript interface is automatically placed in `client.ts` and imported by the handler files that reference it. Types used by only one handler group stay in that handler's file.
 
 Each handler file exports standalone functions that take `ApiClient` as the first argument. This enables tree-shaking and namespace imports when multiple handlers have overlapping method names:
 

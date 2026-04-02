@@ -357,9 +357,46 @@ type errorCodeData struct {
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
 
-	// Phase 1: collect base types
+	// Phase 1: Pre-scan all groups to find types shared across 2+ groups.
+	// Shared types go into client.ts (base); group-specific types stay in handler files.
+	typeGroups := make(map[reflect.Type]map[string]bool)
+	enumGroups := make(map[reflect.Type]map[string]bool)
+
+	for _, group := range g.registry.Groups() {
+		g.types = make(map[reflect.Type]string)
+		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+		g.collectGroupTypes(group)
+
+		for t := range g.types {
+			if typeGroups[t] == nil {
+				typeGroups[t] = make(map[string]bool)
+			}
+			typeGroups[t][group.Name] = true
+		}
+		for t := range g.collectedEnums {
+			if enumGroups[t] == nil {
+				enumGroups[t] = make(map[string]bool)
+			}
+			enumGroups[t][group.Name] = true
+		}
+	}
+
+	// Populate base with types used by 2+ groups
 	g.types = make(map[reflect.Type]string)
 	g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+
+	for t, groups := range typeGroups {
+		if len(groups) > 1 {
+			g.types[t] = t.Name()
+		}
+	}
+	for t, groups := range enumGroups {
+		if len(groups) > 1 {
+			if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
+				g.collectedEnums[t] = enumInfo
+			}
+		}
+	}
 
 	// Build base interfaces and enums
 	baseData := templateData{
@@ -414,26 +451,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	for _, group := range g.registry.Groups() {
 		g.types = make(map[reflect.Type]string)
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
-
-		// Collect types for this group
-		for _, info := range group.Handlers {
-			for _, param := range info.Params {
-				g.collectNestedType(param.Type)
-			}
-			if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
-				g.collectType(info.ResponseType)
-			} else {
-				g.collectNestedType(info.ResponseType)
-			}
-		}
-		for _, event := range group.PushEvents {
-			g.collectType(event.DataType)
-		}
-
-		// Include enums explicitly registered for this group
-		for i := range group.Enums {
-			g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
-		}
+		g.collectGroupTypes(group)
 
 		// Exclude types already in base
 		for t := range baseTypeSet {
@@ -842,6 +860,28 @@ func (g *Generator) collectType(t reflect.Type) {
 			continue
 		}
 		g.collectNestedType(field.Type)
+	}
+}
+
+// collectGroupTypes collects all types and enums used by a handler group's
+// handlers, push events, and explicitly registered enums into g.types and
+// g.collectedEnums. Caller must initialize g.types and g.collectedEnums first.
+func (g *Generator) collectGroupTypes(group *HandlerGroup) {
+	for _, info := range group.Handlers {
+		for _, param := range info.Params {
+			g.collectNestedType(param.Type)
+		}
+		if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
+			g.collectType(info.ResponseType)
+		} else {
+			g.collectNestedType(info.ResponseType)
+		}
+	}
+	for _, event := range group.PushEvents {
+		g.collectType(event.DataType)
+	}
+	for i := range group.Enums {
+		g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
 	}
 }
 

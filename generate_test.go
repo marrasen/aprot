@@ -2466,3 +2466,129 @@ func TestGenerateSQLNullTypes(t *testing.T) {
 		}
 	}
 }
+
+// --- Shared type deduplication tests ---
+
+type SharedResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GroupAOnlyResp struct {
+	ValueA string `json:"value_a"`
+}
+
+type GroupBOnlyResp struct {
+	ValueB string `json:"value_b"`
+}
+
+type DedupeGroupA struct{}
+
+func (h *DedupeGroupA) MethodA(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+func (h *DedupeGroupA) MethodA2(ctx context.Context) (*GroupAOnlyResp, error) {
+	return nil, nil
+}
+
+type DedupeGroupB struct{}
+
+func (h *DedupeGroupB) MethodB(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+func (h *DedupeGroupB) MethodB2(ctx context.Context) (*GroupBOnlyResp, error) {
+	return nil, nil
+}
+
+func TestGenerateSharedTypeDedup(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&DedupeGroupA{})
+	registry.Register(&DedupeGroupB{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	baseContent := files["client.ts"]
+	groupAContent := files["dedupe-group-a.ts"]
+	groupBContent := files["dedupe-group-b.ts"]
+
+	// SharedResp should be in client.ts (base), not in handler files
+	if !strings.Contains(baseContent, "export interface SharedResp") {
+		t.Error("Expected SharedResp in client.ts")
+	}
+	if strings.Contains(groupAContent, "export interface SharedResp") {
+		t.Error("SharedResp should not be in dedupe-group-a.ts")
+	}
+	if strings.Contains(groupBContent, "export interface SharedResp") {
+		t.Error("SharedResp should not be in dedupe-group-b.ts")
+	}
+
+	// Handler files should import SharedResp from './client'
+	if !strings.Contains(groupAContent, "SharedResp") {
+		t.Error("Expected SharedResp reference in dedupe-group-a.ts")
+	}
+	if !strings.Contains(groupBContent, "SharedResp") {
+		t.Error("Expected SharedResp reference in dedupe-group-b.ts")
+	}
+	if !strings.Contains(groupAContent, "from './client'") {
+		t.Error("Expected import from './client' in dedupe-group-a.ts")
+	}
+
+	// Group-specific types should stay in their handler files
+	if !strings.Contains(groupAContent, "export interface GroupAOnlyResp") {
+		t.Error("Expected GroupAOnlyResp in dedupe-group-a.ts")
+	}
+	if !strings.Contains(groupBContent, "export interface GroupBOnlyResp") {
+		t.Error("Expected GroupBOnlyResp in dedupe-group-b.ts")
+	}
+	if strings.Contains(baseContent, "GroupAOnlyResp") {
+		t.Error("GroupAOnlyResp should not be in client.ts")
+	}
+	if strings.Contains(baseContent, "GroupBOnlyResp") {
+		t.Error("GroupBOnlyResp should not be in client.ts")
+	}
+}
+
+func TestGenerateSharedTypeDedupWithNestedTypes(t *testing.T) {
+	// PushGroupA-D all use GetUserRequest/GetUserResponse — these should be shared
+	registry := NewRegistry()
+	registry.Register(&PushGroupA{})
+	registry.Register(&PushGroupB{})
+	registry.RegisterPushEventFor(&PushGroupB{}, UserUpdatedEvent{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	baseContent := files["client.ts"]
+	groupAContent := files["push-group-a.ts"]
+	groupBContent := files["push-group-b.ts"]
+
+	// GetUserRequest and GetUserResponse are used by both groups — should be in base
+	if !strings.Contains(baseContent, "export interface GetUserRequest") {
+		t.Error("Expected GetUserRequest in client.ts")
+	}
+	if !strings.Contains(baseContent, "export interface GetUserResponse") {
+		t.Error("Expected GetUserResponse in client.ts")
+	}
+
+	// Should NOT be in handler files
+	if strings.Contains(groupAContent, "export interface GetUserRequest") {
+		t.Error("GetUserRequest should not be in push-group-a.ts")
+	}
+	if strings.Contains(groupBContent, "export interface GetUserResponse") {
+		t.Error("GetUserResponse should not be in push-group-b.ts")
+	}
+
+	// Handler files should import shared types from './client'
+	if !strings.Contains(groupAContent, "GetUserRequest") || !strings.Contains(groupAContent, "from './client'") {
+		t.Error("Expected GetUserRequest import in push-group-a.ts")
+	}
+}
