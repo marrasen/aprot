@@ -419,8 +419,6 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// Generate a {pkg}.ts file for each package that has shared types.
 	// Build a name -> module map for handler import resolution.
 	sharedTypeNames := make(map[string]string) // type name -> module (e.g., "User" -> "./api")
-	sharedPkgFiles := make([]string, 0, len(sharedTypesByPkg))
-
 	// Collect all package names (union of types and enums) for deterministic iteration
 	allSharedPkgs := make(map[string]bool)
 	for pkg := range sharedTypesByPkg {
@@ -472,7 +470,6 @@ func (g *Generator) Generate() (map[string]string, error) {
 			return nil, err
 		}
 		results[pkgData.FileName] = buf.String()
-		sharedPkgFiles = append(sharedPkgFiles, pkgData.FileName)
 	}
 
 	// Build base client data (no user types — just ApiClient, ApiError, ErrorCode, etc.)
