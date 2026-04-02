@@ -11,6 +11,9 @@ import type { PushHandler{{if .BaseTypeImports}}, {{join .BaseTypeImports ", "}}
 {{- else if .BaseTypeImports}}
 import type { {{join .BaseTypeImports ", "}} } from './client';
 {{- end}}
+{{- range .SharedImports}}
+import type { {{join .Names ", "}} } from '{{.Module}}';
+{{- end}}
 
 {{range .Enums -}}
 export const {{.Name}} = {

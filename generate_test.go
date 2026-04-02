@@ -2466,3 +2466,143 @@ func TestGenerateSQLNullTypes(t *testing.T) {
 		}
 	}
 }
+
+// --- Shared type deduplication tests ---
+
+type SharedResp struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type GroupAOnlyResp struct {
+	ValueA string `json:"value_a"`
+}
+
+type GroupBOnlyResp struct {
+	ValueB string `json:"value_b"`
+}
+
+type DedupeGroupA struct{}
+
+func (h *DedupeGroupA) MethodA(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+func (h *DedupeGroupA) MethodA2(ctx context.Context) (*GroupAOnlyResp, error) {
+	return nil, nil
+}
+
+type DedupeGroupB struct{}
+
+func (h *DedupeGroupB) MethodB(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+func (h *DedupeGroupB) MethodB2(ctx context.Context) (*GroupBOnlyResp, error) {
+	return nil, nil
+}
+
+func TestGenerateSharedTypeDedup(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&DedupeGroupA{})
+	registry.Register(&DedupeGroupB{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// Shared types go into a per-package file (aprot.ts since test types are in package aprot)
+	sharedContent, ok := files["aprot.ts"]
+	if !ok {
+		t.Fatalf("Expected aprot.ts for shared types, got files: %v", mapKeys(files))
+	}
+	groupAContent := files["dedupe-group-a.ts"]
+	groupBContent := files["dedupe-group-b.ts"]
+	baseContent := files["client.ts"]
+
+	// SharedResp should be in the shared package file, not in handler files or client.ts
+	if !strings.Contains(sharedContent, "export interface SharedResp") {
+		t.Error("Expected SharedResp in aprot.ts")
+	}
+	if strings.Contains(groupAContent, "export interface SharedResp") {
+		t.Error("SharedResp should not be in dedupe-group-a.ts")
+	}
+	if strings.Contains(groupBContent, "export interface SharedResp") {
+		t.Error("SharedResp should not be in dedupe-group-b.ts")
+	}
+	if strings.Contains(baseContent, "export interface SharedResp") {
+		t.Error("SharedResp should not be in client.ts")
+	}
+
+	// Handler files should import SharedResp from the package file
+	if !strings.Contains(groupAContent, "SharedResp") {
+		t.Error("Expected SharedResp reference in dedupe-group-a.ts")
+	}
+	if !strings.Contains(groupBContent, "SharedResp") {
+		t.Error("Expected SharedResp reference in dedupe-group-b.ts")
+	}
+	if !strings.Contains(groupAContent, "from './aprot'") {
+		t.Error("Expected import from './aprot' in dedupe-group-a.ts")
+	}
+	if !strings.Contains(groupBContent, "from './aprot'") {
+		t.Error("Expected import from './aprot' in dedupe-group-b.ts")
+	}
+
+	// Group-specific types should stay in their handler files
+	if !strings.Contains(groupAContent, "export interface GroupAOnlyResp") {
+		t.Error("Expected GroupAOnlyResp in dedupe-group-a.ts")
+	}
+	if !strings.Contains(groupBContent, "export interface GroupBOnlyResp") {
+		t.Error("Expected GroupBOnlyResp in dedupe-group-b.ts")
+	}
+	if strings.Contains(sharedContent, "GroupAOnlyResp") {
+		t.Error("GroupAOnlyResp should not be in aprot.ts")
+	}
+	if strings.Contains(sharedContent, "GroupBOnlyResp") {
+		t.Error("GroupBOnlyResp should not be in aprot.ts")
+	}
+}
+
+func TestGenerateSharedTypeDedupWithNestedTypes(t *testing.T) {
+	// PushGroupA and PushGroupB both use GetUserRequest/GetUserResponse — these should be shared
+	registry := NewRegistry()
+	registry.Register(&PushGroupA{})
+	registry.Register(&PushGroupB{})
+	registry.RegisterPushEventFor(&PushGroupB{}, UserUpdatedEvent{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	sharedContent, ok := files["aprot.ts"]
+	if !ok {
+		t.Fatalf("Expected aprot.ts for shared types, got files: %v", mapKeys(files))
+	}
+	groupAContent := files["push-group-a.ts"]
+	groupBContent := files["push-group-b.ts"]
+
+	// GetUserRequest and GetUserResponse are used by both groups — should be in shared file
+	if !strings.Contains(sharedContent, "export interface GetUserRequest") {
+		t.Error("Expected GetUserRequest in aprot.ts")
+	}
+	if !strings.Contains(sharedContent, "export interface GetUserResponse") {
+		t.Error("Expected GetUserResponse in aprot.ts")
+	}
+
+	// Should NOT be in handler files
+	if strings.Contains(groupAContent, "export interface GetUserRequest") {
+		t.Error("GetUserRequest should not be in push-group-a.ts")
+	}
+	if strings.Contains(groupBContent, "export interface GetUserResponse") {
+		t.Error("GetUserResponse should not be in push-group-b.ts")
+	}
+
+	// Handler files should import shared types from the package file
+	if !strings.Contains(groupAContent, "GetUserRequest") || !strings.Contains(groupAContent, "from './aprot'") {
+		t.Error("Expected GetUserRequest import from './aprot' in push-group-a.ts")
+	}
+}

@@ -286,6 +286,12 @@ func (g *Generator) WithOptions(opts GeneratorOptions) *Generator {
 	return g
 }
 
+// typeImportGroup represents a set of type names to import from a single module.
+type typeImportGroup struct {
+	Module string   // e.g., "./client", "./api"
+	Names  []string // sorted type names
+}
+
 // templateData holds all data needed for template rendering.
 type templateData struct {
 	StructName       string
@@ -295,7 +301,8 @@ type templateData struct {
 	PushEvents       []pushEventData
 	CustomErrorCodes []errorCodeData
 	Enums            []enumTemplateData
-	BaseTypeImports  []string // base type names to import from './client' (handler files only)
+	BaseTypeImports  []string          // base type names to import from './client' (handler files only)
+	SharedImports    []typeImportGroup  // shared type imports from package files (e.g., "./api")
 }
 
 type enumTemplateData struct {
@@ -357,17 +364,119 @@ type errorCodeData struct {
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
 
-	// Phase 1: collect base types
-	g.types = make(map[reflect.Type]string)
-	g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+	// Phase 1: Pre-scan all groups to find types shared across 2+ groups.
+	// Shared types go into per-package .ts files; group-specific types stay in handler files.
+	typeGroups := make(map[reflect.Type]map[string]bool)
+	enumGroups := make(map[reflect.Type]map[string]bool)
 
-	// Build base interfaces and enums
+	for _, group := range g.registry.Groups() {
+		g.types = make(map[reflect.Type]string)
+		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+		g.collectGroupTypes(group)
+
+		for t := range g.types {
+			if typeGroups[t] == nil {
+				typeGroups[t] = make(map[string]bool)
+			}
+			typeGroups[t][group.Name] = true
+		}
+		for t := range g.collectedEnums {
+			if enumGroups[t] == nil {
+				enumGroups[t] = make(map[string]bool)
+			}
+			enumGroups[t][group.Name] = true
+		}
+	}
+
+	// Group shared types by Go package name.
+	// sharedTypesByPkg maps package name -> set of reflect.Types
+	sharedTypesByPkg := make(map[string]map[reflect.Type]bool)
+	sharedEnumsByPkg := make(map[string]map[reflect.Type]bool)
+	sharedTypeSet := make(map[reflect.Type]bool)
+	sharedEnumSet := make(map[reflect.Type]bool)
+
+	for t, groups := range typeGroups {
+		if len(groups) > 1 {
+			pkg := pkgShortName(t.PkgPath())
+			if sharedTypesByPkg[pkg] == nil {
+				sharedTypesByPkg[pkg] = make(map[reflect.Type]bool)
+			}
+			sharedTypesByPkg[pkg][t] = true
+			sharedTypeSet[t] = true
+		}
+	}
+	for t, groups := range enumGroups {
+		if len(groups) > 1 {
+			pkg := pkgShortName(t.PkgPath())
+			if sharedEnumsByPkg[pkg] == nil {
+				sharedEnumsByPkg[pkg] = make(map[reflect.Type]bool)
+			}
+			sharedEnumsByPkg[pkg][t] = true
+			sharedEnumSet[t] = true
+		}
+	}
+
+	// Generate a {pkg}.ts file for each package that has shared types.
+	// Build a name -> module map for handler import resolution.
+	sharedTypeNames := make(map[string]string) // type name -> module (e.g., "User" -> "./api")
+	// Collect all package names (union of types and enums) for deterministic iteration
+	allSharedPkgs := make(map[string]bool)
+	for pkg := range sharedTypesByPkg {
+		allSharedPkgs[pkg] = true
+	}
+	for pkg := range sharedEnumsByPkg {
+		allSharedPkgs[pkg] = true
+	}
+	sortedPkgs := make([]string, 0, len(allSharedPkgs))
+	for pkg := range allSharedPkgs {
+		sortedPkgs = append(sortedPkgs, pkg)
+	}
+	sort.Strings(sortedPkgs)
+
+	for _, pkg := range sortedPkgs {
+		g.types = make(map[reflect.Type]string)
+		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+
+		if types, ok := sharedTypesByPkg[pkg]; ok {
+			for t := range types {
+				g.types[t] = t.Name()
+			}
+		}
+		if enums, ok := sharedEnumsByPkg[pkg]; ok {
+			for t := range enums {
+				if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
+					g.collectedEnums[t] = enumInfo
+				}
+			}
+		}
+
+		pkgData := templateData{
+			StructName: pkg,
+			FileName:   pkg + ".ts",
+		}
+		pkgData.Interfaces = g.buildInterfaces()
+		pkgData.Enums = g.buildEnums()
+
+		module := "./" + pkg
+		for _, iface := range pkgData.Interfaces {
+			sharedTypeNames[iface.Name] = module
+		}
+		for _, enum := range pkgData.Enums {
+			sharedTypeNames[enum.Name+"Type"] = module
+		}
+
+		var buf strings.Builder
+		if err := templates.ExecuteTemplate(&buf, "client-shared.ts.tmpl", pkgData); err != nil {
+			return nil, err
+		}
+		results[pkgData.FileName] = buf.String()
+	}
+
+	// Build base client data (no user types — just ApiClient, ApiError, ErrorCode, etc.)
 	baseData := templateData{
 		StructName: "Base",
 		FileName:   "client.ts",
 	}
-	baseData.Interfaces = g.buildInterfaces()
-	baseData.Enums = g.buildEnums()
 	for _, ec := range g.registry.ErrorCodes() {
 		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
 			Name:       ec.Name,
@@ -376,25 +485,8 @@ func (g *Generator) Generate() (map[string]string, error) {
 		})
 	}
 
-	// Snapshot base types for dedup
-	baseTypeSet := make(map[reflect.Type]string, len(g.types))
-	for t, name := range g.types {
-		baseTypeSet[t] = name
-	}
-	baseEnumSet := make(map[reflect.Type]*EnumInfo, len(g.collectedEnums))
-	for t, info := range g.collectedEnums {
-		baseEnumSet[t] = info
-	}
-
-	// Build base type name set for handler import resolution.
-	// Includes interface names and enum companion type names (e.g., "TaskNodeStatusType").
+	// Build base type name set for handler import resolution (RequestOptions, PushHandler, etc.)
 	baseTypeNames := make(map[string]bool)
-	for _, iface := range baseData.Interfaces {
-		baseTypeNames[iface.Name] = true
-	}
-	for _, enum := range baseData.Enums {
-		baseTypeNames[enum.Name+"Type"] = true
-	}
 
 	baseTemplateName := "client-base.ts.tmpl"
 	if g.options.Mode == OutputReact {
@@ -414,37 +506,19 @@ func (g *Generator) Generate() (map[string]string, error) {
 	for _, group := range g.registry.Groups() {
 		g.types = make(map[reflect.Type]string)
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
+		g.collectGroupTypes(group)
 
-		// Collect types for this group
-		for _, info := range group.Handlers {
-			for _, param := range info.Params {
-				g.collectNestedType(param.Type)
-			}
-			if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
-				g.collectType(info.ResponseType)
-			} else {
-				g.collectNestedType(info.ResponseType)
-			}
-		}
-		for _, event := range group.PushEvents {
-			g.collectType(event.DataType)
-		}
-
-		// Include enums explicitly registered for this group
-		for i := range group.Enums {
-			g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
-		}
-
-		// Exclude types already in base
-		for t := range baseTypeSet {
+		// Exclude shared types (they live in per-package .ts files)
+		for t := range sharedTypeSet {
 			delete(g.types, t)
 		}
-		for t := range baseEnumSet {
+		for t := range sharedEnumSet {
 			delete(g.collectedEnums, t)
 		}
 
 		data := g.buildTemplateData(group, paramNames)
 		data.BaseTypeImports = findBaseTypeImports(&data, baseTypeNames)
+		data.SharedImports = findSharedTypeImports(&data, sharedTypeNames)
 
 		var buf strings.Builder
 		if err := templates.ExecuteTemplate(&buf, handlerTemplateName, data); err != nil {
@@ -787,6 +861,65 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 	return result
 }
 
+// pkgShortName extracts the last path element from a Go package path.
+// e.g., "github.com/user/project/api" -> "api"
+func pkgShortName(pkgPath string) string {
+	if i := strings.LastIndex(pkgPath, "/"); i >= 0 {
+		return pkgPath[i+1:]
+	}
+	return pkgPath
+}
+
+// findSharedTypeImports scans handler template data for references to shared type names
+// and returns import groups organized by module. sharedTypeNames maps type name -> module.
+func findSharedTypeImports(data *templateData, sharedTypeNames map[string]string) []typeImportGroup {
+	// Collect referenced type names grouped by module
+	byModule := make(map[string]map[string]bool)
+	scanRef := func(text string) {
+		for name, module := range sharedTypeNames {
+			if strings.Contains(text, name) {
+				if byModule[module] == nil {
+					byModule[module] = make(map[string]bool)
+				}
+				byModule[module][name] = true
+			}
+		}
+	}
+
+	for _, iface := range data.Interfaces {
+		for _, field := range iface.Fields {
+			scanRef(field.Type)
+		}
+	}
+	for _, m := range data.Methods {
+		scanRef(m.ResponseType)
+		for _, p := range m.Params {
+			scanRef(p.Type)
+		}
+	}
+	for _, ev := range data.PushEvents {
+		scanRef(ev.DataType)
+	}
+
+	// Build sorted result
+	modules := make([]string, 0, len(byModule))
+	for m := range byModule {
+		modules = append(modules, m)
+	}
+	sort.Strings(modules)
+
+	groups := make([]typeImportGroup, 0, len(modules))
+	for _, m := range modules {
+		names := make([]string, 0, len(byModule[m]))
+		for n := range byModule[m] {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		groups = append(groups, typeImportGroup{Module: m, Names: names})
+	}
+	return groups
+}
+
 // collectInterfaceFields collects fields from a struct, flattening anonymous (embedded)
 // struct fields to match encoding/json marshaling behavior.
 func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
@@ -842,6 +975,28 @@ func (g *Generator) collectType(t reflect.Type) {
 			continue
 		}
 		g.collectNestedType(field.Type)
+	}
+}
+
+// collectGroupTypes collects all types and enums used by a handler group's
+// handlers, push events, and explicitly registered enums into g.types and
+// g.collectedEnums. Caller must initialize g.types and g.collectedEnums first.
+func (g *Generator) collectGroupTypes(group *HandlerGroup) {
+	for _, info := range group.Handlers {
+		for _, param := range info.Params {
+			g.collectNestedType(param.Type)
+		}
+		if info.ResponseType.Kind() == reflect.Struct && info.ResponseType != voidResponseType {
+			g.collectType(info.ResponseType)
+		} else {
+			g.collectNestedType(info.ResponseType)
+		}
+	}
+	for _, event := range group.PushEvents {
+		g.collectType(event.DataType)
+	}
+	for i := range group.Enums {
+		g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
 	}
 }
 
