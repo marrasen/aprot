@@ -696,4 +696,3 @@ func TestMixedPushToUser(t *testing.T) {
 
 	wg.Wait()
 }
-

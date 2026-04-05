@@ -5,7 +5,7 @@ import "context"
 type contextKey int
 
 const (
-	deliveryKey    contextKey = iota
+	deliveryKey contextKey = iota
 	taskNodeKey
 	taskSlotKey
 	taskManagerKey

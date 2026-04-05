@@ -6,14 +6,14 @@ import "github.com/go-json-experiment/json/jsontext"
 type MessageType string
 
 const (
-	TypeRequest  MessageType = "request"
-	TypeCancel   MessageType = "cancel"
-	TypeResponse MessageType = "response"
-	TypeError    MessageType = "error"
-	TypeProgress MessageType = "progress"
-	TypePush     MessageType = "push"
-	TypePing     MessageType = "ping"
-	TypePong     MessageType = "pong"
+	TypeRequest   MessageType = "request"
+	TypeCancel    MessageType = "cancel"
+	TypeResponse  MessageType = "response"
+	TypeError     MessageType = "error"
+	TypeProgress  MessageType = "progress"
+	TypePush      MessageType = "push"
+	TypePing      MessageType = "ping"
+	TypePong      MessageType = "pong"
 	TypeConfig    MessageType = "config"
 	TypeConnected MessageType = "connected"
 )

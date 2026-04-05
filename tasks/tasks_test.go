@@ -65,7 +65,7 @@ func TestAppendTaskConvenienceCode_SingleFileReact(t *testing.T) {
 
 func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 	results := map[string]string{
-		"client.ts":              "// base\n",
+		"client.ts":        "// base\n",
 		"tasks-handler.ts": "// handler\n",
 	}
 	appendTaskConvenienceCode(results, aprot.OutputVanilla, nil)
@@ -103,7 +103,7 @@ func TestAppendTaskConvenienceCode_MultiFileVanilla(t *testing.T) {
 
 func TestAppendTaskConvenienceCode_MultiFileReact(t *testing.T) {
 	results := map[string]string{
-		"client.ts":              "// base\n",
+		"client.ts":        "// base\n",
 		"tasks-handler.ts": "// handler\n",
 	}
 	appendTaskConvenienceCode(results, aprot.OutputReact, nil)

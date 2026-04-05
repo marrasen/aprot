@@ -65,7 +65,7 @@ type Server struct {
 	stopHooks       []func()
 	stopping        atomic.Bool   // reject new connections when set
 	stopCh          chan struct{} // closed by Stop() to signal run() to drain and exit
-	stopOnce        sync.Once    // ensures stopCh is closed only once
+	stopOnce        sync.Once     // ensures stopCh is closed only once
 	done            chan struct{} // closed by run() when it finishes
 	requestsWg      sync.WaitGroup
 }
