@@ -2696,3 +2696,136 @@ func TestGenerateSharedTypeNoPhantomImports(t *testing.T) {
 		t.Error("PhantomRespDetailType should NOT be imported in phantom-group-b.ts (phantom import from substring match)")
 	}
 }
+
+// --- Shared enum tests (RegisterEnum without handler) ---
+
+type SharedEnumGroupA struct{}
+
+func (h *SharedEnumGroupA) GetItems(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+type SharedEnumGroupB struct{}
+
+func (h *SharedEnumGroupB) GetOtherItems(ctx context.Context) (*SharedResp, error) {
+	return nil, nil
+}
+
+type SharedVisibility string
+
+const (
+	SharedVisibilityPublic  SharedVisibility = "public"
+	SharedVisibilityPrivate SharedVisibility = "private"
+	SharedVisibilityFriends SharedVisibility = "friends"
+)
+
+func SharedVisibilityValues() []SharedVisibility {
+	return []SharedVisibility{SharedVisibilityPublic, SharedVisibilityPrivate, SharedVisibilityFriends}
+}
+
+func TestRegisterEnum_SharedFile(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&SharedEnumGroupA{})
+	registry.Register(&SharedEnumGroupB{})
+	registry.RegisterEnum(SharedVisibilityValues())
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// Shared enum should be in the per-package shared file
+	sharedContent, ok := files["aprot.ts"]
+	if !ok {
+		t.Fatalf("Expected aprot.ts for shared enums, got files: %v", mapKeys(files))
+	}
+
+	if !strings.Contains(sharedContent, "SharedVisibility") {
+		t.Error("Expected SharedVisibility in aprot.ts")
+	}
+	if !strings.Contains(sharedContent, `Public: "public"`) {
+		t.Errorf("Expected Public enum value in aprot.ts, got:\n%s", sharedContent)
+	}
+	if !strings.Contains(sharedContent, `Private: "private"`) {
+		t.Errorf("Expected Private enum value in aprot.ts, got:\n%s", sharedContent)
+	}
+	if !strings.Contains(sharedContent, `Friends: "friends"`) {
+		t.Errorf("Expected Friends enum value in aprot.ts, got:\n%s", sharedContent)
+	}
+
+	// Shared enum should NOT appear in handler files
+	groupAContent := files["shared-enum-group-a.ts"]
+	groupBContent := files["shared-enum-group-b.ts"]
+
+	if strings.Contains(groupAContent, "SharedVisibility") {
+		t.Error("SharedVisibility should not be defined in shared-enum-group-a.ts")
+	}
+	if strings.Contains(groupBContent, "SharedVisibility") {
+		t.Error("SharedVisibility should not be defined in shared-enum-group-b.ts")
+	}
+}
+
+func TestRegisterEnum_SingleFile(t *testing.T) {
+	// Test that RegisterEnum works with GenerateTo (single-file mode)
+	registry := NewRegistry()
+	registry.Register(&SharedEnumGroupA{})
+	registry.RegisterEnum(SharedVisibilityValues())
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "SharedVisibility") {
+		t.Error("Expected SharedVisibility in single-file output")
+	}
+	if !strings.Contains(out, `Public: "public"`) {
+		t.Errorf("Expected Public enum value, got:\n%s", out)
+	}
+}
+
+func TestRegisterEnum_InEnumTypes(t *testing.T) {
+	// Verify that RegisterEnum adds to the global enumTypes map for goTypeToTS resolution
+	registry := NewRegistry()
+	registry.RegisterEnum(SharedVisibilityValues())
+
+	enumInfo := registry.GetEnum(reflect.TypeOf(SharedVisibility("")))
+	if enumInfo == nil {
+		t.Fatal("Expected SharedVisibility in enumTypes after RegisterEnum")
+	}
+	if enumInfo.Name != "SharedVisibility" {
+		t.Errorf("Name = %q, want SharedVisibility", enumInfo.Name)
+	}
+	if len(enumInfo.Values) != 3 {
+		t.Errorf("Values count = %d, want 3", len(enumInfo.Values))
+	}
+}
+
+func TestRegisterEnum_SharedEnumsAccessor(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterEnum(SharedVisibilityValues())
+
+	shared := registry.SharedEnums()
+	if len(shared) != 1 {
+		t.Fatalf("SharedEnums() = %d, want 1", len(shared))
+	}
+	if shared[0].Name != "SharedVisibility" {
+		t.Errorf("Name = %q, want SharedVisibility", shared[0].Name)
+	}
+
+	// Also verify Enums() includes shared enums
+	all := registry.Enums()
+	found := false
+	for _, e := range all {
+		if e.Name == "SharedVisibility" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Enums() should include shared enums")
+	}
+}

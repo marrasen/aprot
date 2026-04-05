@@ -173,7 +173,7 @@ func (c *Conn) push(event string, data any) error {
 }
 
 func (c *Conn) sendJSON(v any) error {
-	data, err := json.Marshal(v)
+	data, err := marshalJSON(v)
 	if err != nil {
 		return err
 	}
