@@ -1,0 +1,10 @@
+#!/bin/sh
+
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "The following Go files are not formatted:"
+  echo "$unformatted"
+  echo ""
+  echo "Run 'go fmt ./...' to fix."
+  exit 1
+fi
