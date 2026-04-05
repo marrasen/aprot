@@ -818,6 +818,32 @@ func (g *Generator) buildEnums() []enumTemplateData {
 	return enums
 }
 
+// isIdentChar reports whether c is a valid Go/TypeScript identifier character.
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+// containsTypeName checks whether name appears as a complete identifier in typeStr,
+// not as a substring of a longer identifier. For example, containsTypeName("UserProfile", "User")
+// returns false, but containsTypeName("User[]", "User") returns true.
+func containsTypeName(typeStr, name string) bool {
+	idx := 0
+	for {
+		i := strings.Index(typeStr[idx:], name)
+		if i < 0 {
+			return false
+		}
+		start := idx + i
+		end := start + len(name)
+		startOk := start == 0 || !isIdentChar(typeStr[start-1])
+		endOk := end == len(typeStr) || !isIdentChar(typeStr[end])
+		if startOk && endOk {
+			return true
+		}
+		idx = start + 1
+	}
+}
+
 // findBaseTypeImports returns the set of base type names referenced by the handler's
 // interface fields, method responses, and push event data types. These need to be
 // imported from './client' in multi-file mode.
@@ -826,7 +852,7 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 	for _, iface := range data.Interfaces {
 		for _, field := range iface.Fields {
 			for name := range baseTypeNames {
-				if strings.Contains(field.Type, name) {
+				if containsTypeName(field.Type, name) {
 					referenced[name] = true
 				}
 			}
@@ -834,13 +860,13 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 	}
 	for _, m := range data.Methods {
 		for name := range baseTypeNames {
-			if strings.Contains(m.ResponseType, name) {
+			if containsTypeName(m.ResponseType, name) {
 				referenced[name] = true
 			}
 		}
 		for _, p := range m.Params {
 			for name := range baseTypeNames {
-				if strings.Contains(p.Type, name) {
+				if containsTypeName(p.Type, name) {
 					referenced[name] = true
 				}
 			}
@@ -848,7 +874,7 @@ func findBaseTypeImports(data *templateData, baseTypeNames map[string]bool) []st
 	}
 	for _, ev := range data.PushEvents {
 		for name := range baseTypeNames {
-			if strings.Contains(ev.DataType, name) {
+			if containsTypeName(ev.DataType, name) {
 				referenced[name] = true
 			}
 		}
@@ -877,7 +903,7 @@ func findSharedTypeImports(data *templateData, sharedTypeNames map[string]string
 	byModule := make(map[string]map[string]bool)
 	scanRef := func(text string) {
 		for name, module := range sharedTypeNames {
-			if strings.Contains(text, name) {
+			if containsTypeName(text, name) {
 				if byModule[module] == nil {
 					byModule[module] = make(map[string]bool)
 				}

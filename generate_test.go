@@ -2606,3 +2606,93 @@ func TestGenerateSharedTypeDedupWithNestedTypes(t *testing.T) {
 		t.Error("Expected GetUserRequest import from './aprot' in push-group-a.ts")
 	}
 }
+
+func TestContainsTypeName(t *testing.T) {
+	tests := []struct {
+		typeStr string
+		name    string
+		want    bool
+	}{
+		{"StationHistoryActionType", "HistoryAction", false},
+		{"HistoryAction[]", "HistoryAction", true},
+		{"HistoryAction", "HistoryAction", true},
+		{"Record<string, HistoryAction>", "HistoryAction", true},
+		{"HistoryAction | null", "HistoryAction", true},
+		{"SomeHistoryAction", "HistoryAction", false},
+		{"HistoryActionExtra", "HistoryAction", false},
+		{"User", "User", true},
+		{"User[]", "User", true},
+		{"UserProfile", "User", false},
+		{"AdminUser", "User", false},
+	}
+	for _, tt := range tests {
+		got := containsTypeName(tt.typeStr, tt.name)
+		if got != tt.want {
+			t.Errorf("containsTypeName(%q, %q) = %v, want %v", tt.typeStr, tt.name, got, tt.want)
+		}
+	}
+}
+
+// PhantomResp is shared between two groups. It has a field whose type name
+// is a superstring of PhantomResp's name (PhantomRespDetailType enum).
+type PhantomResp struct {
+	ID     string               `json:"id"`
+	Detail PhantomRespDetailType `json:"detail"`
+}
+
+type PhantomRespDetailType string
+
+type PhantomGroupSpecific struct {
+	Value string `json:"value"`
+}
+
+type PhantomGroupA struct{}
+
+func (h *PhantomGroupA) DoA(ctx context.Context) (*PhantomResp, error) { return nil, nil }
+
+type PhantomGroupB struct{}
+
+func (h *PhantomGroupB) DoB(ctx context.Context) (*PhantomResp, error)            { return nil, nil }
+func (h *PhantomGroupB) DoB2(ctx context.Context) (*PhantomGroupSpecific, error) { return nil, nil }
+
+func TestGenerateSharedTypeNoPhantomImports(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&PhantomGroupA{})
+	registry.Register(&PhantomGroupB{})
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// PhantomResp is shared, goes to aprot.ts
+	sharedContent, ok := files["aprot.ts"]
+	if !ok {
+		t.Fatalf("Expected aprot.ts, got files: %v", mapKeys(files))
+	}
+	if !strings.Contains(sharedContent, "export interface PhantomResp") {
+		t.Error("Expected PhantomResp in aprot.ts")
+	}
+
+	// PhantomGroupB has DoB2 returning PhantomGroupSpecific — it references PhantomResp
+	// only via method return type, not PhantomRespDetailType. The handler should NOT
+	// import PhantomResp (it's not used directly in the handler file — only in the shared file's fields).
+	groupBContent := files["phantom-group-b.ts"]
+
+	// PhantomGroupSpecific should be in handler file (only used by group B)
+	if !strings.Contains(groupBContent, "export interface PhantomGroupSpecific") {
+		t.Error("Expected PhantomGroupSpecific in phantom-group-b.ts")
+	}
+
+	// PhantomResp SHOULD be imported (it's the return type of DoB)
+	if !strings.Contains(groupBContent, "PhantomResp") {
+		t.Error("Expected PhantomResp import in phantom-group-b.ts")
+	}
+
+	// PhantomRespDetailType should NOT be imported (it's only used inside PhantomResp in the shared file)
+	// This is the phantom import bug — "PhantomResp" is a substring of "PhantomRespDetailType"
+	if strings.Contains(groupBContent, "PhantomRespDetailType") {
+		t.Error("PhantomRespDetailType should NOT be imported in phantom-group-b.ts (phantom import from substring match)")
+	}
+}
