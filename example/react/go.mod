@@ -1,13 +1,12 @@
 module github.com/marrasen/aprot/example/react
 
-go 1.25
+go 1.26
 
-require github.com/marrasen/aprot v0.0.0
+require github.com/marrasen/aprot v0.30.0
 
 require (
-	github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e // indirect
-	github.com/gorilla/websocket v1.5.1 // indirect
-	golang.org/x/net v0.17.0 // indirect
+	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 )
 
 replace github.com/marrasen/aprot => ../..
