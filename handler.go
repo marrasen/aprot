@@ -96,6 +96,7 @@ type Registry struct {
 	errorMappings   []errorMapping                                     // error -> code mappings
 	nextErrorCode   int                                                // auto-incrementing error code
 	enumTypes       map[reflect.Type]*EnumInfo                         // for lookup in goTypeToTS
+	sharedEnums     []EnumInfo                                         // enums not tied to a handler group
 	generateHooks   []func(results map[string]string, mode OutputMode) // hooks run after generation
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 }
@@ -304,14 +305,28 @@ func (r *Registry) RegisterEnumFor(handler any, values any) {
 	r.enumTypes[enumInfo.Type] = &group.Enums[len(group.Enums)-1]
 }
 
+// RegisterEnum registers an enum type that is not tied to any handler group.
+// The enum will be generated in a shared TypeScript file, importable by all handler files.
+// Pass the result of a Values() function (e.g. EventTypeValues()).
+//
+// Example:
+//
+//	registry.RegisterEnum(EventTypeValues())
+//	registry.RegisterEnum(RSVPStatusValues())
+func (r *Registry) RegisterEnum(values any) {
+	enumInfo := r.buildEnumInfo(values)
+	r.sharedEnums = append(r.sharedEnums, enumInfo)
+	r.enumTypes[enumInfo.Type] = &r.sharedEnums[len(r.sharedEnums)-1]
+}
+
 // buildEnumInfo creates an EnumInfo from a slice of enum values.
 func (r *Registry) buildEnumInfo(values any) EnumInfo {
 	v := reflect.ValueOf(values)
 	if v.Kind() != reflect.Slice {
-		panic(fmt.Sprintf("aprot: RegisterEnumFor requires a slice, got %v", v.Kind()))
+		panic(fmt.Sprintf("aprot: RegisterEnum requires a slice, got %v", v.Kind()))
 	}
 	if v.Len() == 0 {
-		panic("aprot: RegisterEnumFor requires a non-empty slice")
+		panic("aprot: RegisterEnum requires a non-empty slice")
 	}
 
 	elemType := v.Type().Elem()
@@ -369,13 +384,19 @@ func (r *Registry) GetEnum(t reflect.Type) *EnumInfo {
 	return r.enumTypes[t]
 }
 
-// Enums returns all registered enum types across all handler groups.
+// Enums returns all registered enum types across all handler groups and shared enums.
 func (r *Registry) Enums() []EnumInfo {
 	var all []EnumInfo
 	for _, group := range r.groups {
 		all = append(all, group.Enums...)
 	}
+	all = append(all, r.sharedEnums...)
 	return all
+}
+
+// SharedEnums returns enum types registered via RegisterEnum (not tied to any handler group).
+func (r *Registry) SharedEnums() []EnumInfo {
+	return r.sharedEnums
 }
 
 // OnGenerate registers a hook called after code generation.
@@ -616,14 +637,14 @@ func unmarshalParam(t reflect.Type, data jsontext.Value) (reflect.Value, error) 
 	if t.Kind() == reflect.Ptr {
 		// Pointer param: create *T, unmarshal into it, return the pointer
 		ptr := reflect.New(t.Elem())
-		if err := json.Unmarshal(data, ptr.Interface()); err != nil {
+		if err := unmarshalJSON(data, ptr.Interface()); err != nil {
 			return reflect.Value{}, err
 		}
 		return ptr, nil
 	}
 	// Value param: create *T, unmarshal, return the dereferenced value
 	ptr := reflect.New(t)
-	if err := json.Unmarshal(data, ptr.Interface()); err != nil {
+	if err := unmarshalJSON(data, ptr.Interface()); err != nil {
 		return reflect.Value{}, err
 	}
 	return ptr.Elem(), nil

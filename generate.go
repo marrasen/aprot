@@ -416,6 +416,19 @@ func (g *Generator) Generate() (map[string]string, error) {
 		}
 	}
 
+	// Enums registered via RegisterEnum (not tied to any handler group) always
+	// go into shared per-package files.
+	for i := range g.registry.SharedEnums() {
+		ei := &g.registry.SharedEnums()[i]
+		t := ei.Type
+		pkg := pkgShortName(t.PkgPath())
+		if sharedEnumsByPkg[pkg] == nil {
+			sharedEnumsByPkg[pkg] = make(map[reflect.Type]bool)
+		}
+		sharedEnumsByPkg[pkg][t] = true
+		sharedEnumSet[t] = true
+	}
+
 	// Generate a {pkg}.ts file for each package that has shared types.
 	// Build a name -> module map for handler import resolution.
 	sharedTypeNames := make(map[string]string) // type name -> module (e.g., "User" -> "./api")
@@ -578,6 +591,11 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		for i := range group.Enums {
 			g.collectedEnums[group.Enums[i].Type] = &group.Enums[i]
 		}
+	}
+	// Include shared enums (not tied to any handler group)
+	for i := range g.registry.SharedEnums() {
+		ei := &g.registry.SharedEnums()[i]
+		g.collectedEnums[ei.Type] = ei
 	}
 
 	// Extract param names from AST
