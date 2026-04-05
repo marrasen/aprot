@@ -29,7 +29,7 @@ type ParamInfo struct {
 // HandlerInfo contains metadata about a registered handler method.
 type HandlerInfo struct {
 	Name         string
-	Params       []ParamInfo   // handler parameters (after ctx), empty for no-params handlers
+	Params       []ParamInfo // handler parameters (after ctx), empty for no-params handlers
 	ResponseType reflect.Type
 	StructName   string
 	IsVoid       bool // true when handler returns only error
@@ -64,9 +64,9 @@ type EnumValueInfo struct {
 
 // EnumInfo describes a registered enum type.
 type EnumInfo struct {
-	Name     string          // e.g., "StrState"
-	Type     reflect.Type    // the reflect.Type for lookup
-	IsString bool            // true for string-based, false for int-based
+	Name     string       // e.g., "StrState"
+	Type     reflect.Type // the reflect.Type for lookup
+	IsString bool         // true for string-based, false for int-based
 	Values   []EnumValueInfo
 }
 
@@ -88,16 +88,16 @@ func (g *HandlerGroup) SourceDir() string {
 
 // Registry holds registered handlers and their methods.
 type Registry struct {
-	handlers       map[string]*HandlerInfo
-	groups         map[string]*HandlerGroup
-	pushEvents     []PushEventInfo
-	pushEventTypes map[reflect.Type]string      // type → event name for type-safe push
-	errorCodes     []ErrorCodeInfo               // custom error codes for generation
-	errorMappings  []errorMapping                // error -> code mappings
-	nextErrorCode  int                           // auto-incrementing error code
-	enumTypes      map[reflect.Type]*EnumInfo    // for lookup in goTypeToTS
-	generateHooks  []func(results map[string]string, mode OutputMode) // hooks run after generation
-	serverInitHooks []func(s *Server)            // hooks run during NewServer
+	handlers        map[string]*HandlerInfo
+	groups          map[string]*HandlerGroup
+	pushEvents      []PushEventInfo
+	pushEventTypes  map[reflect.Type]string                            // type → event name for type-safe push
+	errorCodes      []ErrorCodeInfo                                    // custom error codes for generation
+	errorMappings   []errorMapping                                     // error -> code mappings
+	nextErrorCode   int                                                // auto-incrementing error code
+	enumTypes       map[reflect.Type]*EnumInfo                         // for lookup in goTypeToTS
+	generateHooks   []func(results map[string]string, mode OutputMode) // hooks run after generation
+	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 }
 
 // NewRegistry creates a new handler registry.

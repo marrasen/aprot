@@ -63,7 +63,7 @@ type TaskMeta struct {
 
 type StepResult struct {
 	Step     string `json:"step"`
-	Duration int    `json:"duration"` // milliseconds
+	Duration int    `json:"duration"`        // milliseconds
 	Hash     string `json:"hash,omitempty"`  // computed hash of step name
 	Error    string `json:"error,omitempty"` // non-empty if the step failed
 }

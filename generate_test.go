@@ -2067,12 +2067,12 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 // Types for TestGenerateCustomMarshalerTypes
 
 type MarshalerRequest struct {
-	ID   UUIDLike       `json:"id"`
+	ID   UUIDLike        `json:"id"`
 	Name StringMarshaler `json:"name"`
 }
 
 type MarshalerResponse struct {
-	ID    UUIDLike       `json:"id"`
+	ID    UUIDLike        `json:"id"`
 	Score NumberMarshaler `json:"score"`
 }
 
@@ -2636,7 +2636,7 @@ func TestContainsTypeName(t *testing.T) {
 // PhantomResp is shared between two groups. It has a field whose type name
 // is a superstring of PhantomResp's name (PhantomRespDetailType enum).
 type PhantomResp struct {
-	ID     string               `json:"id"`
+	ID     string                `json:"id"`
 	Detail PhantomRespDetailType `json:"detail"`
 }
 
@@ -2652,7 +2652,7 @@ func (h *PhantomGroupA) DoA(ctx context.Context) (*PhantomResp, error) { return 
 
 type PhantomGroupB struct{}
 
-func (h *PhantomGroupB) DoB(ctx context.Context) (*PhantomResp, error)            { return nil, nil }
+func (h *PhantomGroupB) DoB(ctx context.Context) (*PhantomResp, error)           { return nil, nil }
 func (h *PhantomGroupB) DoB2(ctx context.Context) (*PhantomGroupSpecific, error) { return nil, nil }
 
 func TestGenerateSharedTypeNoPhantomImports(t *testing.T) {

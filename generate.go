@@ -302,7 +302,7 @@ type templateData struct {
 	CustomErrorCodes []errorCodeData
 	Enums            []enumTemplateData
 	BaseTypeImports  []string          // base type names to import from './client' (handler files only)
-	SharedImports    []typeImportGroup  // shared type imports from package files (e.g., "./api")
+	SharedImports    []typeImportGroup // shared type imports from package files (e.g., "./api")
 }
 
 type enumTemplateData struct {
