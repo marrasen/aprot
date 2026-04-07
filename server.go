@@ -102,15 +102,15 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 				return true // Allow all origins by default
 			},
 		},
-		conns:      make(map[*Conn]struct{}),
-		userConns:  make(map[string]map[*Conn]struct{}),
-		register:   make(chan *Conn),
-		unregister: make(chan *Conn),
-		middleware:     []Middleware{},
-		options:        options,
-		stopCh:         make(chan struct{}),
-		done:           make(chan struct{}),
-		subscriptions:  newSubscriptionManager(),
+		conns:         make(map[*Conn]struct{}),
+		userConns:     make(map[string]map[*Conn]struct{}),
+		register:      make(chan *Conn),
+		unregister:    make(chan *Conn),
+		middleware:    []Middleware{},
+		options:       options,
+		stopCh:        make(chan struct{}),
+		done:          make(chan struct{}),
+		subscriptions: newSubscriptionManager(),
 	}
 	// Run OnServerInit hooks (used by tasks/ to set up taskManager, middleware, etc.)
 	for _, hook := range registry.serverInitHooks {

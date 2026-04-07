@@ -191,6 +191,11 @@ type mockTransport struct {
 	onSend func(data []byte)
 }
 
-func (m *mockTransport) Send(data []byte) error  { if m.onSend != nil { m.onSend(data) }; return nil }
-func (m *mockTransport) Close() error             { return nil }
-func (m *mockTransport) CloseGracefully() error   { return nil }
+func (m *mockTransport) Send(data []byte) error {
+	if m.onSend != nil {
+		m.onSend(data)
+	}
+	return nil
+}
+func (m *mockTransport) Close() error           { return nil }
+func (m *mockTransport) CloseGracefully() error { return nil }
