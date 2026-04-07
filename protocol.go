@@ -6,16 +6,19 @@ import "github.com/go-json-experiment/json/jsontext"
 type MessageType string
 
 const (
-	TypeRequest   MessageType = "request"
-	TypeCancel    MessageType = "cancel"
-	TypeResponse  MessageType = "response"
-	TypeError     MessageType = "error"
-	TypeProgress  MessageType = "progress"
-	TypePush      MessageType = "push"
-	TypePing      MessageType = "ping"
-	TypePong      MessageType = "pong"
-	TypeConfig    MessageType = "config"
-	TypeConnected MessageType = "connected"
+	TypeRequest     MessageType = "request"
+	TypeCancel      MessageType = "cancel"
+	TypeResponse    MessageType = "response"
+	TypeError       MessageType = "error"
+	TypeProgress    MessageType = "progress"
+	TypePush        MessageType = "push"
+	TypePing        MessageType = "ping"
+	TypePong        MessageType = "pong"
+	TypeConfig      MessageType = "config"
+	TypeConnected   MessageType = "connected"
+	TypeSubscribe   MessageType = "subscribe"
+	TypeUnsubscribe MessageType = "unsubscribe"
+	TypeRefresh     MessageType = "refresh"
 )
 
 // ConnectedMessage is sent as the first SSE event to provide the connection ID.
@@ -67,6 +70,12 @@ type PushMessage struct {
 // PongMessage represents a pong response to a client ping.
 type PongMessage struct {
 	Type MessageType `json:"type"`
+}
+
+// RefreshMessage tells the client to re-fetch a subscription.
+type RefreshMessage struct {
+	Type MessageType `json:"type"`
+	ID   string      `json:"id"`
 }
 
 // ConfigMessage represents server-pushed configuration for the client.

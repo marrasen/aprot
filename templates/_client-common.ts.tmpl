@@ -152,6 +152,8 @@ class WebSocketTransport implements ClientTransport {
 
 type ClientMessage =
     | { type: 'request'; id: string; method: string; params: unknown[] }
+    | { type: 'subscribe'; id: string; method: string; params: unknown[] }
+    | { type: 'unsubscribe'; id: string }
     | { type: 'cancel'; id: string }
     | { type: 'ping' };
 
@@ -201,6 +203,10 @@ class SSETransport implements ClientTransport {
             this.eventSource.addEventListener('push', (e: MessageEvent) => {
                 onMessage(e.data);
             });
+
+            this.eventSource.addEventListener('refresh', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
         });
     }
 
@@ -208,11 +214,12 @@ class SSETransport implements ClientTransport {
         if (!this.connectionId) return;
         const msg = message as ClientMessage;
 
-        if (msg.type === 'request') {
+        if (msg.type === 'request' || msg.type === 'subscribe') {
             fetch(this.baseUrl + '/rpc', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    type: msg.type,
                     connectionId: this.connectionId,
                     id: msg.id,
                     method: msg.method,
@@ -225,6 +232,16 @@ class SSETransport implements ClientTransport {
             }).catch(() => {
                 this.synthesizeError(msg.id, 'Network error: failed to send request');
             });
+        } else if (msg.type === 'unsubscribe') {
+            fetch(this.baseUrl + '/rpc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'unsubscribe',
+                    connectionId: this.connectionId,
+                    id: msg.id,
+                }),
+            }).catch(() => {});
         } else if (msg.type === 'cancel') {
             fetch(this.baseUrl + '/cancel', {
                 method: 'POST',
@@ -275,6 +292,12 @@ export class ApiClient {
         resolve: (value: unknown) => void;
         reject: (error: Error) => void;
     }> = [];
+    private subscriptions = new Map<string, {
+        method: string;
+        params: unknown[];
+        callback: (data: unknown) => void;
+        onError?: (error: Error) => void;
+    }>();
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private state: ConnectionState = 'disconnected';
@@ -321,12 +344,15 @@ export class ApiClient {
     private handleClose(): void {
         this.stopHeartbeat();
 
-        // Reject all pending requests
-        for (const [, p] of this.pending) {
-            p.onSettle?.();
-            p.reject(new Error('Connection closed'));
+        // Reject all pending requests (but keep subscription entries for reconnect)
+        const subIds = new Set(this.subscriptions.keys());
+        for (const [id, p] of this.pending) {
+            if (!subIds.has(id)) {
+                p.onSettle?.();
+                p.reject(new Error('Connection closed'));
+            }
+            this.pending.delete(id);
         }
-        this.pending.clear();
 
         if (this.manualDisconnect) {
             this.setState('disconnected');
@@ -369,6 +395,7 @@ export class ApiClient {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
+        this.subscriptions.clear();
         this.transport.disconnect();
         this.setState('disconnected');
     }
@@ -382,6 +409,7 @@ export class ApiClient {
         this.state = state;
         if (state === 'connected') {
             this.flushBuffer();
+            this.resubscribeAll();
         } else if (state === 'disconnected') {
             this.rejectBuffer(new Error('Not connected'));
         }
@@ -485,6 +513,17 @@ export class ApiClient {
                     for (const handler of handlers) {
                         handler(msg.data);
                     }
+                }
+                break;
+            }
+            case 'refresh': {
+                const sub = this.subscriptions.get(msg.id);
+                if (sub) {
+                    this.pending.set(msg.id, {
+                        resolve: (result) => { sub.callback(result); },
+                        reject: (err) => { sub.onError?.(err as Error); },
+                    });
+                    this.transport.send({ type: 'subscribe', id: msg.id, method: sub.method, params: sub.params });
                 }
                 break;
             }
@@ -601,6 +640,16 @@ export class ApiClient {
         }
     }
 
+    private resubscribeAll(): void {
+        for (const [id, sub] of this.subscriptions) {
+            this.pending.set(id, {
+                resolve: (result) => { sub.callback(result); },
+                reject: (err) => { sub.onError?.(err as Error); },
+            });
+            this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params });
+        }
+    }
+
     onPush<T>(event: string, handler: PushHandler<T>): () => void {
         if (!this.pushHandlers.has(event)) {
             this.pushHandlers.set(event, new Set());
@@ -609,6 +658,30 @@ export class ApiClient {
         this.pushHandlers.get(event)!.add(cb);
         return () => {
             this.pushHandlers.get(event)?.delete(cb);
+        };
+    }
+
+    subscribe<T>(method: string, params: unknown[], callback: (data: T) => void, onError?: (error: Error) => void): () => void {
+        const id = String(++this.requestId);
+        const cb = callback as (data: unknown) => void;
+        this.subscriptions.set(id, { method, params, callback: cb, onError });
+
+        // Register in pending for the initial response
+        this.pending.set(id, {
+            resolve: (result) => { cb(result); },
+            reject: (err) => { onError?.(err as Error); },
+        });
+
+        if (this.transport.isConnected()) {
+            this.transport.send({ type: 'subscribe', id, method, params });
+        }
+
+        return () => {
+            this.subscriptions.delete(id);
+            this.pending.delete(id);
+            if (this.transport.isConnected()) {
+                this.transport.send({ type: 'unsubscribe', id });
+            }
         };
     }
 }
@@ -675,6 +748,8 @@ export function useConnection(): { isConnected: boolean; state: ConnectionState 
 export interface UseQueryOptions {
     enabled?: boolean;
     refetchInterval?: number;
+    /** @internal Subscription metadata for auto-refresh. */
+    _subscribe?: { method: string; params: unknown[] };
 }
 
 // Query hook result
@@ -725,6 +800,9 @@ export function useQuery<TArgs extends unknown[], TRes>(
 
     const params = options?.params;
     const paramsKey = params ? JSON.stringify(params) : '[]';
+    const subscribeOpts = options?._subscribe;
+    const subscribeMethod = subscribeOpts?.method;
+    const subscribeParamsKey = subscribeOpts ? JSON.stringify(subscribeOpts.params) : undefined;
 
     const fetch = useCallback(async () => {
         if (options?.enabled === false) return;
@@ -751,19 +829,43 @@ export function useQuery<TArgs extends unknown[], TRes>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, fn, options?.enabled, paramsKey]);
 
+    // Subscription mode: use client.subscribe for auto-refresh
     useEffect(() => {
+        if (!subscribeMethod || options?.enabled === false) return;
+        setIsLoading(true);
+        const unsubscribe = client.subscribe<TRes>(
+            subscribeMethod,
+            subscribeOpts!.params,
+            (result) => {
+                setData(result);
+                setError(null);
+                setIsLoading(false);
+            },
+            (err) => {
+                setError(err);
+                setIsLoading(false);
+            },
+        );
+        return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [client, subscribeMethod, subscribeParamsKey, options?.enabled]);
+
+    // One-shot fetch mode (no subscription)
+    useEffect(() => {
+        if (subscribeMethod) return;
         fetch();
         return () => {
             abortRef.current?.abort();
         };
-    }, [fetch]);
+    }, [fetch, subscribeMethod]);
 
     useEffect(() => {
+        if (subscribeMethod) return;
         if (options?.refetchInterval && options.refetchInterval > 0) {
             const interval = setInterval(fetch, options.refetchInterval);
             return () => clearInterval(interval);
         }
-    }, [fetch, options?.refetchInterval]);
+    }, [fetch, subscribeMethod, options?.refetchInterval]);
 
     const refetch = useCallback(() => {
         fetch();
