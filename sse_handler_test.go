@@ -464,8 +464,6 @@ func TestSSEConfigOnConnect(t *testing.T) {
 	server := NewServer(registry, ServerOptions{
 		ReconnectInterval:    2000,
 		ReconnectMaxInterval: 60000,
-		HeartbeatInterval:    15000,
-		HeartbeatTimeout:     3000,
 	})
 	handlers.server = server
 
@@ -507,12 +505,6 @@ func TestSSEConfigOnConnect(t *testing.T) {
 	}
 	if msg.ReconnectMaxInterval != 60000 {
 		t.Errorf("Expected ReconnectMaxInterval 60000, got %d", msg.ReconnectMaxInterval)
-	}
-	if msg.HeartbeatInterval != 15000 {
-		t.Errorf("Expected HeartbeatInterval 15000, got %d", msg.HeartbeatInterval)
-	}
-	if msg.HeartbeatTimeout != 3000 {
-		t.Errorf("Expected HeartbeatTimeout 3000, got %d", msg.HeartbeatTimeout)
 	}
 }
 

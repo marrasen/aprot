@@ -21,7 +21,8 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 - **Shared tasks** - Server-wide tasks visible to all clients via push events, with cancel support
 - **Request cancellation** - Clients can cancel in-flight requests via AbortController, with cancel cause reporting (client cancel, disconnect, server shutdown)
 - **Server push** - Broadcast events to all connected clients
-- **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
+- **Server-pushed config** - Automatically configure client reconnect settings
+- **Automatic reconnection** - Reconnects immediately when the page becomes visible or network comes back online, with exponential backoff for repeated failures
 - **Dual transport** - WebSocket and SSE+HTTP transports with identical API
 - **Subscription refresh** - Server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
 - **JSON-RPC style protocol** - Simple, debuggable wire format
@@ -888,15 +889,13 @@ if err := server.Stop(ctx); err != nil {
 
 ### Server Options
 
-Configure client reconnection and heartbeat behavior:
+Configure client reconnection behavior:
 
 ```go
 server := aprot.NewServer(registry, aprot.ServerOptions{
     ReconnectInterval:    2000,  // Initial reconnect delay (ms), default: 1000
     ReconnectMaxInterval: 60000, // Max reconnect delay (ms), default: 30000
     ReconnectMaxAttempts: 10,    // Max attempts (0=unlimited), default: 0
-    HeartbeatInterval:    15000, // Heartbeat interval (ms), default: 30000
-    HeartbeatTimeout:     3000,  // Heartbeat timeout (ms), default: 5000
 })
 ```
 
@@ -918,7 +917,6 @@ aprot supports two transports that share the same handler dispatch, middleware, 
 |---|-----------|----------|
 | **Server→Client** | WebSocket frames | SSE event stream |
 | **Client→Server** | WebSocket frames | HTTP POST |
-| **Heartbeat** | Client ping/server pong | Server-sent SSE comments |
 | **Best for** | Full-duplex, low latency | Environments where WebSocket is blocked |
 
 #### Server Setup
@@ -1427,7 +1425,7 @@ Messages are JSON with a `type` field:
 | server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |
 | client→server | cancel | `{"type":"cancel","id":"1"}` |
 | server→client | push | `{"type":"push","event":"UserCreatedEvent","data":{...}}` |
-| server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
+| server→client | config | `{"type":"config","reconnectInterval":1000,"reconnectMaxInterval":30000,...}` |
 | client→server | subscribe | `{"type":"subscribe","id":"1","method":"Handlers.ListUsers","params":[]}` |
 | client→server | unsubscribe | `{"type":"unsubscribe","id":"1"}` |
 | server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |

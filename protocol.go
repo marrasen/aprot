@@ -12,8 +12,6 @@ const (
 	TypeError       MessageType = "error"
 	TypeProgress    MessageType = "progress"
 	TypePush        MessageType = "push"
-	TypePing        MessageType = "ping"
-	TypePong        MessageType = "pong"
 	TypeConfig      MessageType = "config"
 	TypeConnected   MessageType = "connected"
 	TypeSubscribe   MessageType = "subscribe"
@@ -66,17 +64,10 @@ type PushMessage struct {
 	Data  any         `json:"data"`
 }
 
-// PongMessage represents a pong response to a client ping.
-type PongMessage struct {
-	Type MessageType `json:"type"`
-}
-
 // ConfigMessage represents server-pushed configuration for the client.
 type ConfigMessage struct {
 	Type                 MessageType `json:"type"`
 	ReconnectInterval    int         `json:"reconnectInterval,omitempty"`
 	ReconnectMaxInterval int         `json:"reconnectMaxInterval,omitempty"`
 	ReconnectMaxAttempts int         `json:"reconnectMaxAttempts,omitempty"`
-	HeartbeatInterval    int         `json:"heartbeatInterval,omitempty"`
-	HeartbeatTimeout     int         `json:"heartbeatTimeout,omitempty"`
 }

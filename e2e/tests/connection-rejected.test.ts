@@ -9,7 +9,6 @@ describe('Connection Rejected (WebSocket)', () => {
         const client = new ApiClient(wsRejectUrl(), {
             reconnect: true,
             reconnectInterval: 100,
-            heartbeatInterval: 0,
             onConnectionRejected: (error) => {
                 rejectedError = error;
             },
@@ -35,7 +34,6 @@ describe('Connection Rejected (WebSocket)', () => {
         const client = new ApiClient(wsRejectUrl(), {
             reconnect: true,
             reconnectInterval: 100,
-            heartbeatInterval: 0,
             onConnectionRejected: () => {
                 rejectionCount++;
             },

@@ -217,13 +217,6 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 	_ = c.sendJSON(msg)
 }
 
-func (c *Conn) sendPong() {
-	msg := PongMessage{
-		Type: TypePong,
-	}
-	_ = c.sendJSON(msg)
-}
-
 func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -265,8 +258,6 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 		c.handleUnsubscribe(msg.ID)
 	case TypeCancel:
 		c.cancelRequest(msg.ID)
-	case TypePing:
-		c.sendPong()
 	default:
 		c.sendError(msg.ID, CodeInvalidRequest, "unknown message type")
 	}

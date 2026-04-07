@@ -17,10 +17,7 @@ func main() {
 	authMiddleware := api.AuthMiddleware(tokenStore)
 	registry := api.NewRegistry(state, authMiddleware)
 
-	server := aprot.NewServer(registry, aprot.ServerOptions{
-		HeartbeatInterval: 5000,
-		HeartbeatTimeout:  2000,
-	})
+	server := aprot.NewServer(registry)
 
 	state.Broadcaster = server
 	state.UserPusher = server

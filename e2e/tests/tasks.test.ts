@@ -10,7 +10,7 @@ describe('SubTask (WebSocket)', () => {
     let client: ApiClient;
 
     beforeEach(async () => {
-        client = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        client = new ApiClient(wsUrl(), { reconnect: false });
         await client.connect();
     });
 
@@ -98,7 +98,7 @@ describe('SharedTask (WebSocket)', () => {
     let client: ApiClient;
 
     beforeEach(async () => {
-        client = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        client = new ApiClient(wsUrl(), { reconnect: false });
         await client.connect();
     });
 
@@ -134,7 +134,7 @@ describe('SharedTask (WebSocket)', () => {
     });
 
     test('shared task broadcasts to second client', async () => {
-        const client2 = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        const client2 = new ApiClient(wsUrl(), { reconnect: false });
         await client2.connect();
 
         try {
@@ -271,7 +271,7 @@ describe('SharedTask (WebSocket)', () => {
         });
 
         // Connect a NEW client (late joiner)
-        const lateClient = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        const lateClient = new ApiClient(wsUrl(), { reconnect: false });
         await lateClient.connect();
 
         try {
