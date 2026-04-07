@@ -10,6 +10,7 @@ const (
 	handlerInfoKey
 	requestKey
 	triggerCollectorKey
+	refreshQueueKey
 )
 
 // Progress returns the ProgressReporter from the context.

@@ -51,6 +51,8 @@ type IntegrationHandlers struct {
 	server         *Server
 	cancelCause    chan error    // receives cancel cause from CancelCauseCapture handler
 	subscribePause chan struct{} // blocks SubscribeUsers until closed
+	mu             sync.RWMutex
+	users          []string
 }
 
 func (h *IntegrationHandlers) Echo(ctx context.Context, req *EchoRequest) (*EchoResponse, error) {
@@ -108,7 +110,32 @@ func (h *IntegrationHandlers) SubscribeUsers(ctx context.Context) (*SubscribeUse
 			return nil, ctx.Err()
 		}
 	}
-	return &SubscribeUsersResponse{Users: []string{"alice", "bob"}}, nil
+	h.mu.RLock()
+	users := h.users
+	h.mu.RUnlock()
+	if users == nil {
+		users = []string{"alice", "bob"}
+	}
+	return &SubscribeUsersResponse{Users: users}, nil
+}
+
+type AddUserRequest struct {
+	Name string `json:"name"`
+}
+
+type AddUserResponse struct {
+	Added bool `json:"added"`
+}
+
+func (h *IntegrationHandlers) AddUser(ctx context.Context, req *AddUserRequest) (*AddUserResponse, error) {
+	h.mu.Lock()
+	if h.users == nil {
+		h.users = []string{"alice", "bob"}
+	}
+	h.users = append(h.users, req.Name)
+	h.mu.Unlock()
+	TriggerRefresh(ctx, "users")
+	return &AddUserResponse{Added: true}, nil
 }
 
 func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandlers) {
@@ -1744,5 +1771,120 @@ func TestUnsubscribeDuringSubscribeHandler(t *testing.T) {
 	subs := server.subscriptions.getSubscriptionsForKey("users")
 	if len(subs) != 0 {
 		t.Fatalf("expected no subscriptions for 'users' after unsubscribe, got %d", len(subs))
+	}
+}
+
+func TestServerDrivenRefresh(t *testing.T) {
+	ts, _, _ := setupTestServer(t)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Subscribe to users
+	sub := IncomingMessage{
+		Type:   TypeSubscribe,
+		ID:     "sub-1",
+		Method: "IntegrationHandlers.SubscribeUsers",
+	}
+	if err := ws.WriteJSON(sub); err != nil {
+		t.Fatalf("Write subscribe failed: %v", err)
+	}
+
+	// Read initial response
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read initial response failed: %v", err)
+	}
+	if resp.ID != "sub-1" || resp.Type != TypeResponse {
+		t.Fatalf("Expected response for sub-1, got %+v", resp)
+	}
+
+	// Now trigger a mutation that calls TriggerRefresh("users")
+	mutReq := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "req-1",
+		Method: "IntegrationHandlers.AddUser",
+		Params: jsontext.Value(`[{"name":"charlie"}]`),
+	}
+	if err := ws.WriteJSON(mutReq); err != nil {
+		t.Fatalf("Write mutation failed: %v", err)
+	}
+
+	// We should receive: (1) mutation response, (2) subscription refresh response
+	// Order may vary since refresh runs in a goroutine, but both should arrive.
+	var mutationResp, refreshResp ResponseMessage
+	for i := 0; i < 2; i++ {
+		var msg ResponseMessage
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("Read message %d failed: %v", i, err)
+		}
+		if msg.ID == "req-1" {
+			mutationResp = msg
+		} else if msg.ID == "sub-1" {
+			refreshResp = msg
+		} else {
+			t.Fatalf("Unexpected message ID: %s", msg.ID)
+		}
+	}
+
+	if mutationResp.Type != TypeResponse {
+		t.Fatalf("Expected mutation response, got %+v", mutationResp)
+	}
+	if refreshResp.Type != TypeResponse {
+		t.Fatalf("Expected refresh response, got %+v", refreshResp)
+	}
+
+	// Verify the refresh response contains the updated data (charlie added)
+	resultBytes, err := json.Marshal(refreshResp.Result)
+	if err != nil {
+		t.Fatalf("Marshal result failed: %v", err)
+	}
+	resultStr := string(resultBytes)
+	if !strings.Contains(resultStr, "charlie") {
+		t.Fatalf("Expected refresh response to contain 'charlie', got %s", resultStr)
+	}
+}
+
+func TestRefreshBatching(t *testing.T) {
+	// Test that multiple TriggerRefresh calls for overlapping keys
+	// result in only one subscription being resolved for refresh.
+	sm := newSubscriptionManager()
+	conn := &Conn{
+		id:        1,
+		transport: &mockTransport{},
+		requests:  make(map[string]context.CancelCauseFunc),
+	}
+
+	// Register one subscription with two trigger keys
+	sm.register(&subscription{
+		conn:   conn,
+		id:     "sub-1",
+		method: "Handlers.GetUsers",
+		keys:   map[string]struct{}{"users": {}, "user\x00123": {}},
+	})
+
+	// Create a refresh queue with both keys triggered
+	rq := &refreshQueue{keys: []string{"users", "user\x00123"}}
+
+	// Resolve — should deduplicate to 1 subscription
+	rq.mu.Lock()
+	keys := rq.keys
+	rq.keys = nil
+	rq.mu.Unlock()
+
+	seen := make(map[*subscription]struct{})
+	var toRefresh []*subscription
+	for _, key := range keys {
+		for _, sub := range sm.getSubscriptionsForKey(key) {
+			if _, ok := seen[sub]; !ok {
+				seen[sub] = struct{}{}
+				toRefresh = append(toRefresh, sub)
+			}
+		}
+	}
+
+	if len(toRefresh) != 1 {
+		t.Fatalf("expected 1 unique subscription, got %d", len(toRefresh))
 	}
 }

@@ -279,7 +279,7 @@ server.PushToUser("user_123", &NotificationEvent{
 
 ### Subscription Refresh
 
-Automatically refresh client queries when related data changes on the server. Query handlers declare trigger keys, and mutation handlers fire them to push updates to all subscribed clients.
+Automatically refresh client queries when related data changes on the server. Query handlers declare trigger keys, and mutation handlers fire them. When the mutation handler completes, the server re-executes affected subscription handlers and pushes updated responses directly — no client round-trip needed. Multiple `TriggerRefresh` calls within a single request are batched and deduplicated by subscription.
 
 **Server side:**
 
@@ -325,7 +325,7 @@ const unsubscribe = subscribeListUsers(client, (users) => {
 // Later: unsubscribe();
 ```
 
-`RegisterRefreshTrigger` takes variadic string arguments that form a composite trigger key. It is a no-op when called from a regular (non-subscribe) request. Subscriptions are automatically cleaned up when a client disconnects or unsubscribes.
+`RegisterRefreshTrigger` takes variadic string arguments that form a composite trigger key. It is a no-op when called from a regular (non-subscribe) request. `TriggerRefresh` is a no-op outside a request context. Subscriptions are automatically cleaned up when a client disconnects or unsubscribes.
 
 ### Context Helpers
 
@@ -1430,7 +1430,6 @@ Messages are JSON with a `type` field:
 | server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
 | client→server | subscribe | `{"type":"subscribe","id":"1","method":"Handlers.ListUsers","params":[]}` |
 | client→server | unsubscribe | `{"type":"unsubscribe","id":"1"}` |
-| server→client | refresh | `{"type":"refresh","id":"1"}` |
 | server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |
 
 ## Examples

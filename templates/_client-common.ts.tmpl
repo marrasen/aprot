@@ -204,9 +204,6 @@ class SSETransport implements ClientTransport {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('refresh', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
         });
     }
 
@@ -504,6 +501,12 @@ export class ApiClient {
                     p.onSettle?.();
                     p.resolve(msg.result);
                     this.notifyLoadingChange();
+                } else {
+                    // Server-driven subscription refresh
+                    const sub = this.subscriptions.get(msg.id);
+                    if (sub) {
+                        sub.callback(msg.result);
+                    }
                 }
                 break;
             }
@@ -518,6 +521,12 @@ export class ApiClient {
                     this.manualDisconnect = true;
                     this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message));
                     this.transport.disconnect();
+                } else {
+                    // Server-driven subscription refresh error
+                    const sub = this.subscriptions.get(msg.id);
+                    if (sub) {
+                        sub.onError?.(new ApiError(msg.code, msg.message));
+                    }
                 }
                 break;
             }
@@ -537,17 +546,6 @@ export class ApiClient {
                     for (const handler of handlers) {
                         handler(msg.data);
                     }
-                }
-                break;
-            }
-            case 'refresh': {
-                const sub = this.subscriptions.get(msg.id);
-                if (sub) {
-                    this.pending.set(msg.id, {
-                        resolve: (result) => { sub.callback(result); },
-                        reject: (err) => { sub.onError?.(err as Error); },
-                    });
-                    this.transport.send({ type: 'subscribe', id: msg.id, method: sub.method, params: sub.params });
                 }
                 break;
             }

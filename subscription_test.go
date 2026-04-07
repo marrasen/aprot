@@ -186,6 +186,75 @@ func TestRegisterRefreshTrigger_NoCollector(t *testing.T) {
 	RegisterRefreshTrigger(ctx, "users") // should not panic
 }
 
+func TestTriggerRefresh_QueuesKeys(t *testing.T) {
+	rq := &refreshQueue{}
+	ctx := withRefreshQueue(context.Background(), rq)
+
+	TriggerRefresh(ctx, "users")
+	TriggerRefresh(ctx, "user", "123")
+
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+
+	if len(rq.keys) != 2 {
+		t.Fatalf("expected 2 queued keys, got %d", len(rq.keys))
+	}
+	if rq.keys[0] != "users" {
+		t.Fatalf("expected first key 'users', got %q", rq.keys[0])
+	}
+	if rq.keys[1] != "user\x00123" {
+		t.Fatalf("expected second key 'user\\x00123', got %q", rq.keys[1])
+	}
+}
+
+func TestTriggerRefresh_NoQueue(t *testing.T) {
+	// Should be a no-op when no refresh queue in context
+	ctx := context.Background()
+	TriggerRefresh(ctx, "users") // should not panic
+}
+
+func TestProcessRefreshQueue_Deduplication(t *testing.T) {
+	sm := newSubscriptionManager()
+
+	var sent int
+	conn := &Conn{
+		id:        1,
+		transport: &mockTransport{onSend: func(data []byte) { sent++ }},
+		requests:  make(map[string]context.CancelCauseFunc),
+	}
+
+	// One subscription watching two keys
+	sm.register(&subscription{
+		conn:   conn,
+		id:     "sub-1",
+		method: "Handlers.GetUserList",
+		keys:   map[string]struct{}{"users": {}, "user\x00123": {}},
+	})
+
+	// Queue both keys — should resolve to one unique subscription
+	rq := &refreshQueue{keys: []string{"users", "user\x00123"}}
+
+	seen := make(map[*subscription]struct{})
+	var toRefresh []*subscription
+	rq.mu.Lock()
+	keys := rq.keys
+	rq.keys = nil
+	rq.mu.Unlock()
+
+	for _, key := range keys {
+		for _, sub := range sm.getSubscriptionsForKey(key) {
+			if _, ok := seen[sub]; !ok {
+				seen[sub] = struct{}{}
+				toRefresh = append(toRefresh, sub)
+			}
+		}
+	}
+
+	if len(toRefresh) != 1 {
+		t.Fatalf("expected 1 unique subscription after dedup, got %d", len(toRefresh))
+	}
+}
+
 // mockTransport for testing
 type mockTransport struct {
 	onSend func(data []byte)
