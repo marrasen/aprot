@@ -257,6 +257,11 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 	case TypeRequest:
 		c.server.requestsWg.Add(1)
 		go c.handleRequest(msg)
+	case TypeSubscribe:
+		c.server.requestsWg.Add(1)
+		go c.handleSubscribe(msg)
+	case TypeUnsubscribe:
+		c.handleUnsubscribe(msg.ID)
 	case TypeCancel:
 		c.cancelRequest(msg.ID)
 	case TypePing:
@@ -322,6 +327,84 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	c.sendResponse(msg.ID, result)
 }
 
+func (c *Conn) handleSubscribe(msg IncomingMessage) {
+	defer c.server.requestsWg.Done()
+
+	info, ok := c.server.registry.Get(msg.Method)
+	if !ok {
+		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
+		return
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	c.registerRequest(msg.ID, cancel)
+	defer func() {
+		c.unregisterRequest(msg.ID)
+		cancel(nil)
+	}()
+
+	// Add standard context values
+	progress := newProgressReporter(c, msg.ID)
+	ctx = withProgress(ctx, progress)
+	ctx = withConnection(ctx, c)
+	ctx = withHandlerInfo(ctx, info)
+
+	req := &Request{
+		ID:     msg.ID,
+		Method: msg.Method,
+		Params: msg.Params,
+	}
+	ctx = withRequest(ctx, req)
+
+	// Add trigger collector for subscription
+	tc := &triggerCollector{keys: make(map[string]struct{})}
+	ctx = withTriggerCollector(ctx, tc)
+
+	// Build and execute middleware chain
+	handler := c.server.buildHandler(info)
+	result, err := handler(ctx, req)
+
+	if ctx.Err() == context.Canceled {
+		c.sendError(msg.ID, CodeCanceled, "request canceled")
+		return
+	}
+
+	if err != nil {
+		if perr, ok := err.(*ProtocolError); ok {
+			c.sendError(msg.ID, perr.Code, perr.Message)
+		} else if code, found := c.server.registry.LookupError(err); found {
+			c.sendError(msg.ID, code, err.Error())
+		} else {
+			c.sendError(msg.ID, CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	// Register or update subscription with collected trigger keys
+	tc.mu.Lock()
+	keys := tc.keys
+	tc.mu.Unlock()
+
+	if len(keys) > 0 {
+		if c.server.subscriptions.has(c.id, msg.ID) {
+			c.server.subscriptions.updateKeys(c.id, msg.ID, keys)
+		} else {
+			c.server.subscriptions.register(&subscription{
+				conn:   c,
+				id:     msg.ID,
+				method: msg.Method,
+				keys:   keys,
+			})
+		}
+	}
+
+	c.sendResponse(msg.ID, result)
+}
+
+func (c *Conn) handleUnsubscribe(id string) {
+	c.server.subscriptions.unregister(c.id, id)
+}
+
 func (c *Conn) close() {
 	c.mu.Lock()
 	if c.closed {
@@ -334,6 +417,7 @@ func (c *Conn) close() {
 		cancel(ErrConnectionClosed)
 	}
 	c.mu.Unlock()
+	c.server.subscriptions.unregisterConn(c.id)
 	c.transport.Close()
 }
 
@@ -348,5 +432,6 @@ func (c *Conn) closeGracefully() {
 		cancel(ErrServerShutdown)
 	}
 	c.mu.Unlock()
+	c.server.subscriptions.unregisterConn(c.id)
 	_ = c.transport.CloseGracefully()
 }

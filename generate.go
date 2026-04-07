@@ -334,13 +334,14 @@ type paramData struct {
 }
 
 type methodData struct {
-	Name         string // short method name (e.g., "CreateUser")
-	WireMethod   string // qualified wire name (e.g., "PublicHandlers.CreateUser")
-	MethodName   string // camelCase function name (e.g., "createUser")
-	HookName     string // React hook name (e.g., "useCreateUser")
-	ResponseType string
-	IsVoid       bool
-	Params       []paramData
+	Name          string // short method name (e.g., "CreateUser")
+	WireMethod    string // qualified wire name (e.g., "PublicHandlers.CreateUser")
+	MethodName    string // camelCase function name (e.g., "createUser")
+	HookName      string // React hook name (e.g., "useCreateUser")
+	SubscribeName string // subscribe function name (e.g., "subscribeCreateUser")
+	ResponseType  string
+	IsVoid        bool
+	Params        []paramData
 }
 
 type pushEventData struct {
@@ -627,13 +628,14 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			respType = g.goTypeToTS(info.ResponseType)
 		}
 		data.Methods = append(data.Methods, methodData{
-			Name:         shortName,
-			WireMethod:   qualifiedName,
-			MethodName:   g.naming().MethodName(shortName),
-			HookName:     g.naming().HookName(shortName),
-			ResponseType: respType,
-			IsVoid:       isVoid,
-			Params:       g.buildParamData(info, paramNames),
+			Name:          shortName,
+			WireMethod:    qualifiedName,
+			MethodName:    g.naming().MethodName(shortName),
+			HookName:      g.naming().HookName(shortName),
+			SubscribeName: "subscribe" + shortName,
+			ResponseType:  respType,
+			IsVoid:        isVoid,
+			Params:        g.buildParamData(info, paramNames),
 		})
 	}
 
@@ -721,13 +723,14 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 			respType = g.goTypeToTS(info.ResponseType)
 		}
 		data.Methods = append(data.Methods, methodData{
-			Name:         name,
-			WireMethod:   group.Name + "." + name,
-			MethodName:   g.naming().MethodName(name),
-			HookName:     g.naming().HookName(name),
-			ResponseType: respType,
-			IsVoid:       isVoid,
-			Params:       g.buildParamData(info, paramNames),
+			Name:          name,
+			WireMethod:    group.Name + "." + name,
+			MethodName:    g.naming().MethodName(name),
+			HookName:      g.naming().HookName(name),
+			SubscribeName: "subscribe" + name,
+			ResponseType:  respType,
+			IsVoid:        isVoid,
+			Params:        g.buildParamData(info, paramNames),
 		})
 	}
 

@@ -49,6 +49,10 @@ export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{par
     return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 
+export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void): () => void {
+    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError);
+}
+
 {{end -}}
 {{range .PushEvents -}}
 export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
@@ -64,7 +68,7 @@ export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.Resp
         (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),
         [],
     );
-    return useQuery(wrappedFn, options);
+    return useQuery(wrappedFn, { ...options, _subscribe: { method: '{{.WireMethod}}', params: [] } });
 }
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
@@ -80,7 +84,7 @@ export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions):
         (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal }),
         [],
     );
-    return useQuery(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
+    return useQuery(wrappedFn, { ...options, params: [{{paramNames .Params}}], _subscribe: { method: '{{.WireMethod}}', params: [{{paramNames .Params}}] } });
 }
 
 export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {
