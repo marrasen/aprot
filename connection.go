@@ -304,6 +304,10 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 	ctx = withRequest(ctx, req)
 
+	// Add refresh queue for batched trigger processing
+	rq := &refreshQueue{}
+	ctx = withRefreshQueue(ctx, rq)
+
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
 	result, err := handler(ctx, req)
@@ -326,6 +330,9 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 
 	c.sendResponse(msg.ID, result)
+
+	// Process batched refresh triggers after response is sent
+	c.server.processRefreshQueue(rq)
 }
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
@@ -360,6 +367,10 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	// Add trigger collector for subscription
 	tc := &triggerCollector{keys: make(map[string]struct{})}
 	ctx = withTriggerCollector(ctx, tc)
+
+	// Add refresh queue for batched trigger processing
+	rq := &refreshQueue{}
+	ctx = withRefreshQueue(ctx, rq)
 
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
@@ -400,11 +411,92 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 				id:     msg.ID,
 				method: msg.Method,
 				keys:   keys,
+				params: msg.Params,
 			})
 		}
 	}
 
 	c.sendResponse(msg.ID, result)
+
+	// Process batched refresh triggers after response is sent
+	c.server.processRefreshQueue(rq)
+}
+
+// refreshSubscription re-executes a subscription handler server-side
+// and sends the updated response directly to the subscriber.
+func (c *Conn) refreshSubscription(sub *subscription) {
+	defer c.server.requestsWg.Done()
+
+	// Check that the subscription still exists (may have been unsubscribed)
+	if !c.server.subscriptions.has(c.id, sub.id) {
+		return
+	}
+
+	info, ok := c.server.registry.Get(sub.method)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	c.registerRequest(sub.id, cancel)
+	defer func() {
+		c.unregisterRequest(sub.id)
+		cancel(nil)
+	}()
+
+	// Add standard context values
+	progress := newProgressReporter(c, sub.id)
+	ctx = withProgress(ctx, progress)
+	ctx = withConnection(ctx, c)
+	ctx = withHandlerInfo(ctx, info)
+
+	req := &Request{
+		ID:     sub.id,
+		Method: sub.method,
+		Params: sub.params,
+	}
+	ctx = withRequest(ctx, req)
+
+	// Add trigger collector for dynamic key updates
+	tc := &triggerCollector{keys: make(map[string]struct{})}
+	ctx = withTriggerCollector(ctx, tc)
+
+	// No refreshQueue — prevents cascading refreshes
+	// (TriggerRefresh calls during re-execution are no-ops)
+
+	handler := c.server.buildHandler(info)
+	result, err := handler(ctx, req)
+
+	if ctx.Err() == context.Canceled {
+		return
+	}
+
+	if err != nil {
+		if perr, ok := err.(*ProtocolError); ok {
+			c.sendError(sub.id, perr.Code, perr.Message)
+		} else if code, found := c.server.registry.LookupError(err); found {
+			c.sendError(sub.id, code, err.Error())
+		} else {
+			c.sendError(sub.id, CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	// If unsubscribed while handler was running, don't send or update
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Update trigger keys (handler may have registered different keys)
+	tc.mu.Lock()
+	keys := tc.keys
+	tc.mu.Unlock()
+
+	if len(keys) > 0 {
+		c.server.subscriptions.updateKeys(c.id, sub.id, keys)
+	}
+
+	c.sendResponse(sub.id, result)
 }
 
 func (c *Conn) handleUnsubscribe(id string) {

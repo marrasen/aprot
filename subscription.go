@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"sync"
+
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 // triggerCollector collects trigger keys during handler execution.
@@ -18,6 +20,7 @@ type subscription struct {
 	id     string              // client-assigned subscription ID
 	method string              // handler method name
 	keys   map[string]struct{} // trigger keys this subscription depends on
+	params jsontext.Value      // raw JSON params for server-driven re-execution
 }
 
 // subscriptionManager tracks all active subscriptions across connections.
@@ -171,15 +174,44 @@ func (sm *subscriptionManager) getSubscriptionsForKey(key string) []*subscriptio
 	return result
 }
 
-// refresh sends a RefreshMessage to all subscriptions matching the trigger key.
-func (sm *subscriptionManager) refresh(key string) {
-	subs := sm.getSubscriptionsForKey(key)
-	for _, sub := range subs {
-		msg := RefreshMessage{
-			Type: TypeRefresh,
-			ID:   sub.id,
+// refreshQueue collects trigger keys during a request handler execution.
+// After the handler returns, collected keys are resolved to subscriptions
+// and each is re-executed once (deduplicated by subscription identity).
+type refreshQueue struct {
+	mu   sync.Mutex
+	keys []string
+}
+
+func withRefreshQueue(ctx context.Context, rq *refreshQueue) context.Context {
+	return context.WithValue(ctx, refreshQueueKey, rq)
+}
+
+// processRefreshQueue resolves queued trigger keys to unique subscriptions
+// and re-executes each subscription handler in its own goroutine.
+func (s *Server) processRefreshQueue(rq *refreshQueue) {
+	rq.mu.Lock()
+	keys := rq.keys
+	rq.keys = nil
+	rq.mu.Unlock()
+
+	if len(keys) == 0 {
+		return
+	}
+
+	seen := make(map[*subscription]struct{})
+	var toRefresh []*subscription
+	for _, key := range keys {
+		for _, sub := range s.subscriptions.getSubscriptionsForKey(key) {
+			if _, ok := seen[sub]; !ok {
+				seen[sub] = struct{}{}
+				toRefresh = append(toRefresh, sub)
+			}
 		}
-		_ = sub.conn.sendJSON(msg)
+	}
+
+	for _, sub := range toRefresh {
+		s.requestsWg.Add(1)
+		go sub.conn.refreshSubscription(sub)
 	}
 }
 
@@ -207,13 +239,17 @@ func RegisterRefreshTrigger(ctx context.Context, keys ...string) {
 	tc.mu.Unlock()
 }
 
-// TriggerRefresh triggers a refresh for all subscriptions matching the given keys.
-// Called from mutation handlers to notify subscribed clients to re-fetch.
+// TriggerRefresh queues a refresh for all subscriptions matching the given keys.
+// Called from mutation handlers to notify subscribed clients of data changes.
+// Triggers are batched per-request and deduplicated by subscription when the
+// request handler completes. This is a no-op outside a request context.
 func TriggerRefresh(ctx context.Context, keys ...string) {
-	conn := Connection(ctx)
-	if conn == nil {
+	rq, ok := ctx.Value(refreshQueueKey).(*refreshQueue)
+	if !ok || rq == nil {
 		return
 	}
 	key := compositeKey(keys...)
-	conn.server.subscriptions.refresh(key)
+	rq.mu.Lock()
+	rq.keys = append(rq.keys, key)
+	rq.mu.Unlock()
 }
