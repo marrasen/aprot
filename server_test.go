@@ -48,8 +48,9 @@ type NotificationEvent struct {
 
 // Integration test handlers
 type IntegrationHandlers struct {
-	server      *Server
-	cancelCause chan error // receives cancel cause from CancelCauseCapture handler
+	server         *Server
+	cancelCause    chan error    // receives cancel cause from CancelCauseCapture handler
+	subscribePause chan struct{} // blocks SubscribeUsers until closed
 }
 
 func (h *IntegrationHandlers) Echo(ctx context.Context, req *EchoRequest) (*EchoResponse, error) {
@@ -92,6 +93,22 @@ func (h *IntegrationHandlers) CancelCauseCapture(ctx context.Context, req *SlowR
 		}
 	}
 	return &SlowResponse{Completed: true}, nil
+}
+
+type SubscribeUsersResponse struct {
+	Users []string `json:"users"`
+}
+
+func (h *IntegrationHandlers) SubscribeUsers(ctx context.Context) (*SubscribeUsersResponse, error) {
+	RegisterRefreshTrigger(ctx, "users")
+	if h.subscribePause != nil {
+		select {
+		case <-h.subscribePause:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &SubscribeUsersResponse{Users: []string{"alice", "bob"}}, nil
 }
 
 func setupTestServer(t *testing.T) (*httptest.Server, *Server, *IntegrationHandlers) {
@@ -1667,5 +1684,65 @@ func TestServerSQLNullRuntime(t *testing.T) {
 
 	if !strings.Contains(msg3, `"name":null`) {
 		t.Errorf("Expected name:null in echo response, got: %s", msg3)
+	}
+}
+
+func TestUnsubscribeDuringSubscribeHandler(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &IntegrationHandlers{
+		subscribePause: make(chan struct{}),
+	}
+	registry.Register(handlers)
+
+	server := NewServer(registry)
+	handlers.server = server
+
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Send subscribe — handler will block on subscribePause
+	sub := IncomingMessage{
+		Type:   TypeSubscribe,
+		ID:     "sub-1",
+		Method: "IntegrationHandlers.SubscribeUsers",
+	}
+	if err := ws.WriteJSON(sub); err != nil {
+		t.Fatalf("Write subscribe failed: %v", err)
+	}
+
+	// Give the handler goroutine time to start and block
+	time.Sleep(50 * time.Millisecond)
+
+	// Send unsubscribe while the subscribe handler is still running
+	unsub := IncomingMessage{
+		Type: TypeUnsubscribe,
+		ID:   "sub-1",
+	}
+	if err := ws.WriteJSON(unsub); err != nil {
+		t.Fatalf("Write unsubscribe failed: %v", err)
+	}
+
+	// Give the unsubscribe time to be processed synchronously
+	time.Sleep(50 * time.Millisecond)
+
+	// Now let the subscribe handler complete
+	close(handlers.subscribePause)
+
+	// Read the subscribe response (handler completed)
+	var resp ResponseMessage
+	if err := ws.ReadJSON(&resp); err != nil {
+		t.Fatalf("Read response failed: %v", err)
+	}
+	if resp.ID != "sub-1" {
+		t.Fatalf("Expected response ID sub-1, got %s", resp.ID)
+	}
+
+	// The subscription should NOT be registered after unsubscribe
+	subs := server.subscriptions.getSubscriptionsForKey("users")
+	if len(subs) != 0 {
+		t.Fatalf("expected no subscriptions for 'users' after unsubscribe, got %d", len(subs))
 	}
 }

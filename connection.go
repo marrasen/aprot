@@ -261,6 +261,7 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 		c.server.requestsWg.Add(1)
 		go c.handleSubscribe(msg)
 	case TypeUnsubscribe:
+		c.cancelRequest(msg.ID)
 		c.handleUnsubscribe(msg.ID)
 	case TypeCancel:
 		c.cancelRequest(msg.ID)
@@ -377,6 +378,11 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 		} else {
 			c.sendError(msg.ID, CodeInternalError, err.Error())
 		}
+		return
+	}
+
+	// If the client unsubscribed while the handler was running, don't register.
+	if ctx.Err() != nil {
 		return
 	}
 
