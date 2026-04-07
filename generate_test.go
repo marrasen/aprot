@@ -242,6 +242,17 @@ func TestGenerate(t *testing.T) {
 	if !strings.Contains(output, "tags?: string[]") {
 		t.Error("Missing optional tags field")
 	}
+
+	// Check for loading state API
+	if !strings.Contains(output, "onLoadingChange(listener: (count: number) => void): () => void") {
+		t.Error("Missing onLoadingChange method")
+	}
+	if !strings.Contains(output, "getLoadingCount(): number") {
+		t.Error("Missing getLoadingCount method")
+	}
+	if !strings.Contains(output, "notifyLoadingChange()") {
+		t.Error("Missing notifyLoadingChange calls")
+	}
 }
 
 func TestGenerateMultipleFiles(t *testing.T) {
@@ -289,6 +300,14 @@ func TestGenerateMultipleFiles(t *testing.T) {
 	}
 	if !strings.Contains(handlerContent, "export function createUser(client: ApiClient") {
 		t.Error("Missing createUser standalone function in handler file")
+	}
+
+	// Check loading state API in base client
+	if !strings.Contains(baseContent, "onLoadingChange(listener: (count: number) => void): () => void") {
+		t.Error("Missing onLoadingChange in multi-file client.ts")
+	}
+	if !strings.Contains(baseContent, "getLoadingCount(): number") {
+		t.Error("Missing getLoadingCount in multi-file client.ts")
 	}
 }
 
@@ -396,6 +415,17 @@ func TestGenerateReact(t *testing.T) {
 			t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
 		}
 	}
+
+	// Check for loading state hook
+	if !strings.Contains(output, "export function useIsLoading(): boolean") {
+		t.Error("Missing useIsLoading hook")
+	}
+	if !strings.Contains(output, "onLoadingChange") {
+		t.Error("Missing onLoadingChange in React output")
+	}
+	if !strings.Contains(output, "getLoadingCount") {
+		t.Error("Missing getLoadingCount in React output")
+	}
 }
 
 func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
@@ -469,6 +499,17 @@ func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	// Each method should have signal in both query and mutation hooks
 	if signalCount < 4 {
 		t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
+	}
+
+	// Check loading state hook in multi-file React client.ts
+	if !strings.Contains(clientContent, "export function useIsLoading(): boolean") {
+		t.Error("client.ts missing useIsLoading hook")
+	}
+	if !strings.Contains(clientContent, "onLoadingChange") {
+		t.Error("client.ts missing onLoadingChange method")
+	}
+	if !strings.Contains(clientContent, "getLoadingCount") {
+		t.Error("client.ts missing getLoadingCount method")
 	}
 }
 
