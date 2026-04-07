@@ -54,7 +54,7 @@ func (w *progressWriter) Close() error {
 type discardWriteCloser struct{}
 
 func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
-func (discardWriteCloser) Close() error                 { return nil }
+func (discardWriteCloser) Close() error                { return nil }
 
 // Ensure interface compliance at compile time.
 var (

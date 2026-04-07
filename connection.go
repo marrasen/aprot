@@ -24,8 +24,8 @@ type Conn struct {
 	requests  map[string]context.CancelCauseFunc
 	mu        sync.Mutex
 	closed    bool
-	userID    string          // associated user ID (set by middleware)
-	id        uint64          // unique connection ID
+	userID    string // associated user ID (set by middleware)
+	id        uint64 // unique connection ID
 	info      ConnInfo
 	valuesMu  sync.RWMutex    // guards values map (separate from mu to avoid contention with sendJSON/requests)
 	values    map[any]any     // connection-scoped key-value store (lazy init)
@@ -173,7 +173,7 @@ func (c *Conn) push(event string, data any) error {
 }
 
 func (c *Conn) sendJSON(v any) error {
-	data, err := json.Marshal(v)
+	data, err := marshalJSON(v)
 	if err != nil {
 		return err
 	}

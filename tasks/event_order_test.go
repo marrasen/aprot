@@ -110,8 +110,8 @@ func readAllPushMessages(t *testing.T, ws *websocket.Conn, reqID string) (pushes
 
 // rawPushWithData captures the full push message including raw data.
 type rawPushWithData struct {
-	Type  string          `json:"type"`
-	Event string          `json:"event"`
+	Type  string         `json:"type"`
+	Event string         `json:"event"`
 	Data  jsontext.Value `json:"data"`
 }
 

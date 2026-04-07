@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -1550,5 +1551,121 @@ func TestCancelCause_ServerShutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Timed out waiting for cancel cause")
+	}
+}
+
+// --- sql.Null* runtime integration test ---
+
+type NullableProfileResponse struct {
+	Name  sql.NullString  `json:"name"`
+	Age   sql.NullInt64   `json:"age"`
+	Score sql.NullFloat64 `json:"score"`
+	Born  sql.NullTime    `json:"born"`
+}
+
+type NullableProfileRequest struct {
+	Name sql.NullString `json:"name"`
+}
+
+type NullableHandlers struct{}
+
+func (h *NullableHandlers) GetProfile(ctx context.Context) (*NullableProfileResponse, error) {
+	return &NullableProfileResponse{
+		Name:  sql.NullString{String: "Alice", Valid: true},
+		Age:   sql.NullInt64{Int64: 30, Valid: true},
+		Score: sql.NullFloat64{Valid: false},
+		Born:  sql.NullTime{Valid: false},
+	}, nil
+}
+
+func (h *NullableHandlers) EchoName(ctx context.Context, req *NullableProfileRequest) (*NullableProfileRequest, error) {
+	return req, nil
+}
+
+func TestServerSQLNullRuntime(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&NullableHandlers{})
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Test 1: Response with mixed valid/null sql.Null* fields
+	req := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "NullableHandlers.GetProfile",
+	}
+	if err := ws.WriteJSON(req); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	_, raw, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	msg := string(raw)
+
+	// Valid fields should be unwrapped values
+	if !strings.Contains(msg, `"name":"Alice"`) {
+		t.Errorf("Expected unwrapped name, got: %s", msg)
+	}
+	if !strings.Contains(msg, `"age":30`) {
+		t.Errorf("Expected unwrapped age, got: %s", msg)
+	}
+	// Invalid fields should be null, not structs
+	if !strings.Contains(msg, `"score":null`) {
+		t.Errorf("Expected score:null, got: %s", msg)
+	}
+	if !strings.Contains(msg, `"born":null`) {
+		t.Errorf("Expected born:null, got: %s", msg)
+	}
+	// Must NOT contain the raw struct form
+	if strings.Contains(msg, `"Valid"`) || strings.Contains(msg, `"String"`) || strings.Contains(msg, `"Int64"`) {
+		t.Errorf("Response contains raw sql.Null struct fields: %s", msg)
+	}
+
+	// Test 2: Request with sql.Null* field (unmarshal direction)
+	req2 := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "2",
+		Method: "NullableHandlers.EchoName",
+		Params: jsontext.Value(`[{"name":"Bob"}]`),
+	}
+	if err := ws.WriteJSON(req2); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	_, raw2, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	msg2 := string(raw2)
+
+	if !strings.Contains(msg2, `"name":"Bob"`) {
+		t.Errorf("Expected unwrapped name in echo response, got: %s", msg2)
+	}
+
+	// Test 3: Request with null value
+	req3 := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "3",
+		Method: "NullableHandlers.EchoName",
+		Params: jsontext.Value(`[{"name":null}]`),
+	}
+	if err := ws.WriteJSON(req3); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	_, raw3, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	msg3 := string(raw3)
+
+	if !strings.Contains(msg3, `"name":null`) {
+		t.Errorf("Expected name:null in echo response, got: %s", msg3)
 	}
 }
