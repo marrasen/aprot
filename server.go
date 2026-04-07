@@ -68,6 +68,7 @@ type Server struct {
 	stopOnce        sync.Once    // ensures stopCh is closed only once
 	done            chan struct{} // closed by run() when it finishes
 	requestsWg      sync.WaitGroup
+	subscriptions   *subscriptionManager
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -105,10 +106,11 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		userConns:  make(map[string]map[*Conn]struct{}),
 		register:   make(chan *Conn),
 		unregister: make(chan *Conn),
-		middleware: []Middleware{},
-		options:    options,
-		stopCh:     make(chan struct{}),
-		done:       make(chan struct{}),
+		middleware:     []Middleware{},
+		options:        options,
+		stopCh:         make(chan struct{}),
+		done:           make(chan struct{}),
+		subscriptions:  newSubscriptionManager(),
 	}
 	// Run OnServerInit hooks (used by tasks/ to set up taskManager, middleware, etc.)
 	for _, hook := range registry.serverInitHooks {

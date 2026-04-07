@@ -23,6 +23,7 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 - **Server push** - Broadcast events to all connected clients
 - **Server-pushed config** - Automatically configure client reconnect/heartbeat settings
 - **Dual transport** - WebSocket and SSE+HTTP transports with identical API
+- **Subscription refresh** - Server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
 - **JSON-RPC style protocol** - Simple, debuggable wire format
 
 ## Installation
@@ -275,6 +276,56 @@ server.PushToUser("user_123", &NotificationEvent{
     Message: "You have a new message",
 })
 ```
+
+### Subscription Refresh
+
+Automatically refresh client queries when related data changes on the server. Query handlers declare trigger keys, and mutation handlers fire them to push updates to all subscribed clients.
+
+**Server side:**
+
+```go
+func (h *Handler) GetUserList(ctx context.Context) ([]User, error) {
+    aprot.RegisterRefreshTrigger(ctx, "users") // this query depends on "users"
+    users, err := h.db.ListUsers(ctx)
+    return users, err
+}
+
+func (h *Handler) GetUser(ctx context.Context, id string) (*User, error) {
+    aprot.RegisterRefreshTrigger(ctx, "user", id) // depends on "user" + specific ID
+    return h.db.GetUser(ctx, id)
+}
+
+func (h *Handler) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
+    if err := h.db.UpdateUser(ctx, req); err != nil {
+        return err
+    }
+    aprot.TriggerRefresh(ctx, "users")          // refreshes all GetUserList subscriptions
+    aprot.TriggerRefresh(ctx, "user", req.ID)   // refreshes GetUser subscriptions for this ID
+    return nil
+}
+```
+
+**React client** — no changes needed. `useQuery` hooks automatically subscribe and refresh:
+
+```tsx
+function UserList() {
+    // Automatically refreshes when any handler calls TriggerRefresh(ctx, "users")
+    const { data, isLoading } = useListUsers();
+    // ...
+}
+```
+
+**Vanilla client** — use the generated `subscribe` functions:
+
+```typescript
+const unsubscribe = subscribeListUsers(client, (users) => {
+    console.log("Users updated:", users);
+});
+
+// Later: unsubscribe();
+```
+
+`RegisterRefreshTrigger` takes variadic string arguments that form a composite trigger key. It is a no-op when called from a regular (non-subscribe) request. Subscriptions are automatically cleaned up when a client disconnects or unsubscribes.
 
 ### Context Helpers
 
@@ -1377,6 +1428,9 @@ Messages are JSON with a `type` field:
 | client→server | cancel | `{"type":"cancel","id":"1"}` |
 | server→client | push | `{"type":"push","event":"UserCreatedEvent","data":{...}}` |
 | server→client | config | `{"type":"config","reconnectInterval":1000,"heartbeatInterval":30000,...}` |
+| client→server | subscribe | `{"type":"subscribe","id":"1","method":"Handlers.ListUsers","params":[]}` |
+| client→server | unsubscribe | `{"type":"unsubscribe","id":"1"}` |
+| server→client | refresh | `{"type":"refresh","id":"1"}` |
 | server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |
 
 ## Examples

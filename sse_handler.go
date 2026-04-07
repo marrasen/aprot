@@ -141,9 +141,10 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // rpcRequest is the expected JSON body for POST /rpc.
 type rpcRequest struct {
+	Type         string         `json:"type,omitempty"`
 	ConnectionID string         `json:"connectionId"`
 	ID           string         `json:"id"`
-	Method       string         `json:"method"`
+	Method       string         `json:"method,omitempty"`
 	Params       jsontext.Value `json:"params,omitempty"`
 }
 
@@ -168,15 +169,29 @@ func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dispatch as an incoming message
-	msg := IncomingMessage{
-		Type:   TypeRequest,
-		ID:     req.ID,
-		Method: req.Method,
-		Params: req.Params,
+	// Dispatch based on message type
+	switch req.Type {
+	case "subscribe":
+		msg := IncomingMessage{
+			Type:   TypeSubscribe,
+			ID:     req.ID,
+			Method: req.Method,
+			Params: req.Params,
+		}
+		h.server.requestsWg.Add(1)
+		go conn.handleSubscribe(msg)
+	case "unsubscribe":
+		conn.handleUnsubscribe(req.ID)
+	default:
+		msg := IncomingMessage{
+			Type:   TypeRequest,
+			ID:     req.ID,
+			Method: req.Method,
+			Params: req.Params,
+		}
+		h.server.requestsWg.Add(1)
+		go conn.handleRequest(msg)
 	}
-	h.server.requestsWg.Add(1)
-	go conn.handleRequest(msg)
 
 	w.WriteHeader(http.StatusAccepted)
 }

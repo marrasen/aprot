@@ -9,6 +9,7 @@ const (
 	connectionKey
 	handlerInfoKey
 	requestKey
+	triggerCollectorKey
 )
 
 // Progress returns the ProgressReporter from the context.
