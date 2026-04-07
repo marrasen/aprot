@@ -160,6 +160,8 @@ export class ApiClient {
     }> = [];
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
+    private loadingListeners = new Set<(count: number) => void>();
+    private lastLoadingCount = 0;
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -209,6 +211,7 @@ export class ApiClient {
             p.reject(new Error('Connection closed'));
         }
         this.pending.clear();
+        this.notifyLoadingChange();
 
         if (this.manualDisconnect) {
             this.setState('disconnected');
@@ -274,6 +277,15 @@ export class ApiClient {
         return () => this.stateListeners.delete(listener);
     }
 
+    onLoadingChange(listener: (count: number) => void): () => void {
+        this.loadingListeners.add(listener);
+        return () => this.loadingListeners.delete(listener);
+    }
+
+    getLoadingCount(): number {
+        return this.pending.size + this.buffer.length;
+    }
+
     /** @deprecated Use onStateChange instead */
     onConnectionChange(listener: (connected: boolean) => void): () => void {
         const wrapper = (state: ConnectionState) => listener(state === 'connected');
@@ -315,6 +327,16 @@ export class ApiClient {
         this.heartbeatPending = false;
     }
 
+    private notifyLoadingChange(): void {
+        const count = this.pending.size + this.buffer.length;
+        if (count !== this.lastLoadingCount) {
+            this.lastLoadingCount = count;
+            for (const listener of this.loadingListeners) {
+                listener(count);
+            }
+        }
+    }
+
     private handleMessage(data: string): void {
         const msg = JSON.parse(data);
         switch (msg.type) {
@@ -327,6 +349,7 @@ export class ApiClient {
                     this.pending.delete(msg.id);
                     p.onSettle?.();
                     p.resolve(msg.result);
+                    this.notifyLoadingChange();
                 }
                 break;
             }
@@ -336,6 +359,7 @@ export class ApiClient {
                     this.pending.delete(msg.id);
                     p.onSettle?.();
                     p.reject(new ApiError(msg.code, msg.message));
+                    this.notifyLoadingChange();
                 }
                 break;
             }
@@ -371,10 +395,12 @@ export class ApiClient {
             if (this.state === 'connecting' || this.state === 'reconnecting') {
                 const entry = { method, params, options, resolve: res, reject };
                 this.buffer.push(entry);
+                this.notifyLoadingChange();
                 if (options?.signal) {
                     if (options.signal.aborted) {
                         this.buffer.pop();
                         reject(new Error('Request aborted'));
+                        this.notifyLoadingChange();
                         return;
                     }
                     options.signal.addEventListener('abort', () => {
@@ -382,6 +408,7 @@ export class ApiClient {
                         if (idx !== -1) {
                             this.buffer.splice(idx, 1);
                             reject(new Error('Request aborted'));
+                            this.notifyLoadingChange();
                         }
                     }, { once: true });
                 }
@@ -407,6 +434,7 @@ export class ApiClient {
                 this.pending.delete(id);
                 onSettle?.();
                 reject(new Error('Request aborted'));
+                this.notifyLoadingChange();
                 return;
             }
             options.signal.addEventListener('abort', () => {
@@ -417,9 +445,11 @@ export class ApiClient {
                 }
                 this.transport.send({ type: 'cancel', id });
                 reject(new Error('Request aborted'));
+                this.notifyLoadingChange();
             }, { once: true });
         }
         this.transport.send({ type: 'request', id, method, params });
+        this.notifyLoadingChange();
     }
 
     private flushBuffer(): void {
@@ -428,6 +458,7 @@ export class ApiClient {
         for (const entry of buffered) {
             if (entry.options?.signal?.aborted) {
                 entry.reject(new Error('Request aborted'));
+                this.notifyLoadingChange();
                 continue;
             }
             this.sendRequest(entry.method, entry.params, entry.options, entry.resolve, entry.reject);
@@ -440,6 +471,7 @@ export class ApiClient {
         for (const entry of buffered) {
             entry.reject(error);
         }
+        this.notifyLoadingChange();
     }
 
     onPush<T>(event: string, handler: PushHandler<T>): () => void {
