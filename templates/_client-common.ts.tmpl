@@ -70,10 +70,6 @@ export interface ApiClientOptions {
     reconnectMaxInterval?: number;
     /** Maximum reconnect attempts. 0 = unlimited. Default: 0 */
     reconnectMaxAttempts?: number;
-    /** Heartbeat interval in ms. 0 = disabled. Default: 30000 */
-    heartbeatInterval?: number;
-    /** Heartbeat timeout in ms. Default: 5000 */
-    heartbeatTimeout?: number;
     /** Called when the server rejects the connection (e.g. invalid session). Connection will not auto-reconnect. */
     onConnectionRejected?: (error: ApiError) => void;
 }
@@ -86,8 +82,6 @@ const defaultOptions: ResolvedOptions = {
     reconnectInterval: 1000,
     reconnectMaxInterval: 30000,
     reconnectMaxAttempts: 0,
-    heartbeatInterval: 30000,
-    heartbeatTimeout: 5000,
 };
 {{end}}
 
@@ -154,8 +148,7 @@ type ClientMessage =
     | { type: 'request'; id: string; method: string; params: unknown[] }
     | { type: 'subscribe'; id: string; method: string; params: unknown[] }
     | { type: 'unsubscribe'; id: string }
-    | { type: 'cancel'; id: string }
-    | { type: 'ping' };
+    | { type: 'cancel'; id: string };
 
 class SSETransport implements ClientTransport {
     private eventSource: EventSource | null = null;
@@ -249,7 +242,6 @@ class SSETransport implements ClientTransport {
                 }),
             }).catch(() => {});
         }
-        // ping is a no-op for SSE (server uses keep-alive comments)
     }
 
     private synthesizeError(id: string, message: string): void {
@@ -302,9 +294,9 @@ export class ApiClient {
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-    private heartbeatPending = false;
     private manualDisconnect = false;
+    private visibilityHandler: (() => void) | null = null;
+    private onlineHandler: (() => void) | null = null;
 
     constructor(url: string, options?: ApiClientOptions) {
         this.url = url;
@@ -319,6 +311,7 @@ export class ApiClient {
             return Promise.resolve();
         }
         this.manualDisconnect = false;
+        this.setupPageListeners();
         return this.doConnect();
     }
 
@@ -332,17 +325,12 @@ export class ApiClient {
         ).then(() => {
             this.reconnectAttempts = 0;
             this.setState('connected');
-            if (this.options.transport !== 'sse') {
-                this.startHeartbeat();
-            }
         }).catch(() => {
             this.handleClose();
         });
     }
 
     private handleClose(): void {
-        this.stopHeartbeat();
-
         // Reject all pending requests (but keep subscription entries for reconnect)
         const subIds = new Set(this.subscriptions.keys());
         for (const [id, p] of this.pending) {
@@ -390,7 +378,7 @@ export class ApiClient {
 
     disconnect(): void {
         this.manualDisconnect = true;
-        this.stopHeartbeat();
+        this.teardownPageListeners();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -443,36 +431,42 @@ export class ApiClient {
         return this.state === 'connected';
     }
 
-    private startHeartbeat(): void {
-        if (this.options.heartbeatInterval <= 0) return;
+    private setupPageListeners(): void {
+        if (typeof document === 'undefined') return;
+        this.teardownPageListeners();
 
-        this.heartbeatTimer = setInterval(() => {
-            if (!this.transport.isConnected()) return;
+        this.visibilityHandler = () => {
+            if (!document.hidden) this.handlePageWake();
+        };
+        this.onlineHandler = () => this.handlePageWake();
 
-            if (this.heartbeatPending) {
-                // Previous ping not answered, connection is dead
-                this.transport.disconnect();
-                return;
-            }
-
-            this.heartbeatPending = true;
-            this.transport.send({ type: 'ping' });
-
-            // Set timeout for pong response
-            setTimeout(() => {
-                if (this.heartbeatPending && this.transport.isConnected()) {
-                    this.transport.disconnect();
-                }
-            }, this.options.heartbeatTimeout);
-        }, this.options.heartbeatInterval);
+        document.addEventListener('visibilitychange', this.visibilityHandler);
+        window.addEventListener('online', this.onlineHandler);
     }
 
-    private stopHeartbeat(): void {
-        if (this.heartbeatTimer) {
-            clearInterval(this.heartbeatTimer);
-            this.heartbeatTimer = null;
+    private teardownPageListeners(): void {
+        if (typeof document === 'undefined') return;
+        if (this.visibilityHandler) {
+            document.removeEventListener('visibilitychange', this.visibilityHandler);
+            this.visibilityHandler = null;
         }
-        this.heartbeatPending = false;
+        if (this.onlineHandler) {
+            window.removeEventListener('online', this.onlineHandler);
+            this.onlineHandler = null;
+        }
+    }
+
+    private handlePageWake(): void {
+        if (this.manualDisconnect) return;
+        if (this.state === 'connected' && this.transport.isConnected()) return;
+        if (this.state === 'connecting') return;
+
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.reconnectAttempts = 0;
+        this.doConnect().catch(() => {});
     }
 
     private notifyLoadingChange(): void {
@@ -490,9 +484,6 @@ export class ApiClient {
         switch (msg.type) {
             case 'config':
                 this.applyConfig(msg);
-                break;
-            case 'pong':
-                this.heartbeatPending = false;
                 break;
             case 'response': {
                 const p = this.pending.get(msg.id);
@@ -556,8 +547,6 @@ export class ApiClient {
         reconnectInterval?: number;
         reconnectMaxInterval?: number;
         reconnectMaxAttempts?: number;
-        heartbeatInterval?: number;
-        heartbeatTimeout?: number;
     }): void {
         if (config.reconnectInterval !== undefined) {
             this.options.reconnectInterval = config.reconnectInterval;
@@ -567,17 +556,6 @@ export class ApiClient {
         }
         if (config.reconnectMaxAttempts !== undefined) {
             this.options.reconnectMaxAttempts = config.reconnectMaxAttempts;
-        }
-        if (config.heartbeatInterval !== undefined) {
-            this.options.heartbeatInterval = config.heartbeatInterval;
-            // Restart heartbeat with new interval if already running
-            if (this.heartbeatTimer) {
-                this.stopHeartbeat();
-                this.startHeartbeat();
-            }
-        }
-        if (config.heartbeatTimeout !== undefined) {
-            this.options.heartbeatTimeout = config.heartbeatTimeout;
         }
     }
 

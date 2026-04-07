@@ -32,10 +32,6 @@ type ServerOptions struct {
 	ReconnectMaxInterval int
 	// ReconnectMaxAttempts is the maximum number of reconnect attempts. 0 = unlimited. Default: 0
 	ReconnectMaxAttempts int
-	// HeartbeatInterval is the heartbeat interval in milliseconds. Default: 30000
-	HeartbeatInterval int
-	// HeartbeatTimeout is the heartbeat timeout in milliseconds. Default: 5000
-	HeartbeatTimeout int
 }
 
 func defaultServerOptions() ServerOptions {
@@ -43,8 +39,6 @@ func defaultServerOptions() ServerOptions {
 		ReconnectInterval:    1000,
 		ReconnectMaxInterval: 30000,
 		ReconnectMaxAttempts: 0,
-		HeartbeatInterval:    30000,
-		HeartbeatTimeout:     5000,
 	}
 }
 
@@ -86,12 +80,6 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		}
 		if opt.ReconnectMaxAttempts > 0 {
 			options.ReconnectMaxAttempts = opt.ReconnectMaxAttempts
-		}
-		if opt.HeartbeatInterval > 0 {
-			options.HeartbeatInterval = opt.HeartbeatInterval
-		}
-		if opt.HeartbeatTimeout > 0 {
-			options.HeartbeatTimeout = opt.HeartbeatTimeout
 		}
 	}
 
@@ -437,8 +425,6 @@ func sendConfigWS(ws *websocket.Conn, opts ServerOptions) {
 		ReconnectInterval:    opts.ReconnectInterval,
 		ReconnectMaxInterval: opts.ReconnectMaxInterval,
 		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
-		HeartbeatInterval:    opts.HeartbeatInterval,
-		HeartbeatTimeout:     opts.HeartbeatTimeout,
 	}
 	data, _ := json.Marshal(msg)
 	_ = ws.WriteMessage(websocket.TextMessage, data)

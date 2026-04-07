@@ -7,7 +7,7 @@ describe('WebSocket Transport', () => {
     let client: ApiClient;
 
     beforeEach(async () => {
-        client = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        client = new ApiClient(wsUrl(), { reconnect: false });
         await client.connect();
     });
 
@@ -92,7 +92,7 @@ describe('WebSocket Transport', () => {
     });
 
     test('createUser broadcasts UserCreated to second client', async () => {
-        const client2 = new ApiClient(wsUrl(), { reconnect: false, heartbeatInterval: 0 });
+        const client2 = new ApiClient(wsUrl(), { reconnect: false });
         await client2.connect();
 
         try {

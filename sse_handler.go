@@ -98,8 +98,6 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		ReconnectInterval:    h.server.options.ReconnectInterval,
 		ReconnectMaxInterval: h.server.options.ReconnectMaxInterval,
 		ReconnectMaxAttempts: h.server.options.ReconnectMaxAttempts,
-		HeartbeatInterval:    h.server.options.HeartbeatInterval,
-		HeartbeatTimeout:     h.server.options.HeartbeatTimeout,
 	}
 	configData, _ := json.Marshal(configMsg)
 	sseT.sendEvent("config", configData)
