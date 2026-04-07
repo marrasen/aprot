@@ -49,8 +49,8 @@ type NotificationEvent struct {
 // Integration test handlers
 type IntegrationHandlers struct {
 	server         *Server
-	cancelCause    chan error      // receives cancel cause from CancelCauseCapture handler
-	subscribePause chan struct{}   // blocks SubscribeUsers until closed
+	cancelCause    chan error    // receives cancel cause from CancelCauseCapture handler
+	subscribePause chan struct{} // blocks SubscribeUsers until closed
 }
 
 func (h *IntegrationHandlers) Echo(ctx context.Context, req *EchoRequest) (*EchoResponse, error) {
