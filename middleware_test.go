@@ -257,7 +257,7 @@ func TestPerHandlerMiddleware(t *testing.T) {
 	}
 
 	registry := NewRegistry()
-	registry.Register(&PublicTestHandler{})                   // No middleware
+	registry.Register(&PublicTestHandler{})                    // No middleware
 	registry.Register(&ProtectedTestHandler{}, authMiddleware) // With auth
 
 	server := NewServer(registry)
@@ -320,7 +320,7 @@ func TestGetMiddleware(t *testing.T) {
 	}
 
 	registry := NewRegistry()
-	registry.Register(&PublicTestHandler{})                   // No middleware
+	registry.Register(&PublicTestHandler{})                    // No middleware
 	registry.Register(&ProtectedTestHandler{}, testMiddleware) // With middleware
 
 	// Check middleware retrieval
@@ -624,10 +624,10 @@ func TestSetUserIDDisassociatesOldUser(t *testing.T) {
 
 func TestErrorCodes(t *testing.T) {
 	tests := []struct {
-		name     string
-		err      *ProtocolError
-		code     int
-		message  string
+		name    string
+		err     *ProtocolError
+		code    int
+		message string
 	}{
 		{"Unauthorized", ErrUnauthorized("not logged in"), CodeUnauthorized, "not logged in"},
 		{"Forbidden", ErrForbidden("access denied"), CodeForbidden, "access denied"},

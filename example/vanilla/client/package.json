@@ -7,6 +7,6 @@
     "watch": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020 --watch"
   },
   "devDependencies": {
-    "esbuild": "^0.20.0"
+    "esbuild": "^0.28.0"
   }
 }

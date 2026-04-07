@@ -51,9 +51,9 @@ func main() {
 	}
 
 	// Routes
-	http.Handle("/ws", server)                              // WebSocket transport
-	http.Handle("/sse", server.HTTPTransport())             // SSE+HTTP transport (GET /sse, POST /sse/rpc, POST /sse/cancel)
-	http.Handle("/sse/", server.HTTPTransport())            // SSE+HTTP sub-routes
+	http.Handle("/ws", server)                   // WebSocket transport
+	http.Handle("/sse", server.HTTPTransport())  // SSE+HTTP transport (GET /sse, POST /sse/rpc, POST /sse/cancel)
+	http.Handle("/sse/", server.HTTPTransport()) // SSE+HTTP sub-routes
 	http.Handle("/", http.FileServer(http.Dir(staticDir)))
 
 	addr := ":8080"

@@ -74,4 +74,3 @@ func withRequest(ctx context.Context, req *Request) context.Context {
 func CancelCause(ctx context.Context) error {
 	return context.Cause(ctx)
 }
-

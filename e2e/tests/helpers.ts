@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { WebSocket } from 'ws';
-import EventSource from 'eventsource';
+import { EventSource } from 'eventsource';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

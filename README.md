@@ -1425,6 +1425,14 @@ cd .. && npm install && npm test
 
 Tests cover: request/response, error handling, progress reporting, request cancellation, push events, broadcast, authentication middleware, and enum types.
 
+### Formatting
+
+A pre-commit hook ensures Go files are formatted before each commit. Enable it once after cloning:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ### Linting
 
 ```bash
@@ -1440,12 +1448,13 @@ cd e2e && npm run lint
 
 ### CI
 
-GitHub Actions runs four jobs on every push/PR to `master`:
+GitHub Actions runs five jobs on every push/PR to `master`:
 
-1. **go-tests** - Go unit and integration tests with race detection
-2. **go-lint** - Runs golangci-lint across all Go modules
-3. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
-4. **e2e-tests** - Runs the full E2E suite (with ESLint) against a live server
+1. **go-fmt** - Verifies all Go files are formatted with `gofmt`
+2. **go-tests** - Go unit and integration tests with race detection
+3. **go-lint** - Runs golangci-lint across all Go modules
+4. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
+5. **e2e-tests** - Runs the full E2E suite (with ESLint) against a live server
 
 ## License
 

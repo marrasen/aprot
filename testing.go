@@ -27,8 +27,8 @@ func (t *recordingTransport) Send(data []byte) error {
 	return nil
 }
 
-func (t *recordingTransport) Close() error            { return nil }
-func (t *recordingTransport) CloseGracefully() error   { return nil }
+func (t *recordingTransport) Close() error           { return nil }
+func (t *recordingTransport) CloseGracefully() error { return nil }
 
 func (t *recordingTransport) Messages() [][]byte {
 	t.mu.Lock()
