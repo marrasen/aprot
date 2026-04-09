@@ -213,6 +213,28 @@ func TestTriggerRefresh_NoQueue(t *testing.T) {
 	TriggerRefresh(ctx, "users") // should not panic
 }
 
+func TestTriggerRefreshNow_NoQueue(t *testing.T) {
+	// Should be a no-op when no refresh queue in context
+	ctx := context.Background()
+	TriggerRefreshNow(ctx, "users") // should not panic
+}
+
+func TestTriggerRefreshNow_NoServer_QueuesOnly(t *testing.T) {
+	// When rq.server is nil (e.g. subscription re-execution path doesn't
+	// attach one), TriggerRefreshNow degrades to plain queueing so callers
+	// can't accidentally cascade refreshes.
+	rq := &refreshQueue{}
+	ctx := withRefreshQueue(context.Background(), rq)
+
+	TriggerRefreshNow(ctx, "users")
+
+	rq.mu.Lock()
+	defer rq.mu.Unlock()
+	if len(rq.keys) != 1 || rq.keys[0] != "users" {
+		t.Fatalf("expected keys=[users], got %v", rq.keys)
+	}
+}
+
 func TestProcessRefreshQueue_Deduplication(t *testing.T) {
 	sm := newSubscriptionManager()
 

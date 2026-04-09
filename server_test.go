@@ -110,8 +110,17 @@ func (h *IntegrationHandlers) SubscribeUsers(ctx context.Context) (*SubscribeUse
 			return nil, ctx.Err()
 		}
 	}
+	// Return a defensive copy. Subscription refreshes run in their own
+	// goroutines and marshal the response after the handler returns, so
+	// sharing the backing array would race with any concurrent mutation —
+	// for example, TriggerRefreshNow fires a refresh while
+	// ProgressiveAddUser continues executing and modifies h.users in place.
 	h.mu.RLock()
-	users := h.users
+	var users []string
+	if h.users != nil {
+		users = make([]string, len(h.users))
+		copy(users, h.users)
+	}
 	h.mu.RUnlock()
 	if users == nil {
 		users = []string{"alice", "bob"}
@@ -134,6 +143,38 @@ func (h *IntegrationHandlers) AddUser(ctx context.Context, req *AddUserRequest) 
 	}
 	h.users = append(h.users, req.Name)
 	h.mu.Unlock()
+	TriggerRefresh(ctx, "users")
+	return &AddUserResponse{Added: true}, nil
+}
+
+// ProgressiveAddUser appends "<name>-pending" to the users list, flushes the
+// refresh queue immediately so subscribers observe the pending state, then
+// upgrades the entry to the final name and batches a final refresh. Used by
+// TestTriggerRefreshNow_MidHandlerFlush.
+func (h *IntegrationHandlers) ProgressiveAddUser(ctx context.Context, req *AddUserRequest) (*AddUserResponse, error) {
+	h.mu.Lock()
+	if h.users == nil {
+		h.users = []string{"alice", "bob"}
+	}
+	h.users = append(h.users, req.Name+"-pending")
+	h.mu.Unlock()
+
+	// Immediate flush: subscribed clients observe "<name>-pending".
+	TriggerRefreshNow(ctx, "users")
+
+	// Simulate background work between state transitions.
+	time.Sleep(20 * time.Millisecond)
+
+	h.mu.Lock()
+	for i, u := range h.users {
+		if u == req.Name+"-pending" {
+			h.users[i] = req.Name
+			break
+		}
+	}
+	h.mu.Unlock()
+
+	// Batched: the final "<name>" state is pushed when the handler returns.
 	TriggerRefresh(ctx, "users")
 	return &AddUserResponse{Added: true}, nil
 }
@@ -1829,6 +1870,108 @@ func TestServerDrivenRefresh(t *testing.T) {
 	resultStr := string(resultBytes)
 	if !strings.Contains(resultStr, "charlie") {
 		t.Fatalf("Expected refresh response to contain 'charlie', got %s", resultStr)
+	}
+}
+
+// TestTriggerRefreshNow_MidHandlerFlush verifies that calling TriggerRefreshNow
+// from within a handler flushes the refresh queue immediately — subscribers
+// see an intermediate state update while the handler is still running, and
+// then the final state when the handler returns.
+func TestTriggerRefreshNow_MidHandlerFlush(t *testing.T) {
+	ts, _, _ := setupTestServer(t)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// Subscribe to users
+	sub := IncomingMessage{
+		Type:   TypeSubscribe,
+		ID:     "sub-1",
+		Method: "IntegrationHandlers.SubscribeUsers",
+	}
+	if err := ws.WriteJSON(sub); err != nil {
+		t.Fatalf("Write subscribe failed: %v", err)
+	}
+
+	// Read initial response
+	var initial ResponseMessage
+	if err := ws.ReadJSON(&initial); err != nil {
+		t.Fatalf("Read initial response failed: %v", err)
+	}
+	if initial.ID != "sub-1" || initial.Type != TypeResponse {
+		t.Fatalf("Expected response for sub-1, got %+v", initial)
+	}
+
+	// Trigger the progressive mutation. It should produce:
+	//  1. the mutation response (req-1)
+	//  2. a refresh showing "dave-pending" (from TriggerRefreshNow)
+	//  3. a refresh showing "dave" (from TriggerRefresh, flushed on return)
+	mutReq := IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "req-1",
+		Method: "IntegrationHandlers.ProgressiveAddUser",
+		Params: jsontext.Value(`[{"name":"dave"}]`),
+	}
+	if err := ws.WriteJSON(mutReq); err != nil {
+		t.Fatalf("Write mutation failed: %v", err)
+	}
+
+	// Collect three messages: mutation response + two refreshes.
+	// Refreshes are pushed as subscription IDs ("sub-1"); order of mutation
+	// response vs first refresh may vary because they race between
+	// sendResponse and the spawned refresh goroutine. The two refreshes,
+	// however, are strictly ordered because they're pushed by the same
+	// connection in sequence.
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var mutationResp ResponseMessage
+	var refreshes []ResponseMessage
+	for i := 0; i < 3; i++ {
+		var msg ResponseMessage
+		if err := ws.ReadJSON(&msg); err != nil {
+			t.Fatalf("Read message %d failed: %v", i, err)
+		}
+		switch msg.ID {
+		case "req-1":
+			mutationResp = msg
+		case "sub-1":
+			refreshes = append(refreshes, msg)
+		default:
+			t.Fatalf("Unexpected message ID: %s", msg.ID)
+		}
+	}
+
+	if mutationResp.Type != TypeResponse {
+		t.Fatalf("Expected mutation response, got %+v", mutationResp)
+	}
+	if len(refreshes) != 2 {
+		t.Fatalf("Expected 2 refresh messages (pending + final), got %d", len(refreshes))
+	}
+
+	first, err := json.Marshal(refreshes[0].Result)
+	if err != nil {
+		t.Fatalf("Marshal refresh[0] failed: %v", err)
+	}
+	second, err := json.Marshal(refreshes[1].Result)
+	if err != nil {
+		t.Fatalf("Marshal refresh[1] failed: %v", err)
+	}
+
+	firstStr, secondStr := string(first), string(second)
+
+	// The first refresh must show the pending state; the second must show
+	// the final state. This confirms TriggerRefreshNow fired mid-handler.
+	if !strings.Contains(firstStr, "dave-pending") {
+		t.Fatalf("Expected first refresh to contain 'dave-pending', got %s", firstStr)
+	}
+	if strings.Contains(firstStr, `"dave"`) {
+		t.Fatalf("First refresh should not yet contain final 'dave', got %s", firstStr)
+	}
+	if !strings.Contains(secondStr, `"dave"`) {
+		t.Fatalf("Expected second refresh to contain final 'dave', got %s", secondStr)
+	}
+	if strings.Contains(secondStr, "dave-pending") {
+		t.Fatalf("Second refresh should not contain 'dave-pending', got %s", secondStr)
 	}
 }
 
