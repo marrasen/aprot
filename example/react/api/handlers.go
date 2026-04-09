@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -53,7 +54,13 @@ func (h *Handlers) CreateUser(ctx context.Context, name string, email string) (*
 	h.users[id] = user
 	h.mu.Unlock()
 
-	// Broadcast to all clients that a user was created
+	// Re-execute ListUsers / GetDashboard subscriptions on every client.
+	// Subscribed React hooks re-render automatically — no client-side refetch code.
+	aprot.TriggerRefresh(ctx, "users")
+
+	// Also broadcast a push event so clients can show a transient notification
+	// in the event log. This demonstrates that push events and refresh triggers
+	// are complementary: triggers refresh data, events fire one-shot notifications.
 	if h.broadcaster != nil {
 		h.broadcaster.Broadcast(&UserCreatedEvent{
 			ID:    user.ID,
@@ -75,6 +82,11 @@ func (h *Handlers) GetUser(ctx context.Context, id string) (*GetUserResponse, er
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 
+	// Subscribe to refreshes keyed by this specific user ID. A mutation that
+	// edits user "42" only needs to fire TriggerRefresh(ctx, "user", "42") to
+	// update clients viewing that user — not every GetUser subscription.
+	aprot.RegisterRefreshTrigger(ctx, "user", id)
+
 	h.mu.RLock()
 	user, ok := h.users[id]
 	h.mu.RUnlock()
@@ -92,6 +104,11 @@ func (h *Handlers) GetUser(ctx context.Context, id string) (*GetUserResponse, er
 
 // ListUsers returns all users (no request parameter needed).
 func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
+	// Declare the trigger key this query depends on. Any handler that calls
+	// aprot.TriggerRefresh(ctx, "users") will cause every subscribed client's
+	// useListUsers() hook to re-render with fresh data automatically.
+	aprot.RegisterRefreshTrigger(ctx, "users")
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -104,6 +121,9 @@ func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
 }
 
 // ProcessBatch processes items with progress reporting.
+// When canceled, it distinguishes the cancel cause so the client (or an
+// operator reading the logs) can tell whether the user hit Cancel, the
+// connection dropped, or the server is shutting down.
 func (h *Handlers) ProcessBatch(ctx context.Context, items []string, delay int) (*ProcessBatchResponse, error) {
 	if len(items) == 0 {
 		return nil, aprot.ErrInvalidParams("items cannot be empty")
@@ -116,17 +136,30 @@ func (h *Handlers) ProcessBatch(ctx context.Context, items []string, delay int) 
 	progress := aprot.Progress(ctx)
 	results := make([]string, 0, len(items))
 
+	bail := func() error {
+		cause := aprot.CancelCause(ctx)
+		switch cause {
+		case aprot.ErrClientCanceled:
+			log.Printf("ProcessBatch: client canceled after %d/%d items", len(results), len(items))
+		case aprot.ErrConnectionClosed:
+			log.Printf("ProcessBatch: connection closed after %d/%d items", len(results), len(items))
+		case aprot.ErrServerShutdown:
+			log.Printf("ProcessBatch: server shutdown after %d/%d items", len(results), len(items))
+		}
+		return aprot.ErrCanceled()
+	}
+
 	for i, item := range items {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, bail()
 		default:
 		}
 
 		progress.Update(i+1, len(items), fmt.Sprintf("Processing: %s", item))
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, bail()
 		case <-time.After(time.Duration(delay) * time.Millisecond):
 		}
 		results = append(results, fmt.Sprintf("processed_%s", item))
@@ -165,6 +198,9 @@ func (h *Handlers) GetTask(ctx context.Context, id string) (*GetTaskResponse, er
 // GetDashboard returns a dashboard summary (no request parameter needed).
 // Exercises complex type generation: map-of-struct, slice-of-pointer, map-of-slice.
 func (h *Handlers) GetDashboard(ctx context.Context) (*GetDashboardResponse, error) {
+	// Dashboard depends on user data; any user mutation re-renders it.
+	aprot.RegisterRefreshTrigger(ctx, "users")
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

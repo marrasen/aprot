@@ -1,5 +1,5 @@
 import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
-import { TaskStatus, TaskStatusType, createUser, getUser, listUsers, getTask, processBatch, sendNotification, onUserCreatedEvent, onUserUpdatedEvent, onSystemNotificationEvent } from './api/public-handlers';
+import { TaskStatus, TaskStatusType, ListUsersResponse, createUser, getTask, processBatch, subscribeListUsers, onUserCreatedEvent, onUserUpdatedEvent, onSystemNotificationEvent } from './api/public-handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
@@ -37,7 +37,7 @@ async function doCreateUser(): Promise<void> {
         return;
     }
     try {
-        const result = await createUser(client, { name, email });
+        const result = await createUser(client, name, email);
         log(`Created user: ${JSON.stringify(result)}`, 'response');
         (document.getElementById('userName') as HTMLInputElement).value = '';
         (document.getElementById('userEmail') as HTMLInputElement).value = '';
@@ -46,20 +46,25 @@ async function doCreateUser(): Promise<void> {
     }
 }
 
-async function doListUsers(): Promise<void> {
-    if (!client) return;
-    try {
-        const result = await listUsers(client);
-        const listEl = document.getElementById('usersList')!;
-        if (result.users.length === 0) {
-            listEl.innerHTML = '<li>No users yet</li>';
-        } else {
-            listEl.innerHTML = result.users.map(u =>
-                `<li><strong>${u.name}</strong> - ${u.email} (${u.id})</li>`
-            ).join('');
-        }
-    } catch (err) {
-        log(`Error listing users: ${(err as Error).message}`, 'error');
+// Render the users list. Called by the subscribeListUsers subscription
+// whenever the server pushes an updated result (initial load + every
+// TriggerRefresh(ctx, "users") on the server).
+function renderUsers(data: ListUsersResponse): void {
+    const listEl = document.getElementById('usersList')!;
+    listEl.textContent = '';
+    if (data.users.length === 0) {
+        const empty = document.createElement('li');
+        empty.textContent = 'No users yet';
+        listEl.appendChild(empty);
+        return;
+    }
+    for (const u of data.users) {
+        const li = document.createElement('li');
+        const strong = document.createElement('strong');
+        strong.textContent = u.name;
+        li.appendChild(strong);
+        li.appendChild(document.createTextNode(` - ${u.email} (${u.id})`));
+        listEl.appendChild(li);
     }
 }
 
@@ -103,7 +108,7 @@ async function doGetTask(): Promise<void> {
         return;
     }
     try {
-        const task = await getTask(client, { id: taskId });
+        const task = await getTask(client, taskId);
 
         // Display task info with enum-based status
         const taskInfoEl = document.getElementById('taskInfo')!;
@@ -150,10 +155,11 @@ async function doProcessBatch(): Promise<void> {
     try {
         const result = await processBatch(
             client,
-            { items, delay },
+            items,
+            delay,
             {
                 signal: abortController.signal,
-                onProgress: (current, total, message) => {
+                onProgress: (current: number, total: number, message: string) => {
                     const pct = (current / total) * 100;
                     (document.getElementById('progressFill') as HTMLElement).style.width = `${pct}%`;
                     document.getElementById('progressText')!.textContent = `${current}/${total}: ${message}`;
@@ -190,14 +196,24 @@ function createClient(transport: 'websocket' | 'sse'): ApiClient {
         updateStatus(state === 'connected');
     });
 
+    // Update the global loading indicator dot whenever any request is in flight.
+    c.onLoadingChange((count) => {
+        const dot = document.getElementById('loadingDot');
+        if (!dot) return;
+        const busy = count > 0;
+        dot.style.background = busy ? '#ffc107' : '#28a745';
+        dot.title = busy ? `${count} request(s) in flight` : 'Idle';
+    });
+
+    // Push events still demonstrate one-shot notifications. The user list
+    // itself is kept fresh by the subscribeListUsers subscription below, so
+    // these handlers only log — no manual refetch needed.
     onUserCreatedEvent(c, (data) => {
         log(`User created: ${data.name} (${data.id})`, 'push');
-        doListUsers();
     });
 
     onUserUpdatedEvent(c, (data) => {
         log(`User updated: ${data.name} (${data.id})`, 'push');
-        doListUsers();
     });
 
     onSystemNotificationEvent(c, (data) => {
@@ -207,38 +223,41 @@ function createClient(transport: 'websocket' | 'sse'): ApiClient {
     return c;
 }
 
+async function connectAndSubscribe(): Promise<void> {
+    if (!client) return;
+    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
+    try {
+        await client.connect();
+        log(`Connected via ${transport}`, 'response');
+        // Server-driven subscription: the callback fires on initial load and
+        // again whenever any handler calls aprot.TriggerRefresh(ctx, "users").
+        subscribeListUsers(client, renderUsers, (err) => {
+            log(`Users subscription error: ${err.message}`, 'error');
+        });
+    } catch (err) {
+        log(`Connection failed: ${(err as Error).message}`, 'error');
+    }
+}
+
 async function reconnect(): Promise<void> {
     if (client) {
         client.disconnect();
     }
     const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
     client = createClient(transport);
-    try {
-        await client.connect();
-        log(`Connected via ${transport}`, 'response');
-        doListUsers();
-    } catch (err) {
-        log(`Connection failed: ${(err as Error).message}`, 'error');
-    }
+    await connectAndSubscribe();
 }
 
 async function init(): Promise<void> {
     const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
     client = createClient(transport);
-    try {
-        await client.connect();
-        log(`Connected via ${transport}`, 'response');
-        doListUsers();
-    } catch (err) {
-        log(`Connection failed: ${(err as Error).message}`, 'error');
-    }
+    await connectAndSubscribe();
 }
 
 // Expose functions to window for HTML onclick handlers
 declare global {
     interface Window {
         createUser: typeof doCreateUser;
-        listUsers: typeof doListUsers;
         getTask: typeof doGetTask;
         processBatch: typeof doProcessBatch;
         cancelBatch: typeof cancelBatch;
@@ -248,7 +267,6 @@ declare global {
 }
 
 window.createUser = doCreateUser;
-window.listUsers = doListUsers;
 window.getTask = doGetTask;
 window.processBatch = doProcessBatch;
 window.cancelBatch = cancelBatch;
