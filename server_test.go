@@ -110,8 +110,17 @@ func (h *IntegrationHandlers) SubscribeUsers(ctx context.Context) (*SubscribeUse
 			return nil, ctx.Err()
 		}
 	}
+	// Return a defensive copy. Subscription refreshes run in their own
+	// goroutines and marshal the response after the handler returns, so
+	// sharing the backing array would race with any concurrent mutation —
+	// for example, TriggerRefreshNow fires a refresh while
+	// ProgressiveAddUser continues executing and modifies h.users in place.
 	h.mu.RLock()
-	users := h.users
+	var users []string
+	if h.users != nil {
+		users = make([]string, len(h.users))
+		copy(users, h.users)
+	}
 	h.mu.RUnlock()
 	if users == nil {
 		users = []string{"alice", "bob"}

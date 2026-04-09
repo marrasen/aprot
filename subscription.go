@@ -272,6 +272,14 @@ func TriggerRefresh(ctx context.Context, keys ...string) {
 //
 // This is a no-op outside a request context and during subscription
 // re-execution (cascading refreshes are prevented).
+//
+// Concurrency: triggered subscription handlers run in their own goroutines,
+// concurrently with the rest of the calling handler. If the calling handler
+// mutates shared state that the subscription handler reads, the subscription
+// must return a defensive copy (or otherwise be safe to read without
+// coordination) to avoid data races. The same applies to any response
+// marshaling — a shared slice or map returned by the subscription may still
+// be marshaled after the caller continues executing.
 func TriggerRefreshNow(ctx context.Context, keys ...string) {
 	rq, ok := ctx.Value(refreshQueueKey).(*refreshQueue)
 	if !ok || rq == nil {

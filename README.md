@@ -473,6 +473,8 @@ func (h *Handler) RunJob(ctx context.Context, id string) error {
 
 `TriggerRefreshNow` flushes every key queued so far (not just the keys passed in the call), and subsequent `TriggerRefresh` / `TriggerRefreshNow` calls start with an empty queue. Like `TriggerRefresh`, it is a no-op outside a request context and a no-op during subscription re-execution (cascading refreshes are prevented).
 
+> **Concurrency note**: triggered subscription handlers run in their own goroutines, concurrently with the rest of the calling handler. If your handler mutates shared state that the subscription reads (e.g. slices or maps you return from the subscription), make sure the subscription returns a defensive copy — otherwise the subscription's marshal step can race with the handler's next mutation. Functional state updates and immutable snapshots avoid this entirely.
+
 ### Context Helpers
 
 Access request metadata in handlers and middleware:
