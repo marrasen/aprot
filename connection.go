@@ -295,8 +295,9 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 	ctx = withRequest(ctx, req)
 
-	// Add refresh queue for batched trigger processing
-	rq := &refreshQueue{}
+	// Add refresh queue for batched trigger processing.
+	// Server reference lets TriggerRefreshNow flush mid-handler.
+	rq := &refreshQueue{server: c.server}
 	ctx = withRefreshQueue(ctx, rq)
 
 	// Build and execute middleware chain
@@ -359,8 +360,9 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	tc := &triggerCollector{keys: make(map[string]struct{})}
 	ctx = withTriggerCollector(ctx, tc)
 
-	// Add refresh queue for batched trigger processing
-	rq := &refreshQueue{}
+	// Add refresh queue for batched trigger processing.
+	// Server reference lets TriggerRefreshNow flush mid-handler.
+	rq := &refreshQueue{server: c.server}
 	ctx = withRefreshQueue(ctx, rq)
 
 	// Build and execute middleware chain

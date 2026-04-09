@@ -54,12 +54,15 @@ func (h *Handlers) CreateTask(ctx context.Context, title string) (*Task, error) 
     return task, nil
 }
 
-// Mutation with progress reporting — the React mutation hook streams updates
-// into onProgress callbacks, and the refresh trigger updates every list.
+// Long-running mutation. TriggerRefreshNow flushes the refresh queue
+// mid-handler so subscribers observe the "running" state immediately;
+// progress.Update streams progress to the caller via onProgress; and the
+// final TriggerRefresh is batched to fire when the handler returns.
 func (h *Handlers) RunTask(ctx context.Context, id string) error {
     progress := aprot.Progress(ctx)
+
     h.store.SetStatus(id, TaskStatusRunning)
-    aprot.TriggerRefresh(ctx, "tasks")
+    aprot.TriggerRefreshNow(ctx, "tasks") // subscribers re-render with status=running
 
     for i := 1; i <= 5; i++ {
         progress.Update(i, 5, fmt.Sprintf("step %d/5", i))
@@ -67,7 +70,7 @@ func (h *Handlers) RunTask(ctx context.Context, id string) error {
     }
 
     h.store.SetStatus(id, TaskStatusDone)
-    aprot.TriggerRefresh(ctx, "tasks")
+    aprot.TriggerRefresh(ctx, "tasks") // batched; flushed on return
     return nil
 }
 ```
@@ -146,7 +149,7 @@ Open the component in two browser tabs, click "Add task" in one, and the other u
 - **Server-pushed config** - Automatically configure client reconnect settings
 - **Automatic reconnection** - Reconnects immediately when the page becomes visible or network comes back online, with exponential backoff for repeated failures
 - **Dual transport** - WebSocket and SSE+HTTP transports with identical API
-- **Subscription refresh** - Server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
+- **Subscription refresh** - Server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients. Triggers are batched by default; `TriggerRefreshNow` flushes mid-handler for long-running jobs that stream state transitions.
 - **JSON-RPC style protocol** - Simple, debuggable wire format
 
 ## Installation
@@ -449,6 +452,26 @@ const unsubscribe = subscribeListUsers(client, (users) => {
 ```
 
 `RegisterRefreshTrigger` takes variadic string arguments that form a composite trigger key. It is a no-op when called from a regular (non-subscribe) request. `TriggerRefresh` is a no-op outside a request context. Subscriptions are automatically cleaned up when a client disconnects or unsubscribes.
+
+**Immediate refresh from long-running handlers** — `aprot.TriggerRefreshNow(ctx, keys...)` flushes the refresh queue immediately instead of waiting for the handler to return. Use this when a handler makes observable state transitions over time and you want subscribers to see each transition:
+
+```go
+func (h *Handler) RunJob(ctx context.Context, id string) error {
+    h.store.SetStatus(id, StatusRunning)
+    aprot.TriggerRefreshNow(ctx, "jobs") // subscribers see status=running now
+
+    if err := h.doWork(ctx); err != nil {
+        h.store.SetStatus(id, StatusFailed)
+        return err // the queued final refresh still fires on return
+    }
+
+    h.store.SetStatus(id, StatusDone)
+    aprot.TriggerRefresh(ctx, "jobs") // batched; flushed on return
+    return nil
+}
+```
+
+`TriggerRefreshNow` flushes every key queued so far (not just the keys passed in the call), and subsequent `TriggerRefresh` / `TriggerRefreshNow` calls start with an empty queue. Like `TriggerRefresh`, it is a no-op outside a request context and a no-op during subscription re-execution (cascading refreshes are prevented).
 
 ### Context Helpers
 

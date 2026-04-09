@@ -177,9 +177,14 @@ func (sm *subscriptionManager) getSubscriptionsForKey(key string) []*subscriptio
 // refreshQueue collects trigger keys during a request handler execution.
 // After the handler returns, collected keys are resolved to subscriptions
 // and each is re-executed once (deduplicated by subscription identity).
+//
+// When server is set, TriggerRefreshNow can flush the queue immediately
+// from within the handler. When server is nil, only batched processing
+// (by the caller of processRefreshQueue) is supported.
 type refreshQueue struct {
-	mu   sync.Mutex
-	keys []string
+	mu     sync.Mutex
+	keys   []string
+	server *Server
 }
 
 func withRefreshQueue(ctx context.Context, rq *refreshQueue) context.Context {
@@ -252,4 +257,32 @@ func TriggerRefresh(ctx context.Context, keys ...string) {
 	rq.mu.Lock()
 	rq.keys = append(rq.keys, key)
 	rq.mu.Unlock()
+}
+
+// TriggerRefreshNow is like TriggerRefresh but flushes the refresh queue
+// immediately instead of deferring until the handler returns. Use this in
+// long-running handlers when you want subscribers to observe intermediate
+// state transitions before the handler completes.
+//
+// TriggerRefreshNow flushes every key queued so far (including keys passed to
+// prior TriggerRefresh calls), not just the keys in this call. Subsequent
+// TriggerRefresh / TriggerRefreshNow calls start with an empty queue, so a
+// handler can fire multiple rounds of refreshes by calling TriggerRefreshNow
+// at each state transition.
+//
+// This is a no-op outside a request context and during subscription
+// re-execution (cascading refreshes are prevented).
+func TriggerRefreshNow(ctx context.Context, keys ...string) {
+	rq, ok := ctx.Value(refreshQueueKey).(*refreshQueue)
+	if !ok || rq == nil {
+		return
+	}
+	key := compositeKey(keys...)
+	rq.mu.Lock()
+	rq.keys = append(rq.keys, key)
+	server := rq.server
+	rq.mu.Unlock()
+	if server != nil {
+		server.processRefreshQueue(rq)
+	}
 }
