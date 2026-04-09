@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection } from './api/client'
+import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, useIsLoading } from './api/client'
 import { TaskNodeStatus } from './api/tasks-handler'
 import type { TaskNodeStatusType } from './api/tasks-handler'
 import {
@@ -81,19 +81,19 @@ function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void
 }
 
 function UsersList() {
-  const { data, isLoading, refetch } = useListUsers()
-  const { lastEvent } = useUserCreatedEvent()
-
-  useEffect(() => {
-    if (lastEvent) refetch()
-  }, [lastEvent, refetch])
+  // useListUsers() is a subscribed query. When the server calls
+  // aprot.TriggerRefresh(ctx, "users") (see CreateUser in the Go handler),
+  // this component re-renders automatically with the fresh list — no
+  // useEffect, no event listener, no refetch wiring needed.
+  const { data, isLoading } = useListUsers()
 
   return (
     <div className="card">
       <h2>Users</h2>
-      <button onClick={refetch} disabled={isLoading}>
-        {isLoading ? 'Loading...' : 'Refresh List'}
-      </button>
+      <p style={{ color: '#666', fontSize: 13, marginBottom: 10 }}>
+        Auto-refreshes when any client creates a user (via subscription refresh).
+      </p>
+      {isLoading && <p>Loading...</p>}
       <ul className="users-list">
         {!data || data.users.length === 0 ? (
           <li>No users yet</li>
@@ -106,6 +106,27 @@ function UsersList() {
         )}
       </ul>
     </div>
+  )
+}
+
+// GlobalLoadingIndicator lights up whenever any request is in flight anywhere
+// in the app. Powered by useIsLoading() which tracks the client's pending
+// request count across every hook.
+function GlobalLoadingIndicator() {
+  const isLoading = useIsLoading()
+  return (
+    <div
+      title={isLoading ? 'Requests in flight' : 'Idle'}
+      style={{
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        marginLeft: 8,
+        borderRadius: '50%',
+        background: isLoading ? '#ffc107' : '#28a745',
+        transition: 'background 150ms',
+      }}
+    />
   )
 }
 
@@ -505,7 +526,10 @@ function AppContent() {
 
   return (
     <>
-      <h1>aprot React Example</h1>
+      <h1>
+        aprot React Example
+        <GlobalLoadingIndicator />
+      </h1>
       <ConnectionStatus />
       <div className="grid">
         <CreateUserForm onLog={addLog} />

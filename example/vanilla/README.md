@@ -1,6 +1,14 @@
 # Vanilla TypeScript Example
 
-Demonstrates aprot with plain TypeScript (no framework). Covers authentication, middleware, protected handlers, push events, progress tracking, sub-tasks, and both WebSocket and SSE transports.
+Demonstrates aprot with plain TypeScript (no framework). Covers:
+
+- Authentication, middleware, and protected handlers
+- Push events for one-shot notifications
+- **Subscription refresh** — the users list is kept fresh via `subscribeListUsers(client, renderUsers)`. `CreateUser` fires `aprot.TriggerRefresh(ctx, "users")` and every subscribed client re-renders automatically — no manual refetch. See `api/handlers.go` and `client/static/app.ts`.
+- **Global loading indicator** — the dot next to the header title uses `client.onLoadingChange()` to reflect pending request count.
+- **Cancel cause reporting** — `ProcessBatch` inspects `aprot.CancelCause(ctx)` and logs whether the cancel came from the client, a dropped connection, or server shutdown. Hit *Cancel* during a batch and check the server stdout.
+- **Page visibility reconnection** — the client reconnects immediately when the tab becomes visible or the network comes back online (no heartbeat needed).
+- Progress tracking, sub-tasks, AbortController cancellation, and both WebSocket and SSE transports.
 
 ## Prerequisites
 

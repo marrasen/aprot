@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -78,7 +79,14 @@ func (h *PublicHandlers) CreateUser(ctx context.Context, name string, email stri
 	h.state.Users[id] = user
 	h.state.Mu.Unlock()
 
-	// Broadcast to all clients that a user was created
+	// Re-run every subscribed ListUsers query and push the fresh result to all
+	// clients that are watching. Clients using subscribeListUsers() receive the
+	// update automatically — no manual refetch.
+	aprot.TriggerRefresh(ctx, "users")
+
+	// A push event is still broadcast so clients can log the creation event.
+	// Refresh triggers and push events are complementary: triggers refresh
+	// subscription data, events fire one-shot notifications.
 	if h.state.Broadcaster != nil {
 		h.state.Broadcaster.Broadcast(&UserCreatedEvent{
 			ID:    user.ID,
@@ -100,6 +108,10 @@ func (h *PublicHandlers) GetUser(ctx context.Context, id string) (*GetUserRespon
 		return nil, aprot.ErrInvalidParams("id is required")
 	}
 
+	// Composite trigger key: only mutations affecting this specific user refresh
+	// this subscription.
+	aprot.RegisterRefreshTrigger(ctx, "user", id)
+
 	h.state.Mu.RLock()
 	user, ok := h.state.Users[id]
 	h.state.Mu.RUnlock()
@@ -117,6 +129,10 @@ func (h *PublicHandlers) GetUser(ctx context.Context, id string) (*GetUserRespon
 
 // ListUsers returns all users (no request parameter needed).
 func (h *PublicHandlers) ListUsers(ctx context.Context) (*ListUsersResponse, error) {
+	// Subscribe this query to the "users" trigger key. CreateUser fires it and
+	// every subscribed client re-renders.
+	aprot.RegisterRefreshTrigger(ctx, "users")
+
 	h.state.Mu.RLock()
 	defer h.state.Mu.RUnlock()
 
@@ -129,6 +145,9 @@ func (h *PublicHandlers) ListUsers(ctx context.Context) (*ListUsersResponse, err
 }
 
 // ProcessBatch processes items with progress reporting.
+// When the request is canceled, it inspects aprot.CancelCause(ctx) to log
+// whether the client hit cancel, the connection dropped, or the server is
+// shutting down — useful for observability and cleanup decisions.
 func (h *PublicHandlers) ProcessBatch(ctx context.Context, items []string, delay int) (*ProcessBatchResponse, error) {
 	if len(items) == 0 {
 		return nil, aprot.ErrInvalidParams("items cannot be empty")
@@ -141,15 +160,31 @@ func (h *PublicHandlers) ProcessBatch(ctx context.Context, items []string, delay
 	progress := aprot.Progress(ctx)
 	results := make([]string, 0, len(items))
 
+	bail := func() error {
+		switch aprot.CancelCause(ctx) {
+		case aprot.ErrClientCanceled:
+			log.Printf("ProcessBatch: client canceled after %d/%d items", len(results), len(items))
+		case aprot.ErrConnectionClosed:
+			log.Printf("ProcessBatch: connection closed after %d/%d items", len(results), len(items))
+		case aprot.ErrServerShutdown:
+			log.Printf("ProcessBatch: server shutdown after %d/%d items", len(results), len(items))
+		}
+		return aprot.ErrCanceled()
+	}
+
 	for i, item := range items {
 		select {
 		case <-ctx.Done():
-			return nil, aprot.ErrCanceled()
+			return nil, bail()
 		default:
 		}
 
 		progress.Update(i+1, len(items), fmt.Sprintf("Processing: %s", item))
-		time.Sleep(time.Duration(delay) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, bail()
+		case <-time.After(time.Duration(delay) * time.Millisecond):
+		}
 		results = append(results, fmt.Sprintf("processed_%s", item))
 	}
 

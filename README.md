@@ -7,6 +7,128 @@ A Go library for building type-safe real-time APIs with automatic TypeScript cli
 > **Warning**
 > This library is currently unstable and under active development. Breaking changes will occur between versions until v1.0.0 is released.
 
+## Showcase
+
+A taste of what writing an aprot app looks like. Define typed handlers in Go, declare refresh triggers, and your React components auto-update — no event wiring, no manual refetch.
+
+**Go — `api/handlers.go`**
+
+```go
+// Enums are plain Go types. A Values() function exposes them to codegen,
+// which emits a TypeScript const object + union type.
+type TaskStatus string
+
+const (
+    TaskStatusPending TaskStatus = "pending"
+    TaskStatusRunning TaskStatus = "running"
+    TaskStatusDone    TaskStatus = "done"
+)
+
+func TaskStatusValues() []TaskStatus {
+    return []TaskStatus{TaskStatusPending, TaskStatusRunning, TaskStatusDone}
+}
+
+type Task struct {
+    ID     string     `json:"id"`
+    Title  string     `json:"title"`
+    Status TaskStatus `json:"status"`
+}
+
+type Handlers struct{ store *Store }
+
+// Query — any client that calls useListTasks() is subscribed to the "tasks"
+// trigger key and will auto-refresh whenever it fires.
+func (h *Handlers) ListTasks(ctx context.Context) ([]Task, error) {
+    aprot.RegisterRefreshTrigger(ctx, "tasks")
+    return h.store.All(), nil
+}
+
+// Mutation — validation, typed errors, and a refresh that fans out to every
+// subscribed client with zero client-side code.
+func (h *Handlers) CreateTask(ctx context.Context, title string) (*Task, error) {
+    if title == "" {
+        return nil, aprot.ErrInvalidParams("title is required")
+    }
+    task := h.store.Add(title, TaskStatusPending)
+    aprot.TriggerRefresh(ctx, "tasks")
+    return task, nil
+}
+
+// Mutation with progress reporting — the React mutation hook streams updates
+// into onProgress callbacks, and the refresh trigger updates every list.
+func (h *Handlers) RunTask(ctx context.Context, id string) error {
+    progress := aprot.Progress(ctx)
+    h.store.SetStatus(id, TaskStatusRunning)
+    aprot.TriggerRefresh(ctx, "tasks")
+
+    for i := 1; i <= 5; i++ {
+        progress.Update(i, 5, fmt.Sprintf("step %d/5", i))
+        time.Sleep(200 * time.Millisecond)
+    }
+
+    h.store.SetStatus(id, TaskStatusDone)
+    aprot.TriggerRefresh(ctx, "tasks")
+    return nil
+}
+```
+
+**React — `Tasks.tsx`**
+
+```tsx
+import {
+    useListTasks,
+    useCreateTaskMutation,
+    useRunTaskMutation,
+    TaskStatus,
+} from './api/handlers'
+
+export function Tasks() {
+    // Subscribed query. Re-renders automatically whenever the server calls
+    // TriggerRefresh(ctx, "tasks") — no useEffect, no event listener, no refetch.
+    const { data: tasks, isLoading } = useListTasks()
+
+    const createTask = useCreateTaskMutation()
+    const runTask = useRunTaskMutation({
+        onProgress: (current, total, message) =>
+            console.log(`${message} (${current}/${total})`),
+    })
+
+    if (isLoading) return <p>Loading…</p>
+
+    return (
+        <div>
+            <button
+                disabled={createTask.isLoading}
+                onClick={() => createTask.mutate('Write the README')}
+            >
+                Add task
+            </button>
+
+            <ul>
+                {tasks?.map((task) => (
+                    <li key={task.id}>
+                        <strong>{task.title}</strong> — {labelFor(task.status)}
+                        {task.status === TaskStatus.Pending && (
+                            <button onClick={() => runTask.mutate(task.id)}>Run</button>
+                        )}
+                    </li>
+                ))}
+            </ul>
+        </div>
+    )
+}
+
+function labelFor(status: typeof TaskStatus[keyof typeof TaskStatus]) {
+    switch (status) {
+        case TaskStatus.Pending: return 'pending'
+        case TaskStatus.Running: return 'running'
+        case TaskStatus.Done:    return 'done'
+    }
+}
+```
+
+Open the component in two browser tabs, click "Add task" in one, and the other updates instantly.
+
 ## Features
 
 - **Type-safe handlers** - Define handlers with any number of parameters of any type, with automatic TypeScript client generation

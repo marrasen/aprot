@@ -1,6 +1,13 @@
 # React Example
 
-Demonstrates aprot with React hooks. Covers generated `useQuery`/`useMutation`/`usePushEvent` hooks, progress tracking, cancellation, and shared tasks with sub-task hierarchies visible to all connected clients.
+Demonstrates aprot with React hooks. Covers:
+
+- Generated `useQuery` / `useMutation` / `usePushEvent` hooks
+- **Subscription refresh** — `UsersList` auto-updates whenever `CreateUser` fires `aprot.TriggerRefresh(ctx, "users")`, with no `useEffect` / refetch wiring on the client. See `api/handlers.go` and `client/src/App.tsx`.
+- **Global loading indicator** — the dot next to the header title uses `useIsLoading()` to light up whenever any request is in flight anywhere in the app.
+- **Cancel cause reporting** — `ProcessBatch` inspects `aprot.CancelCause(ctx)` and logs whether the cancel came from the client, a dropped connection, or server shutdown. Hit *Cancel* during a batch and check the server stdout.
+- **Page visibility reconnection** — the client reconnects immediately when the tab becomes visible or the network comes back online (no heartbeat needed).
+- Progress tracking, AbortController cancellation, and shared tasks with sub-task hierarchies visible to all connected clients.
 
 ## Prerequisites
 
