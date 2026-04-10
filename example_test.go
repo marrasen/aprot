@@ -285,17 +285,21 @@ func ExampleRegistry_RegisterEnumFor() {
 func ExampleConn_Set() {
 	type principalKey struct{}
 
-	// In an OnConnect hook or middleware:
-	// conn.Set(principalKey{}, &Principal{ID: "user_123", Role: "admin"})
+	registry := aprot.NewRegistry()
+	registry.Register(&PublicHandlers{})
+	server := aprot.NewServer(registry)
+
+	server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+		conn.Set(principalKey{}, "user_123")
+		return nil
+	})
 
 	// Later, in any handler or middleware:
-	// principal, _ := conn.Get(principalKey{}).(*Principal)
+	// val := conn.Get(principalKey{}).(string)
 
 	// Use Load to distinguish "not set" from "set to nil":
-	// if v, ok := conn.Load(principalKey{}); ok {
-	//     principal = v.(*Principal)
-	// }
+	// v, ok := conn.Load(principalKey{})
 
-	fmt.Println("Connection state example")
-	// Output: Connection state example
+	fmt.Println("Connection state configured")
+	// Output: Connection state configured
 }
