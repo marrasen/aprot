@@ -145,7 +145,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
-- **Automatic reconnection** — page visibility + network-aware, with exponential backoff
+- **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 
 ## Installation
 
@@ -296,6 +296,16 @@ function UsersList() {
         </>
     );
 }
+```
+
+**With auth tokens** (dynamic URL for automatic token refresh on reconnect):
+
+```typescript
+const client = new ApiClient(async () => {
+    const token = await getAuthToken();
+    return `${getWebSocketUrl()}?token=${encodeURIComponent(token)}`;
+});
+await client.connect();
 ```
 
 **Vanilla:**

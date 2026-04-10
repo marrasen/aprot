@@ -112,13 +112,24 @@ class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
     connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
+            // Detach and close previous socket so its deferred onclose
+            // cannot interfere with the new connection (mobile wake race).
+            if (this.ws) {
+                this.ws.onclose = null;
+                this.ws.onerror = null;
+                this.ws.onmessage = null;
+                this.ws.close();
+                this.ws = null;
+            }
+            let opened = false;
             this.ws = new WebSocket(url);
-            this.ws.onopen = () => resolve();
+            this.ws.onopen = () => { opened = true; resolve(); };
             this.ws.onerror = () => {}; // Error is followed by close
             this.ws.onmessage = (e) => onMessage(e.data);
             this.ws.onclose = () => {
                 this.ws = null;
+                if (!opened) reject(new Error('WebSocket closed before open'));
                 onClose();
             };
         });
@@ -256,9 +267,16 @@ class SSETransport implements ClientTransport {
     }
 }
 
+/**
+ * url can be a string or a function returning a (possibly async) string.
+ * When a function is provided it is called before every connection attempt,
+ * allowing the caller to supply a fresh auth token on each reconnect.
+ */
+export type ApiClientUrl = string | (() => string | Promise<string>);
+
 export class ApiClient {
     private transport: ClientTransport;
-    private url: string;
+    private url: ApiClientUrl;
     private options: ResolvedOptions;
     private requestId = 0;
     private pending = new Map<string, {
@@ -292,7 +310,7 @@ export class ApiClient {
     private visibilityHandler: (() => void) | null = null;
     private onlineHandler: (() => void) | null = null;
 
-    constructor(url: string, options?: ApiClientOptions) {
+    constructor(url: ApiClientUrl, options?: ApiClientOptions) {
         this.url = url;
         this.options = { ...defaultOptions, ...options };
         this.transport = this.options.transport === 'sse'
@@ -309,11 +327,13 @@ export class ApiClient {
         return this.doConnect();
     }
 
-    private doConnect(): Promise<void> {
+    private async doConnect(): Promise<void> {
         this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
+        const url = typeof this.url === 'function' ? await this.url() : this.url;
+
         return this.transport.connect(
-            this.url,
+            url,
             (data) => this.handleMessage(data),
             () => this.handleClose(),
         ).then(() => {
