@@ -34,7 +34,6 @@ func (t *wsTransport) Send(data []byte) error {
 
 func (t *wsTransport) Close() error {
 	close(t.done)
-	close(t.send)
 	return nil
 }
 
@@ -45,7 +44,6 @@ func (t *wsTransport) CloseGracefully() error {
 		time.Now().Add(5*time.Second),
 	)
 	close(t.done)
-	close(t.send)
 	return nil
 }
 
@@ -66,12 +64,19 @@ func (t *wsTransport) readPump(conn *Conn) {
 }
 
 // writePump writes messages from the send channel to the WebSocket.
+// It exits when done is closed; the send channel is never closed (only
+// the sender should close a channel, but multiple goroutines may send).
 func (t *wsTransport) writePump() {
 	defer t.ws.Close()
 
-	for data := range t.send {
-		if err := t.ws.WriteMessage(websocket.TextMessage, data); err != nil {
+	for {
+		select {
+		case <-t.done:
 			return
+		case data := <-t.send:
+			if err := t.ws.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
 		}
 	}
 }
