@@ -3,9 +3,9 @@ package aprot_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/marrasen/aprot"
@@ -114,9 +114,12 @@ func Example_generate() {
 	// Register push events on the registry
 	registry.RegisterPushEventFor(myHandlers, UserUpdatedEvent{})
 
-	// Create generator and generate TypeScript to stdout (or file)
+	// Generate TypeScript to a file (or any io.Writer)
 	gen := aprot.NewGenerator(registry)
-	gen.GenerateTo(os.Stdout)
+	gen.GenerateTo(io.Discard)
+
+	fmt.Println("Generated")
+	// Output: Generated
 }
 
 // This example shows how to set up a server with both WebSocket and SSE

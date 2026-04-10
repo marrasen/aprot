@@ -279,13 +279,6 @@ export class ApiClient {
         return this.pending.size + this.buffer.length;
     }
 
-    /** @deprecated Use onStateChange instead */
-    onConnectionChange(listener: (connected: boolean) => void): () => void {
-        const wrapper = (state: ConnectionState) => listener(state === 'connected');
-        this.stateListeners.add(wrapper);
-        return () => this.stateListeners.delete(wrapper);
-    }
-
     isConnected(): boolean {
         return this.state === 'connected';
     }

@@ -30,10 +30,8 @@ Thumbs.db
 node_modules/
 dist/
 
-# Generated client files
-example/vanilla/client/static/api/
+# Generated client files (examples are committed for documentation)
 example/vanilla/client/static/app.js
-example/react/client/src/api/
 example/react/client/dist/
 e2e/api/
 e2e/.test-server-addr

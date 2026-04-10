@@ -155,10 +155,15 @@ go get github.com/marrasen/aprot
 
 ## Documentation
 
-The full API reference, usage patterns, and examples live on pkg.go.dev:
+**Go API** — the full reference, usage patterns, and examples live on pkg.go.dev:
 
 - **[`aprot`](https://pkg.go.dev/github.com/marrasen/aprot)** — core library: handlers, registry, server, middleware, subscriptions, code generation
 - **[`aprot/tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks)** — hierarchical task trees, shared tasks, output streaming
+
+**Generated TypeScript** — the examples include committed generated code you can browse directly:
+
+- **[React client](example/react/client/src/api/)** — hooks, mutation helpers, push event subscriptions ([`client.ts`](example/react/client/src/api/client.ts), [`handlers.ts`](example/react/client/src/api/handlers.ts))
+- **[Vanilla client](example/vanilla/client/static/api/)** — standalone functions, subscribe helpers ([`client.ts`](example/vanilla/client/static/api/client.ts), [`public-handlers.ts`](example/vanilla/client/static/api/public-handlers.ts))
 
 ## Quick Start
 

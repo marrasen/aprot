@@ -10,17 +10,21 @@ import (
 type wsTransport struct {
 	ws   *websocket.Conn
 	send chan []byte
+	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 }
 
 func newWSTransport(ws *websocket.Conn) *wsTransport {
 	return &wsTransport{
 		ws:   ws,
 		send: make(chan []byte, 256),
+		done: make(chan struct{}),
 	}
 }
 
 func (t *wsTransport) Send(data []byte) error {
 	select {
+	case <-t.done:
+		return nil // transport closed, discard
 	case t.send <- data:
 		return nil
 	default:
@@ -29,18 +33,17 @@ func (t *wsTransport) Send(data []byte) error {
 }
 
 func (t *wsTransport) Close() error {
-	close(t.send)
+	close(t.done)
 	return nil
 }
 
 func (t *wsTransport) CloseGracefully() error {
-	// Send a WebSocket close frame to notify the client
 	_ = t.ws.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
 		time.Now().Add(5*time.Second),
 	)
-	close(t.send)
+	close(t.done)
 	return nil
 }
 
@@ -61,12 +64,19 @@ func (t *wsTransport) readPump(conn *Conn) {
 }
 
 // writePump writes messages from the send channel to the WebSocket.
+// It exits when done is closed; the send channel is never closed (only
+// the sender should close a channel, but multiple goroutines may send).
 func (t *wsTransport) writePump() {
 	defer t.ws.Close()
 
-	for data := range t.send {
-		if err := t.ws.WriteMessage(websocket.TextMessage, data); err != nil {
+	for {
+		select {
+		case <-t.done:
 			return
+		case data := <-t.send:
+			if err := t.ws.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
 		}
 	}
 }

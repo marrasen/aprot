@@ -13,7 +13,10 @@
 //
 // The generated client includes standalone functions, React hooks (optional),
 // typed error checking, enum const objects, and push event handlers — all
-// derived from your Go source code.
+// derived from your Go source code. For details on the generated TypeScript
+// API (hook behavior, cancellation, loading states), browse the committed
+// example output at example/react/client/src/api/ and
+// example/vanilla/client/static/api/ in the repository.
 //
 // # Handlers
 //
