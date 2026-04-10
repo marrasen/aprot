@@ -16,82 +16,85 @@ A taste of what writing an aprot app looks like. Define typed handlers in Go, de
 ```go
 // Enums are plain Go types. A Values() function exposes them to codegen,
 // which emits a TypeScript const object + union type.
-type TaskStatus string
+type JobStatus string
 
 const (
-    TaskStatusPending TaskStatus = "pending"
-    TaskStatusRunning TaskStatus = "running"
-    TaskStatusDone    TaskStatus = "done"
+    JobStatusPending JobStatus = "pending"
+    JobStatusRunning JobStatus = "running"
+    JobStatusDone    JobStatus = "done"
 )
 
-func TaskStatusValues() []TaskStatus {
-    return []TaskStatus{TaskStatusPending, TaskStatusRunning, TaskStatusDone}
+func JobStatusValues() []JobStatus {
+    return []JobStatus{JobStatusPending, JobStatusRunning, JobStatusDone}
 }
 
-type Task struct {
-    ID     string     `json:"id"`
-    Title  string     `json:"title"`
-    Status TaskStatus `json:"status"`
+type Job struct {
+    ID     string    `json:"id"`
+    Title  string    `json:"title"`
+    Status JobStatus `json:"status"`
 }
 
 type Handlers struct{ store *Store }
 
-// Query — any client that calls useListTasks() is subscribed to the "tasks"
+// Query — any client that calls useListJobs() is subscribed to the "jobs"
 // trigger key and will auto-refresh whenever it fires.
-func (h *Handlers) ListTasks(ctx context.Context) ([]Task, error) {
-    aprot.RegisterRefreshTrigger(ctx, "tasks")
+func (h *Handlers) ListJobs(ctx context.Context) ([]Job, error) {
+    aprot.RegisterRefreshTrigger(ctx, "jobs")
     return h.store.All(), nil
 }
 
 // Mutation — validation, typed errors, and a refresh that fans out to every
 // subscribed client with zero client-side code.
-func (h *Handlers) CreateTask(ctx context.Context, title string) (*Task, error) {
+func (h *Handlers) CreateJob(ctx context.Context, title string) (*Job, error) {
     if title == "" {
         return nil, aprot.ErrInvalidParams("title is required")
     }
-    task := h.store.Add(title, TaskStatusPending)
-    aprot.TriggerRefresh(ctx, "tasks")
-    return task, nil
+    job := h.store.Add(title, JobStatusPending)
+    aprot.TriggerRefresh(ctx, "jobs")
+    return job, nil
 }
 
 // Long-running mutation. TriggerRefreshNow flushes the refresh queue
 // mid-handler so subscribers observe the "running" state immediately;
 // progress.Update streams progress to the caller via onProgress; and the
 // final TriggerRefresh is batched to fire when the handler returns.
-func (h *Handlers) RunTask(ctx context.Context, id string) error {
+func (h *Handlers) RunJob(ctx context.Context, id string) error {
     progress := aprot.Progress(ctx)
 
-    h.store.SetStatus(id, TaskStatusRunning)
-    aprot.TriggerRefreshNow(ctx, "tasks") // subscribers re-render with status=running
+    h.store.SetStatus(id, JobStatusRunning)
+    aprot.TriggerRefreshNow(ctx, "jobs") // subscribers re-render with status=running
 
     for i := 1; i <= 5; i++ {
         progress.Update(i, 5, fmt.Sprintf("step %d/5", i))
         time.Sleep(200 * time.Millisecond)
     }
 
-    h.store.SetStatus(id, TaskStatusDone)
-    aprot.TriggerRefresh(ctx, "tasks") // batched; flushed on return
+    h.store.SetStatus(id, JobStatusDone)
+    aprot.TriggerRefresh(ctx, "jobs") // batched; flushed on return
     return nil
 }
 ```
 
-**React — `Tasks.tsx`**
+**React — `Jobs.tsx`**
 
 ```tsx
 import {
-    useListTasks,
-    useCreateTaskMutation,
-    useRunTaskMutation,
-    TaskStatus,
+    useListJobs,
+    createJob,
+    useRunJobMutation,
+    JobStatus,
+    type JobStatusType,
 } from './api/handlers'
+import { useApiClient } from './api/client'
 
-export function Tasks() {
+export function Jobs() {
+    const client = useApiClient()
+
     // Subscribed query. Re-renders automatically whenever the server calls
-    // TriggerRefresh(ctx, "tasks") — no useEffect, no event listener, no refetch.
-    const { data: tasks, isLoading } = useListTasks()
+    // TriggerRefresh(ctx, "jobs") — no useEffect, no event listener, no refetch.
+    const { data: jobs, isLoading } = useListJobs()
 
-    const createTask = useCreateTaskMutation()
-    const runTask = useRunTaskMutation({
+    const runJob = useRunJobMutation({
         onProgress: (current, total, message) =>
             console.log(`${message} (${current}/${total})`),
     })
@@ -100,19 +103,16 @@ export function Tasks() {
 
     return (
         <div>
-            <button
-                disabled={createTask.isLoading}
-                onClick={() => createTask.mutate('Write the README')}
-            >
-                Add task
+            <button onClick={() => createJob(client, 'Write the README')}>
+                Add job
             </button>
 
             <ul>
-                {tasks?.map((task) => (
-                    <li key={task.id}>
-                        <strong>{task.title}</strong> — {labelFor(task.status)}
-                        {task.status === TaskStatus.Pending && (
-                            <button onClick={() => runTask.mutate(task.id)}>Run</button>
+                {jobs?.map((job) => (
+                    <li key={job.id}>
+                        <strong>{job.title}</strong> — {labelFor(job.status)}
+                        {job.status === JobStatus.Pending && (
+                            <button onClick={() => runJob.mutate(job.id)}>Run</button>
                         )}
                     </li>
                 ))}
@@ -121,36 +121,31 @@ export function Tasks() {
     )
 }
 
-function labelFor(status: typeof TaskStatus[keyof typeof TaskStatus]) {
+function labelFor(status: JobStatusType) {
     switch (status) {
-        case TaskStatus.Pending: return 'pending'
-        case TaskStatus.Running: return 'running'
-        case TaskStatus.Done:    return 'done'
+        case JobStatus.Pending: return 'pending'
+        case JobStatus.Running: return 'running'
+        case JobStatus.Done:    return 'done'
     }
 }
 ```
 
-Open the component in two browser tabs, click "Add task" in one, and the other updates instantly.
+Open the component in two browser tabs, click "Add job" in one, and the other updates instantly.
 
 ## Features
 
-- **Type-safe handlers** - Define handlers with any number of parameters of any type, with automatic TypeScript client generation
-- **Automatic TypeScript generation** - Generate fully typed client code from your Go types
-- **Enum support** - Register Go enums and generate TypeScript const objects with type safety
-- **React hooks** - Optional React integration with query/mutation hooks
-- **Middleware support** - Add cross-cutting concerns like authentication, logging, and rate limiting
-- **Connection lifecycle hooks** - React to client connect/disconnect events, reject connections
-- **User-targeted push** - Send push messages to specific users across multiple connections
-- **Progress reporting** - Built-in support for long-running operations with progress updates
-- **Hierarchical sub-tasks** - Nested task trees with progress tracking, streamed to clients during handler execution
-- **Shared tasks** - Server-wide tasks visible to all clients via push events, with cancel support
-- **Request cancellation** - Clients can cancel in-flight requests via AbortController, with cancel cause reporting (client cancel, disconnect, server shutdown)
-- **Server push** - Broadcast events to all connected clients
-- **Server-pushed config** - Automatically configure client reconnect settings
-- **Automatic reconnection** - Reconnects immediately when the page becomes visible or network comes back online, with exponential backoff for repeated failures
-- **Dual transport** - WebSocket and SSE+HTTP transports with identical API
-- **Subscription refresh** - Server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients. Triggers are batched by default; `TriggerRefreshNow` flushes mid-handler for long-running jobs that stream state transitions.
-- **JSON-RPC style protocol** - Simple, debuggable wire format
+- **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
+- **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
+- **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
+- **Middleware** — server-level and per-handler middleware chains
+- **Push events** — broadcast to all clients or target specific users
+- **Hierarchical tasks** — nested task trees with progress tracking, streamed to clients (see [`tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks) subpackage)
+- **Shared tasks** — server-wide tasks visible to all clients with typed metadata
+- **Progress reporting** — built-in support for long-running operations
+- **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
+- **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
+- **Dual transport** — WebSocket and SSE+HTTP with identical API
+- **Automatic reconnection** — page visibility + network-aware, with exponential backoff
 
 ## Installation
 
@@ -158,64 +153,18 @@ Open the component in two browser tabs, click "Add task" in one, and the other u
 go get github.com/marrasen/aprot
 ```
 
-## Project Structure
+## Documentation
 
-For real-world applications, we recommend separating concerns:
+The full API reference, usage patterns, and examples live on pkg.go.dev:
 
-```
-myapp/
-├── api/                      # Shared Go types package
-│   ├── types.go              # Request/response structs
-│   ├── events.go             # Push event types
-│   ├── handlers.go           # Handler implementations
-│   ├── middleware.go         # Custom middleware (optional)
-│   └── registry.go           # NewRegistry() function
-├── server/
-│   └── main.go               # Server entry point
-├── client/                   # Frontend (separate npm project)
-│   ├── package.json
-│   ├── src/
-│   │   └── api/              # Generated code destination
-│   └── ...
-└── tools/
-    └── generate/
-        ├── doc.go            # //go:generate directive
-        └── main.go           # Generator script
-```
+- **[`aprot`](https://pkg.go.dev/github.com/marrasen/aprot)** — core library: handlers, registry, server, middleware, subscriptions, code generation
+- **[`aprot/tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks)** — hierarchical task trees, shared tasks, output streaming
 
 ## Quick Start
 
-### 1. Define handlers (api/handlers.go)
+### 1. Define handlers
 
-Handler methods must accept `context.Context` as the first parameter (after receiver), followed by any number of additional parameters. They must return either `error` (void) or `(T, error)` where `T` is any JSON-serializable type:
-
-```go
-func(ctx context.Context) (*U, error)                           // No parameters, struct response
-func(ctx context.Context) error                                 // No parameters, void
-func(ctx context.Context, req *T) (*U, error)                   // Single struct parameter
-func(ctx context.Context, name string, age int) (*U, error)     // Multiple primitives
-func(ctx context.Context, items ...string) error                // Variadic
-func(ctx context.Context) ([]User, error)                       // Slice response → User[]
-func(ctx context.Context) (map[string]int, error)               // Map response → Record<string, number>
-func(ctx context.Context) (string, error)                       // Primitive response → string
-```
-
-Parameters are positional — each Go parameter becomes a separate argument in the TypeScript client:
-
-```typescript
-import { listUsers, createUser, add } from './api/handlers';
-
-// Go: func (h *Handlers) ListUsers(ctx context.Context) (*ListUsersResponse, error)
-await listUsers(client);
-
-// Go: func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*CreateUserResponse, error)
-await createUser(client, { name: 'Alice', email: 'alice@example.com' });
-
-// Go: func (h *Handlers) Add(ctx context.Context, a int, b int) (*SumResult, error)
-await add(client, 5, 3);
-```
-
-Parameter names in the generated TypeScript are extracted from your Go source code via AST parsing — the names you choose in Go are the names your TypeScript client uses.
+Handler methods accept `context.Context` as the first parameter and return either `error` or `(T, error)`:
 
 ```go
 package api
@@ -252,7 +201,9 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 }
 ```
 
-### 2. Server (server/main.go)
+Parameters are positional — each Go parameter becomes a separate TypeScript argument. Names are extracted from Go source via AST parsing.
+
+### 2. Create the server
 
 ```go
 package main
@@ -280,7 +231,7 @@ func main() {
 }
 ```
 
-### 3. Generator (tools/generate/main.go)
+### 3. Generate the TypeScript client
 
 ```go
 //go:build ignore
@@ -306,1216 +257,9 @@ func main() {
 }
 ```
 
-Add a go:generate directive in `tools/generate/doc.go`:
+### 4. Use from TypeScript
 
-```go
-//go:generate go run main.go
-package main
-```
-
-## Middleware
-
-Middleware allows you to add cross-cutting concerns like authentication, logging, and rate limiting to your handlers.
-
-### Defining Middleware
-
-```go
-func LoggingMiddleware() aprot.Middleware {
-    return func(next aprot.Handler) aprot.Handler {
-        return func(ctx context.Context, req *aprot.Request) (any, error) {
-            start := time.Now()
-            result, err := next(ctx, req)
-            log.Printf("[%s] %s completed in %v", req.ID, req.Method, time.Since(start))
-            return result, err
-        }
-    }
-}
-```
-
-### Using Middleware
-
-```go
-server := aprot.NewServer(registry)
-server.Use(
-    LoggingMiddleware(),
-    AuthMiddleware(),
-)
-```
-
-Middleware executes in the order added, wrapping inward (first middleware is outermost).
-
-### Per-Handler Middleware
-
-Split handlers into separate structs by their middleware requirements. This ensures you can't accidentally forget to protect an endpoint - if a handler needs authentication, it's registered with the auth middleware.
-
-```go
-// Split handlers by their middleware requirements
-registry.Register(&PublicHandlers{})                    // No middleware
-registry.Register(&UserHandlers{}, authMiddleware)      // With auth
-registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
-```
-
-Each `Register()` call creates a separate handler group with its own middleware chain and a corresponding TypeScript file (e.g., `public-handlers.ts`, `user-handlers.ts`).
-
-Both server-level and handler-level middleware can be used together:
-- **Server middleware** applies to all handlers (e.g., logging)
-- **Handler middleware** applies only to that handler group (e.g., auth)
-
-```go
-// Server-level middleware (applies to all handlers)
-server.Use(LoggingMiddleware())
-
-// Handler-level middleware (applies only to protected handlers)
-registry.Register(&ProtectedHandlers{}, AuthMiddleware(tokenStore))
-```
-
-Execution order: server middleware (outer) → handler middleware (inner) → actual handler
-
-```go
-func AuthMiddleware(tokenStore *TokenStore) aprot.Middleware {
-    return func(next aprot.Handler) aprot.Handler {
-        return func(ctx context.Context, req *aprot.Request) (any, error) {
-            // Extract and validate token
-            // ...
-            if !valid {
-                return nil, aprot.ErrUnauthorized("invalid token")
-            }
-            return next(ctx, req)
-        }
-    }
-}
-```
-
-### User-Targeted Push
-
-Associate connections with user IDs to send push messages to specific users:
-
-```go
-// In auth middleware, after validating the user:
-conn := aprot.Connection(ctx)
-if conn != nil {
-    conn.SetUserID(user.ID)  // User can have multiple connections
-}
-
-// Later, send push to specific user (e.g., from a background job):
-server.PushToUser("user_123", &NotificationEvent{
-    Message: "You have a new message",
-})
-```
-
-### Subscription Refresh
-
-Automatically refresh client queries when related data changes on the server. Query handlers declare trigger keys, and mutation handlers fire them. When the mutation handler completes, the server re-executes affected subscription handlers and pushes updated responses directly — no client round-trip needed. Multiple `TriggerRefresh` calls within a single request are batched and deduplicated by subscription.
-
-**Server side:**
-
-```go
-func (h *Handler) GetUserList(ctx context.Context) ([]User, error) {
-    aprot.RegisterRefreshTrigger(ctx, "users") // this query depends on "users"
-    users, err := h.db.ListUsers(ctx)
-    return users, err
-}
-
-func (h *Handler) GetUser(ctx context.Context, id string) (*User, error) {
-    aprot.RegisterRefreshTrigger(ctx, "user", id) // depends on "user" + specific ID
-    return h.db.GetUser(ctx, id)
-}
-
-func (h *Handler) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
-    if err := h.db.UpdateUser(ctx, req); err != nil {
-        return err
-    }
-    aprot.TriggerRefresh(ctx, "users")          // refreshes all GetUserList subscriptions
-    aprot.TriggerRefresh(ctx, "user", req.ID)   // refreshes GetUser subscriptions for this ID
-    return nil
-}
-```
-
-**React client** — no changes needed. `useQuery` hooks automatically subscribe and refresh:
-
-```tsx
-function UserList() {
-    // Automatically refreshes when any handler calls TriggerRefresh(ctx, "users")
-    const { data, isLoading } = useListUsers();
-    // ...
-}
-```
-
-**Vanilla client** — use the generated `subscribe` functions:
-
-```typescript
-const unsubscribe = subscribeListUsers(client, (users) => {
-    console.log("Users updated:", users);
-});
-
-// Later: unsubscribe();
-```
-
-`RegisterRefreshTrigger` takes variadic string arguments that form a composite trigger key. It is a no-op when called from a regular (non-subscribe) request. `TriggerRefresh` is a no-op outside a request context. Subscriptions are automatically cleaned up when a client disconnects or unsubscribes.
-
-**Immediate refresh from long-running handlers** — `aprot.TriggerRefreshNow(ctx, keys...)` flushes the refresh queue immediately instead of waiting for the handler to return. Use this when a handler makes observable state transitions over time and you want subscribers to see each transition:
-
-```go
-func (h *Handler) RunJob(ctx context.Context, id string) error {
-    h.store.SetStatus(id, StatusRunning)
-    aprot.TriggerRefreshNow(ctx, "jobs") // subscribers see status=running now
-
-    if err := h.doWork(ctx); err != nil {
-        h.store.SetStatus(id, StatusFailed)
-        return err // the queued final refresh still fires on return
-    }
-
-    h.store.SetStatus(id, StatusDone)
-    aprot.TriggerRefresh(ctx, "jobs") // batched; flushed on return
-    return nil
-}
-```
-
-`TriggerRefreshNow` flushes every key queued so far (not just the keys passed in the call), and subsequent `TriggerRefresh` / `TriggerRefreshNow` calls start with an empty queue. Like `TriggerRefresh`, it is a no-op outside a request context and a no-op during subscription re-execution (cascading refreshes are prevented).
-
-> **Concurrency note**: triggered subscription handlers run in their own goroutines, concurrently with the rest of the calling handler. If your handler mutates shared state that the subscription reads (e.g. slices or maps you return from the subscription), make sure the subscription returns a defensive copy — otherwise the subscription's marshal step can race with the handler's next mutation. Functional state updates and immutable snapshots avoid this entirely.
-
-### Context Helpers
-
-Access request metadata in handlers and middleware:
-
-```go
-info := aprot.HandlerInfoFromContext(ctx)  // Handler metadata and options
-req := aprot.RequestFromContext(ctx)       // Request ID, method, params
-conn := aprot.Connection(ctx)              // WebSocket connection
-progress := aprot.Progress(ctx)            // Progress reporter
-cause := aprot.CancelCause(ctx)           // Why the request was canceled (nil if not canceled)
-```
-
-### Cancel Cause
-
-When a handler's context is canceled, `aprot.CancelCause(ctx)` returns the reason. Use `errors.Is` to distinguish between the three cancellation sources:
-
-```go
-func (h *Handlers) LongRunning(ctx context.Context, req *Request) (*Response, error) {
-    select {
-    case <-ctx.Done():
-        cause := aprot.CancelCause(ctx)
-        switch {
-        case errors.Is(cause, aprot.ErrClientCanceled):
-            // Client explicitly canceled the request (AbortController, TypeCancel message)
-        case errors.Is(cause, aprot.ErrConnectionClosed):
-            // Client disconnected (closed tab, network loss)
-        case errors.Is(cause, aprot.ErrServerShutdown):
-            // Server is shutting down via server.Stop()
-        }
-        return nil, aprot.ErrCanceled()
-    case result := <-doWork(ctx):
-        return result, nil
-    }
-}
-```
-
-| Sentinel | Trigger |
-|---|---|
-| `aprot.ErrClientCanceled` | Client sends a cancel message |
-| `aprot.ErrConnectionClosed` | Client disconnects |
-| `aprot.ErrServerShutdown` | `server.Stop()` is called |
-
-### Sub-Tasks
-
-Use `tasks.SubTask` inside any handler to report hierarchical progress to the calling client. Sub-tasks nest automatically via context:
-
-```go
-import "github.com/marrasen/aprot/tasks"
-
-func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
-    err := tasks.SubTask(ctx, "Build image", func(ctx context.Context) error {
-        // Nested sub-task
-        return tasks.SubTask(ctx, "Compile", func(ctx context.Context) error {
-            // ... do work ...
-            return nil
-        })
-    })
-    if err != nil {
-        return nil, err
-    }
-
-    err = tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
-        return nil
-    })
-
-    return &DeployResponse{Status: "ok"}, err
-}
-```
-
-The client receives a `TaskNode` tree in progress messages. Each node has `id`, `title`, `status` (a `TaskNodeStatusType`), optional `error` message (populated on failure), and optional `current`/`total` progress.
-
-`TaskNodeStatus` is exported as a TypeScript const enum, so you can use `TaskNodeStatus.Created`, `TaskNodeStatus.Running`, `TaskNodeStatus.Completed`, and `TaskNodeStatus.Failed` instead of raw string literals. A task starts with `Created` status, transitions to `Running` before its function executes, and ends with `Completed` or `Failed`:
-
-```typescript
-import { TaskNodeStatus } from './api/client';
-
-if (task.status === TaskNodeStatus.Completed) {
-    console.log('Task finished!');
-}
-```
-
-**Task progress** — report numeric progress (current/total) on a sub-task from inside the callback:
-
-```go
-tasks.SubTask(ctx, "Parsing files", func(ctx context.Context) error {
-    tasks.TaskProgress(ctx, 0, len(files))
-    for _, file := range files {
-        if err := parseFile(ctx, file); err != nil {
-            return err
-        }
-        tasks.StepTaskProgress(ctx, 1)
-    }
-    return nil
-})
-```
-
-- `tasks.TaskProgress(ctx, current, total)` — sets both current and total on the task node
-- `tasks.StepTaskProgress(ctx, step)` — increments current by step (e.g. call with 1 after each item)
-
-Both update the request-scoped task tree and the shared task system (if present). No-op if called outside a `tasks.SubTask` context.
-
-**Output streaming** sends text output during execution:
-
-```go
-tasks.Output(ctx, "Starting deployment...")
-
-// Or use a writer for command output:
-w := tasks.OutputWriter(ctx, "Running tests")
-cmd.Stdout = w
-cmd.Run()
-w.Close()
-
-// Track bytes as progress (e.g. file downloads):
-pw := tasks.WriterProgress(ctx, "Downloading", fileSize)
-io.Copy(pw, resp.Body)
-pw.Close()
-```
-
-**TypeScript client** — the `onTaskProgress` and `onOutput` callbacks in `RequestOptions` receive these updates:
-
-```typescript
-const result = await deploy(client, req, {
-    onTaskProgress: (tasks) => {
-        // tasks is TaskNode[] — render a progress tree (structural changes)
-    },
-    onOutput: (output, taskId) => {
-        // output text, taskId identifies which task node produced it
-    },
-});
-```
-
-### Shared Tasks
-
-Shared tasks are visible to **all** connected clients (not just the requesting one). Use them for server-wide operations like deployments, imports, or batch jobs. Each task carries an `isOwner` flag that is `true` only for the connection that started it, enabling clients to auto-display progress for their own tasks.
-
-#### Setup
-
-Enable shared tasks in the registry via the `tasks` subpackage:
-
-```go
-import "github.com/marrasen/aprot/tasks"
-
-registry := aprot.NewRegistry()
-registry.Register(&Handlers{})
-tasks.Enable(registry)  // Registers TaskStateEvent, TaskUpdateEvent push events + CancelTask handler
-```
-
-To attach typed metadata to tasks, use `EnableWithMeta` instead:
-
-```go
-type TaskMeta struct {
-    UserName string `json:"userName,omitempty"`
-    Error    string `json:"error,omitempty"`
-}
-
-tasks.EnableWithMeta[TaskMeta](registry)
-```
-
-This generates a typed `TaskMeta` interface in the TypeScript client and adds an optional `meta?: TaskMeta` field to `SharedTaskState` and `TaskNode`.
-
-#### Creating Shared Tasks
-
-`tasks.StartSharedTask` returns a context and a typed task handle. The handler body **is** the task body — no goroutine needed. The task auto-completes when the handler returns nil, and auto-fails on error.
-
-```go
-import "github.com/marrasen/aprot/tasks"
-
-func (h *Handlers) StartDeploy(ctx context.Context, req *DeployRequest) error {
-    ctx, task := tasks.StartSharedTask[TaskMeta](ctx, req.Title)
-    if task == nil {
-        return aprot.ErrInternal(nil)
-    }
-
-    // Attach metadata visible to all clients — compile-time type-safe
-    task.SetMeta(TaskMeta{UserName: "alice"})
-
-    task.Progress(1, 3)
-    task.Output("Building image...")
-
-    // SubTask calls on ctx automatically create mirrored nodes in the shared task tree
-    err := tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
-        tasks.TaskProgress(ctx, 1, 2)
-        return nil
-    })
-    if err != nil {
-        return err
-    }
-
-    task.Progress(3, 3)
-    return nil  // auto-completes the shared task
-}
-```
-
-The task uses the request context for cancellation. If the client disconnects, the task is canceled. To make a task survive disconnection:
-
-```go
-ctx, task := tasks.StartSharedTask[struct{}](context.WithoutCancel(ctx), "Long job")
-```
-
-If you don't use metadata, use `struct{}`:
-
-```go
-ctx, task := tasks.StartSharedTask[struct{}](ctx, "Simple task")
-```
-
-Key methods on `SharedTask[M]`:
-- `Progress(current, total)` — updates progress
-- `Output(msg)` — sends output text to all clients
-- `SubTask(title)` — creates a child node (`*SharedTaskSub[M]`)
-- `SetMeta(v M)` — sets typed metadata broadcast to all clients
-- `Close()` — marks as completed (automatic when handler returns nil)
-- `Fail(message)` — marks as failed with an error message (automatic when handler returns error)
-- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
-- `ID()` — returns the task's unique identifier
-- `Context()` — returns the task's cancellation context
-- `WithContext(ctx)` — returns a context carrying this task's shared context
-
-Key methods on `SharedTaskSub[M]` (child nodes):
-- `Complete()` — marks as completed
-- `Fail(message)` — marks as failed with an error message
-- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
-- `Progress(current, total)` — updates progress
-- `SetMeta(v M)` — sets typed metadata on this sub-task
-- `SubTask(title)` — creates a nested child node
-
-#### Request-Scoped Tasks
-
-`tasks.StartTask` creates a task visible only to the calling client via the progress stream. Same inline pattern as shared tasks:
-
-```go
-func (h *Handlers) ProcessData(ctx context.Context, req *ProcessRequest) error {
-    ctx, task := tasks.StartTask[ProcessMeta](ctx, "Processing")
-    task.SetMeta(ProcessMeta{FileName: req.File})
-
-    // SubTask calls create child nodes in the task tree
-    err := tasks.SubTask(ctx, "Parse", func(ctx context.Context) error {
-        return nil
-    })
-    if err != nil {
-        return err
-    }
-
-    task.Progress(1, 1)
-    return nil  // auto-completes
-}
-```
-
-Key methods on `Task[M]`:
-- `Progress(current, total)` — updates progress
-- `SetMeta(v M)` — sets typed metadata
-- `Close()` — marks as completed (automatic when handler returns nil)
-- `Fail(message)` — marks as failed with an error message (automatic when handler returns error)
-- `Err(err)` — fails with `err.Error()` if non-nil, completes if nil
-- `ID()` — returns the task's unique identifier
-
-The client receives the task tree via the `onTaskProgress` callback in `RequestOptions`.
-
-#### Error Messages
-
-When a task fails — whether via `Fail(message)`, `Err(err)`, or automatically from a returned error — the error message is included in the `TaskNode` and `SharedTaskState` snapshots sent to clients:
-
-```go
-// Explicit failure with a message
-task.Fail("deployment timed out")
-
-// Convenience: fail if err != nil, complete if nil
-task.Err(doWork())
-
-// Sub-tasks: same pattern
-sub := task.SubTask("Build")
-sub.Fail("compilation error")
-sub.Err(build())
-```
-
-The error is available on the TypeScript side as `TaskNode.error` and `SharedTaskState.error` (both `string | undefined`). Automatic failure paths (`SubTask` returning an error, handler auto-finalization) populate the error from `err.Error()`. Canceled tasks get the error `"canceled"`.
-
-#### TypeScript (React)
-
-```tsx
-import { useSharedTasks, useMyTasks, useSharedTask, useTaskOutput, cancelSharedTask } from './api/client';
-
-function TaskList() {
-    const tasks = useSharedTasks();
-
-    return (
-        <ul>
-            {tasks.map(task => (
-                <li key={task.id}>
-                    {task.title} ({task.status}) — {task.current}/{task.total}
-                    {task.isOwner && <button onClick={() => cancelSharedTask(client, task.id)}>Cancel</button>}
-                </li>
-            ))}
-        </ul>
-    );
-}
-
-function MyTasksDialog() {
-    // Only root tasks started by this connection
-    const myTasks = useMyTasks();
-    if (myTasks.length === 0) return null;
-    return <TaskProgressDialog tasks={myTasks} />;
-}
-
-function TaskLog({ taskId }: { taskId: string }) {
-    const { lines, clear } = useTaskOutput(taskId);
-    return <pre>{lines.join('\n')}</pre>;
-}
-```
-
-Hooks:
-- `useSharedTasks()` — all shared tasks (from all clients)
-- `useMyTasks()` — root tasks (`!parentId`) started by this connection (`isOwner`)
-- `useSharedTask(id)` — single task by ID
-- `useTaskOutput(taskId)` — output lines for a task
-- `cancelSharedTask(client, taskId)` — cancel a task
-
-#### TypeScript (Vanilla)
-
-```typescript
-import { cancelSharedTask } from './api/client';
-
-client.onPush<{ tasks: SharedTaskState[] }>('TaskStateEvent', (event) => {
-    console.log('Active tasks:', event.tasks);
-    // Filter to tasks started by this connection
-    const myTasks = event.tasks.filter(t => t.isOwner && !t.parentId);
-});
-
-client.onPush<{ taskId: string; output?: string; current?: number; total?: number }>('TaskUpdateEvent', (event) => {
-    if (event.output != null) {
-        console.log(`[${event.taskId}] ${event.output}`);
-    }
-});
-
-// Cancel a shared task
-await cancelSharedTask(client, taskId);
-```
-
-### SharedSubTask (Bridging Request-Scoped and Shared Tasks)
-
-`tasks.SharedSubTask` bridges both task systems: it creates a top-level shared task (broadcast to all clients) and routes all nested `SubTask`, `Output`, and `TaskProgress` calls through the shared task system exclusively.
-
-```go
-func (h *Handlers) Deploy(ctx context.Context, req *DeployRequest) (*DeployResponse, error) {
-    // Creates a shared task visible to all clients + request-scoped progress for the caller.
-    err := tasks.SharedSubTask(ctx, "Deploying", func(ctx context.Context) error {
-        // Nested SubTask calls are mirrored to both systems.
-        if err := tasks.SubTask(ctx, "Build image", func(ctx context.Context) error {
-            tasks.Output(ctx, "Compiling...")  // sent to requester AND broadcast
-            return nil
-        }); err != nil {
-            return err
-        }
-
-        return tasks.SubTask(ctx, "Push to registry", func(ctx context.Context) error {
-            return nil
-        })
-    })
-
-    return &DeployResponse{Status: "ok"}, err
-}
-```
-
-**Behavior:**
-- If called with no existing shared context, `tasks.SharedSubTask` creates a new shared task core. On return, the core is auto-closed (or marked failed on error).
-- If nested inside another `tasks.SharedSubTask`, it delegates to `tasks.SubTask` — no new core is created, just a child node.
-- If no connection or `taskManager` is available, it falls back to plain `tasks.SubTask`.
-- `tasks.Output(ctx, msg)` inside a shared context broadcasts to all clients via the shared task system.
-
-**`SharedTask.WithContext()`** — for goroutines that should route through the shared task system:
-
-```go
-ctx, task := tasks.StartSharedTask[struct{}](ctx, "Background job")
-go func() {
-    // Attach the shared context so SubTask/Output/TaskProgress route through the shared system.
-    ctx := task.WithContext(context.Background())
-
-    tasks.SubTask(ctx, "Step 1", func(ctx context.Context) error {
-        // This creates a child in the shared task tree (broadcast to all clients).
-        return nil
-    })
-}()
-```
-
-### Connection Info
-
-Each connection has a unique ID and HTTP request info captured at connection time:
-
-```go
-conn := aprot.Connection(ctx)
-conn.ID()          // uint64 - unique connection ID (increments per connection)
-conn.RemoteAddr()  // string - client's remote address
-conn.UserID()      // string - associated user ID (set via SetUserID)
-
-// Full HTTP info from the upgrade request
-info := conn.Info()
-info.RemoteAddr    // "192.168.1.100:54321"
-info.Header        // http.Header - all request headers
-info.Cookies       // []*http.Cookie - parsed cookies
-info.URL           // "/ws?token=abc"
-info.Host          // "example.com"
-```
-
-Example logging middleware using connection info:
-
-```go
-func LoggingMiddleware() aprot.Middleware {
-    return func(next aprot.Handler) aprot.Handler {
-        return func(ctx context.Context, req *aprot.Request) (any, error) {
-            conn := aprot.Connection(ctx)
-            start := time.Now()
-
-            result, err := next(ctx, req)
-
-            log.Printf("[conn:%d %s] %s - %v",
-                conn.ID(), conn.RemoteAddr(), req.Method, time.Since(start))
-            return result, err
-        }
-    }
-}
-```
-
-### Connection-Scoped State (`Set/Get/Load`)
-
-Store arbitrary data on a connection that persists for its lifetime. This follows the `context.WithValue` convention of using unexported struct keys to avoid collisions:
-
-```go
-// Define a typed key (unexported to avoid collisions)
-type principalKey struct{}
-
-// Store a value (typically in a ConnectHook or auth middleware)
-conn.Set(principalKey{}, &Principal{ID: "user_123", Role: "admin"})
-
-// Retrieve it later (in any handler or middleware)
-principal, _ := conn.Get(principalKey{}).(*Principal)
-
-// Use Load to distinguish "not set" from "set to nil"
-if v, ok := conn.Load(principalKey{}); ok {
-    principal, _ = v.(*Principal)
-}
-```
-
-`Set/Get/Load` are safe for concurrent use (`Get` and `Load` take a read lock). The internal map is lazily initialized — connections that never call `Set` pay zero allocation cost. Keep stored values small; they live for the entire connection lifetime.
-
-### Authentication
-
-aprot provides the building blocks for authentication but does not prescribe a specific strategy. The common pattern for browser clients is **cookie-session auth at connect time**:
-
-1. **Validate at connect time** — Use an `OnConnect` hook to read session cookies and store the authenticated principal on the connection.
-2. **Guard per-handler** — Use per-handler middleware to check the cached principal.
-
-```go
-type principalKey struct{}
-
-// ConnectHook: validate session cookie and cache the user on the connection.
-server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
-    for _, cookie := range conn.Info().Cookies {
-        if cookie.Name == "session" {
-            user, err := sessionStore.Validate(cookie.Value)
-            if err != nil {
-                return aprot.ErrConnectionRejected("invalid session")
-            }
-            conn.SetUserID(user.ID)
-            conn.Set(principalKey{}, user)
-            return nil
-        }
-    }
-    return nil // allow unauthenticated connections for public endpoints
-})
-
-// Middleware: require authentication on protected handlers.
-func RequireAuth() aprot.Middleware {
-    return func(next aprot.Handler) aprot.Handler {
-        return func(ctx context.Context, req *aprot.Request) (any, error) {
-            conn := aprot.Connection(ctx)
-            if conn == nil {
-                return nil, aprot.ErrUnauthorized("authentication required")
-            }
-            if _, ok := conn.Load(principalKey{}); !ok {
-                return nil, aprot.ErrUnauthorized("authentication required")
-            }
-            return next(ctx, req)
-        }
-    }
-}
-
-// Register handlers with auth middleware
-registry.Register(&PublicHandlers{})
-registry.Register(&ProtectedHandlers{}, RequireAuth())
-```
-
-**Note:** `conn.SetUserID` / `conn.UserID` is a *routing identity* used for push targeting (`PushToUser`). It is not a security boundary — always use the stored principal (via `Set`/`Load`) for authorization decisions in middleware.
-
-**Origin validation** — By default, aprot accepts all origins. For production, restrict origins to prevent cross-site WebSocket hijacking (CSWSH):
-
-```go
-server.SetCheckOrigin(func(r *http.Request) bool {
-    origin := r.Header.Get("Origin")
-    return origin == "https://myapp.example.com"
-})
-```
-
-### Connection Lifecycle Hooks
-
-React to connection events with `OnConnect` and `OnDisconnect` hooks:
-
-```go
-server := aprot.NewServer(registry)
-
-// Called when a client connects (before message processing starts)
-server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
-    log.Printf("Client connected: %d from %s", conn.ID(), conn.RemoteAddr())
-
-    // Reject connection by returning an error
-    if server.ConnectionCount() >= maxConnections {
-        return aprot.ErrConnectionRejected("max connections reached")
-    }
-
-    // Access HTTP request context (useful for zerolog integration)
-    logger := log.Ctx(conn.Context())
-    logger.Info().Msg("new connection")
-
-    return nil
-})
-
-// Called when a client disconnects (UserID still available)
-server.OnDisconnect(func(ctx context.Context, conn *aprot.Conn) {
-    log.Printf("Client disconnected: %d (user: %s)", conn.ID(), conn.UserID())
-})
-```
-
-Multiple hooks can be registered and are called in order. If an `OnConnect` hook returns an error, the connection is rejected and subsequent hooks are not called.
-
-**Client-side handling** — use `onConnectionRejected` to respond when the server rejects the connection (e.g., redirect to login):
-
-```typescript
-const client = new ApiClient(getWebSocketUrl(), {
-    onConnectionRejected: (error) => {
-        console.error('Connection rejected:', error.message);
-        window.location.href = '/login';
-    },
-});
-```
-
-When a connection is rejected, the client stops reconnecting and transitions to `disconnected` state. The `error.isConnectionRejected()` helper can also be used to check the error type.
-
-### Graceful Shutdown
-
-Stop the server gracefully with `Server.Stop()`. It rejects new connections (503), sends WebSocket close frames, waits for in-flight requests to complete, and runs all disconnect hooks before returning.
-
-```go
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-defer cancel()
-if err := server.Stop(ctx); err != nil {
-    log.Printf("shutdown timed out: %v", err)
-}
-```
-
-`Stop` is safe to call multiple times. If the context deadline is exceeded, it returns `ctx.Err()` and in-flight requests that haven't finished may still be running.
-
-### Server Options
-
-Configure client reconnection behavior:
-
-```go
-server := aprot.NewServer(registry, aprot.ServerOptions{
-    ReconnectInterval:    2000,  // Initial reconnect delay (ms), default: 1000
-    ReconnectMaxInterval: 60000, // Max reconnect delay (ms), default: 30000
-    ReconnectMaxAttempts: 10,    // Max attempts (0=unlimited), default: 0
-})
-```
-
-The server automatically sends this configuration to clients on connect. TypeScript clients apply it automatically, overriding any client-side defaults.
-
-### Request Buffering
-
-The generated TypeScript client automatically buffers requests made while a connection is being established or re-established. If you call an API method during the `connecting` or `reconnecting` state, the request is queued and sent once the connection succeeds. If the connection ultimately fails (transitions to `disconnected`), all buffered requests are rejected.
-
-This is transparent — no configuration needed. Requests made while fully `disconnected` (no connection attempt in progress) still reject immediately with `"Not connected"`.
-
-Buffered requests support `AbortSignal` cancellation: aborting a signal removes the request from the buffer.
-
-### Transport
-
-aprot supports two transports that share the same handler dispatch, middleware, connection management, and generated client API:
-
-| | WebSocket | SSE+HTTP |
-|---|-----------|----------|
-| **Server→Client** | WebSocket frames | SSE event stream |
-| **Client→Server** | WebSocket frames | HTTP POST |
-| **Best for** | Full-duplex, low latency | Environments where WebSocket is blocked |
-
-#### Server Setup
-
-```go
-server := aprot.NewServer(registry)
-
-// WebSocket transport (existing)
-http.Handle("/ws", server)
-
-// SSE+HTTP transport
-// Routes: GET /sse (event stream), POST /sse/rpc (calls), POST /sse/cancel (cancellation)
-http.Handle("/sse", server.HTTPTransport())
-http.Handle("/sse/", server.HTTPTransport())
-```
-
-Both transports can run simultaneously. Connections from both transports are tracked together — `Broadcast()`, `PushToUser()`, and `ConnectionCount()` work across all connections regardless of transport.
-
-#### Client Usage
-
-```typescript
-import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
-import { createUser } from './api/public-handlers';
-
-// WebSocket (default)
-const wsClient = new ApiClient(getWebSocketUrl());
-
-// SSE+HTTP
-const sseClient = new ApiClient(getSSEUrl(), { transport: 'sse' });
-
-// Same API for both
-await sseClient.connect();
-const user = await createUser(sseClient, { name: 'Alice' });
-```
-
-#### SSE Protocol
-
-The SSE stream uses named events (`event:` field) for message routing:
-
-| SSE Event | Data | Description |
-|-----------|------|-------------|
-| `connected` | `{"type":"connected","connectionId":"abc123"}` | First event, provides connection ID |
-| `config` | `{"type":"config",...}` | Server configuration |
-| `response` | `{"type":"response","id":"1","result":{...}}` | RPC response |
-| `error` | `{"type":"error","id":"1","code":...,"message":...}` | RPC error |
-| `progress` | `{"type":"progress","id":"1",...}` | Progress update |
-| `push` | `{"type":"push","event":"...","data":{...}}` | Push event |
-
-HTTP endpoints:
-- `POST /rpc` — `{"connectionId":"...","id":"1","method":"Handlers.Echo","params":[...]}` → `202 Accepted`
-- `POST /cancel` — `{"connectionId":"...","id":"1"}` → `200 OK`
-
-### Error Handling
-
-#### Server-side (Go)
-
-**Register Go errors for automatic conversion:**
-
-```go
-// Register standard Go errors - they'll be auto-converted when returned
-// Codes are auto-assigned starting at 1000
-registry.RegisterError(io.EOF, "EndOfFile")
-registry.RegisterError(sql.ErrNoRows, "NotFound")
-registry.RegisterError(context.DeadlineExceeded, "Timeout")
-
-// Register code-only (for manual use with NewError)
-insufficientBalanceCode := registry.RegisterErrorCode("InsufficientBalance")
-```
-
-Now handlers can return standard Go errors:
-
-```go
-func (h *Handlers) ReadData(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
-    data, err := h.reader.Read()
-    if err != nil {
-        return nil, err  // io.EOF automatically becomes code 1000
-    }
-    return &ReadResponse{Data: data}, nil
-}
-```
-
-**Built-in error helpers:**
-
-```go
-aprot.ErrUnauthorized("invalid token")     // Code: -32001
-aprot.ErrForbidden("access denied")        // Code: -32003
-aprot.ErrInvalidParams("name is required") // Code: -32602
-aprot.ErrInternal(err)                     // Code: -32603
-
-// Manual custom errors
-aprot.NewError(code, "message")
-aprot.WrapError(code, "message", cause)
-```
-
-Standard error codes:
-| Code | Constant | Description |
-|------|----------|-------------|
-| -32700 | `CodeParseError` | Invalid JSON |
-| -32600 | `CodeInvalidRequest` | Invalid request structure |
-| -32601 | `CodeMethodNotFound` | Method not found |
-| -32602 | `CodeInvalidParams` | Invalid parameters |
-| -32603 | `CodeInternalError` | Internal server error |
-| -32800 | `CodeCanceled` | Request canceled |
-| -32001 | `CodeUnauthorized` | Not authenticated |
-| -32002 | `CodeConnectionRejected` | Connection rejected by hook |
-| -32003 | `CodeForbidden` | Not authorized |
-
-#### Client-side (TypeScript)
-
-The generated client throws `ApiError` with a `code` property. Custom error codes registered with `RegisterError` are automatically included:
-
-```typescript
-import { ApiError, ErrorCode } from './api/client';
-
-try {
-    await client.readData({ id: '123' });
-} catch (err) {
-    if (err instanceof ApiError) {
-        // Check standard errors
-        if (err.isUnauthorized()) {
-            // Redirect to login
-        }
-
-        // Check custom registered errors (auto-generated)
-        if (err.isEndOfFile()) {
-            // Handle EOF
-        } else if (err.isNotFound()) {
-            // Handle not found
-        }
-
-        console.log(`Error ${err.code}: ${err.message}`);
-    }
-}
-```
-
-Generated `ErrorCode` constants include both standard and custom codes:
-
-```typescript
-export const ErrorCode = {
-    // Standard codes
-    Unauthorized: -32001,
-    Forbidden: -32003,
-    InvalidParams: -32602,
-    // ...
-
-    // Custom codes (from RegisterError/RegisterErrorCode)
-    EndOfFile: 1000,
-    NotFound: 1001,
-    Timeout: 1002,
-    InsufficientBalance: 1003,
-} as const;
-```
-
-Helper methods are generated for all error types:
-
-```typescript
-err.isUnauthorized()        // standard
-err.isEndOfFile()           // custom
-err.isNotFound()            // custom
-err.isInsufficientBalance() // custom
-```
-
-### Enum Support
-
-Register Go enum types to generate TypeScript const objects with full type safety.
-
-#### Defining Enums (Go)
-
-```go
-// String-based enum
-type TaskStatus string
-
-const (
-    TaskStatusCreated   TaskStatus = "created"
-    TaskStatusRunning   TaskStatus = "running"
-    TaskStatusCompleted TaskStatus = "completed"
-    TaskStatusFailed    TaskStatus = "failed"
-)
-
-// Required: Values() function returning all enum values
-func TaskStatusValues() []TaskStatus {
-    return []TaskStatus{
-        TaskStatusCreated,
-        TaskStatusRunning,
-        TaskStatusCompleted,
-        TaskStatusFailed,
-    }
-}
-```
-
-For int-based enums, implement the `Stringer` interface to provide names:
-
-```go
-type Priority int
-
-const (
-    PriorityLow Priority = iota
-    PriorityMedium
-    PriorityHigh
-)
-
-func (p Priority) String() string {
-    switch p {
-    case PriorityLow:
-        return "Low"
-    case PriorityMedium:
-        return "Medium"
-    case PriorityHigh:
-        return "High"
-    default:
-        return "Unknown"
-    }
-}
-
-func PriorityValues() []Priority {
-    return []Priority{PriorityLow, PriorityMedium, PriorityHigh}
-}
-```
-
-#### Registering Enums
-
-```go
-registry := aprot.NewRegistry()
-handler := &MyHandlers{}
-registry.Register(handler)
-registry.RegisterEnumFor(handler, TaskStatusValues())
-registry.RegisterEnumFor(handler, PriorityValues())
-```
-
-#### Using Enums in Types
-
-```go
-type Task struct {
-    ID       string     `json:"id"`
-    Name     string     `json:"name"`
-    Status   TaskStatus `json:"status"`
-    Priority Priority   `json:"priority"`
-}
-```
-
-#### Generated TypeScript
-
-```typescript
-// String-based enum - names derived by capitalizing value
-export const TaskStatus = {
-    Pending: "pending",
-    Running: "running",
-    Completed: "completed",
-    Failed: "failed",
-} as const;
-export type TaskStatusType = typeof TaskStatus[keyof typeof TaskStatus];
-
-// Int-based enum - names from String() method
-export const Priority = {
-    Low: 0,
-    Medium: 1,
-    High: 2,
-} as const;
-export type PriorityType = typeof Priority[keyof typeof Priority];
-
-// Struct fields use enum types instead of string/number
-export interface Task {
-    id: string;
-    name: string;
-    status: TaskStatusType;   // not string!
-    priority: PriorityType;   // not number!
-}
-```
-
-#### Using Enums (TypeScript)
-
-```typescript
-import { TaskStatus, TaskStatusType } from './api/public-handlers';
-
-// Type-safe comparison
-if (task.status === TaskStatus.Running) {
-    console.log('Task is running');
-}
-
-// Type-safe switch with exhaustive checking
-function getStatusLabel(status: TaskStatusType): string {
-    switch (status) {
-        case TaskStatus.Created:
-            return 'Created';
-        case TaskStatus.Running:
-            return 'Running';
-        case TaskStatus.Completed:
-            return 'Completed';
-        case TaskStatus.Failed:
-            return 'Failed';
-    }
-}
-```
-
-## Naming Plugins
-
-By default, aprot converts Go PascalCase names to idiomatic TypeScript conventions: kebab-case filenames (`PublicHandlers` -> `public-handlers.ts`) and camelCase methods (`CreateUser` -> `createUser`). Naming plugins let you customize this behavior.
-
-### NamingPlugin Interface
-
-```go
-type NamingPlugin interface {
-    FileName(groupName string) string        // handler struct name -> filename stem
-    MethodName(name string) string            // handler method name -> TS function name
-    HookName(name string) string              // handler/event name -> React hook name
-    HandlerName(eventName string) string      // push event name -> event handler name
-    ErrorMethodName(errorName string) string  // error code name -> type-guard method name
-}
-```
-
-### Built-in Plugins
-
-**DefaultNaming** - reproduces current behavior, with an option to fix acronym splitting:
-
-```go
-// Without FixAcronyms (default): BulkXMLHandlers -> bulk-x-m-l-handlers.ts
-gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
-    OutputDir: "./client/api",
-    Mode:      aprot.OutputVanilla,
-    Naming:    aprot.DefaultNaming{FixAcronyms: false},
-})
-
-// With FixAcronyms: BulkXMLHandlers -> bulk-xml-handlers.ts, XMLParser -> xmlParser
-gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
-    OutputDir: "./client/api",
-    Mode:      aprot.OutputVanilla,
-    Naming:    aprot.DefaultNaming{FixAcronyms: true},
-})
-```
-
-**PreserveNaming** - keeps Go method names unchanged (PascalCase) in generated TypeScript:
-
-```go
-// CreateUser stays CreateUser (not createUser), filenames still kebab-case
-gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
-    OutputDir: "./client/api",
-    Mode:      aprot.OutputVanilla,
-    Naming:    aprot.PreserveNaming{FixAcronyms: true},
-})
-```
-
-### Custom Plugins
-
-Implement the `NamingPlugin` interface for full control:
-
-```go
-type MyNaming struct{}
-
-func (m MyNaming) FileName(groupName string) string     { return strings.ToLower(groupName) }
-func (m MyNaming) MethodName(name string) string         { return name }
-func (m MyNaming) HookName(name string) string           { return "use" + name }
-func (m MyNaming) HandlerName(eventName string) string   { return "on" + eventName }
-func (m MyNaming) ErrorMethodName(errorName string) string { return "is" + errorName }
-```
-
-## Type Mapping
-
-Go types are mapped to TypeScript types during code generation:
-
-| Go Type | TypeScript Type | Notes |
-|---------|----------------|-------|
-| `string` | `string` | |
-| `int`, `float64`, etc. | `number` | All numeric types |
-| `bool` | `boolean` | |
-| `[]T` | `T[]` | |
-| `map[K]V` | `Record<K, V>` | |
-| `*T` | `T` (optional) | Pointer fields become optional (`?`) |
-| `time.Time` | `string` | RFC 3339 format (Go's `encoding/json` default) |
-| `sql.NullString` | `string \| null` | All `database/sql` nullable types supported |
-| `sql.NullInt64`, etc. | `number \| null` | `NullInt32`, `NullInt16`, `NullFloat64`, `NullByte` |
-| `sql.NullBool` | `boolean \| null` | |
-| `sql.NullTime` | `string \| null` | Underlying `time.Time` marshals as string |
-| `sql.Null[T]` | `T \| null` | Generic nullable (Go 1.22+) |
-| `struct` | `interface` | Named structs become TypeScript interfaces |
-| Registered enum | Const object + type | See [Enum Support](#enum-support) |
-
-`time.Time` fields (including `*time.Time`) are generated as `string` because Go's `encoding/json` marshals them as RFC 3339 strings. This applies anywhere `time.Time` appears: direct fields, slices (`[]time.Time` → `string[]`), map values, etc.
-
-`database/sql` nullable types (`sql.NullString`, `sql.NullInt64`, `sql.NullBool`, `sql.NullFloat64`, `sql.NullInt32`, `sql.NullInt16`, `sql.NullByte`, `sql.NullTime`, and the generic `sql.Null[T]`) are generated as `T | null`. These fields are **not** optional — they are always present in the JSON but may be `null`. Slices of nullable types use parenthesized syntax: `[]sql.NullString` → `(string | null)[]`.
-
-## Generated Output
-
-The generator creates split files for better organization:
-
-- **`client.ts`** - Base client with `ApiClient`, `ApiError`, `ErrorCode`, `getWebSocketUrl`, `getSSEUrl`
-- **`{handler-name}.ts`** - Handler-specific interfaces and standalone exported functions
-- **`{package}.ts`** - Shared types used by multiple handler groups (only generated when needed)
-
-```
-api/
-├── client.ts           # Base: ApiClient, ApiError, ErrorCode, getWebSocketUrl, getSSEUrl
-├── models.ts           # Shared types from Go package "models" (auto-generated when shared)
-├── user-handlers.ts    # UserHandlers interfaces + functions
-└── order-handlers.ts   # OrderHandlers interfaces + functions
-```
-
-When a Go struct is used as a request or response type by two or more handler groups, its TypeScript interface is automatically placed in a separate file named after the Go package it belongs to (e.g., `models.ts` for types from the `models` package). Handler files import shared types from the package file. Types used by only one handler group stay in that handler's file.
-
-Each handler file exports standalone functions that take `ApiClient` as the first argument. This enables tree-shaking and namespace imports when multiple handlers have overlapping method names:
-
-```typescript
-import { ApiClient, getWebSocketUrl } from './api/client';
-import { createUser } from './api/user-handlers';
-import { createOrder } from './api/order-handlers';
-
-const client = new ApiClient(getWebSocketUrl());
-await client.connect();
-
-await createUser(client, { name: 'Alice' });
-await createOrder(client, { items: [...] });
-```
-
-Or use namespace imports to avoid name conflicts:
-
-```typescript
-import * as users from './api/user-handlers';
-import * as orders from './api/order-handlers';
-
-await users.create(client, { name: 'Alice' });
-await orders.create(client, { items: [...] });
-```
-
-Wire protocol method names are namespaced as `"HandlerStruct.MethodName"` (e.g., `"UserHandlers.CreateUser"`), allowing multiple handler groups to have methods with the same name.
-
-For single-file output (legacy), use `GenerateTo()`:
-
-```go
-gen.GenerateTo(os.Stdout)  // Everything in one file
-```
-
-### Vanilla TypeScript
-
-```typescript
-import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
-import { createUser, onUserCreatedEvent } from './api/public-handlers';
-
-// WebSocket (default) — auto-detects protocol from page URL
-const client = new ApiClient(getWebSocketUrl());
-
-// Or use SSE+HTTP transport
-// const client = new ApiClient(getSSEUrl(), { transport: 'sse' });
-
-await client.connect();
-
-const user = await createUser(client, { name: 'Alice', email: 'alice@example.com' });
-
-onUserCreatedEvent(client, (event) => {
-    console.log('User created:', event);
-});
-```
-
-### React Hooks
+**React:**
 
 ```tsx
 import { ApiClient, ApiClientProvider, getWebSocketUrl, useApiClient } from './api/client';
@@ -1535,47 +279,58 @@ function UsersList() {
     const api = useApiClient();
     const { data, isLoading, error, mutate } = useListUsers();
 
-    const addUser = useCallback((name: string) => {
-        // mutate() runs the async action, shows loading state, then refetches
-        mutate(createUser(api, { name }));
-    }, [mutate, api]);
-
     if (error) return <div>Error: {error.message}</div>;
     if (isLoading) return <div>Loading...</div>;
 
     return (
         <>
-            <button onClick={() => addUser('New User')}>Add User</button>
+            <button onClick={() => mutate(createUser(api, { name: 'New User' }))}>
+                Add User
+            </button>
             <ul>{data?.users.map(u => <li key={u.id}>{u.name}</li>)}</ul>
         </>
     );
 }
 ```
 
-The `mutate` function accepts a Promise or async function. It sets `isLoading=true`, awaits the action, refetches data on success, or sets `error` on failure. This consolidates loading/error state for all operations on the resource.
+**Vanilla:**
 
-Per-handler hooks (`useListUsers`, `useCreateUserMutation`, etc.) are thin wrappers around three generic hooks that are also exported for direct use:
+```typescript
+import { ApiClient, getWebSocketUrl } from './api/client';
+import { createUser, onUserCreatedEvent } from './api/public-handlers';
 
-- `useQuery(fn, options?)` — auto-fetching query with refetch interval support
-- `useMutation(fn)` — imperative mutation with loading/error state
-- `usePushEvent(fn, options?)` — subscribes to server push events
+const client = new ApiClient(getWebSocketUrl());
+await client.connect();
 
-## Protocol
+const user = await createUser(client, { name: 'Alice', email: 'alice@example.com' });
 
-Messages are JSON with a `type` field:
+onUserCreatedEvent(client, (event) => {
+    console.log('User created:', event);
+});
+```
 
-| Direction | Type | Example |
-|-----------|------|---------|
-| client→server | request | `{"type":"request","id":"1","method":"Handlers.CreateUser","params":[{...}]}` |
-| server→client | response | `{"type":"response","id":"1","result":{...}}` |
-| server→client | error | `{"type":"error","id":"1","code":404,"message":"Not found"}` |
-| server→client | progress | `{"type":"progress","id":"1","current":5,"total":10,"message":"..."}` |
-| client→server | cancel | `{"type":"cancel","id":"1"}` |
-| server→client | push | `{"type":"push","event":"UserCreatedEvent","data":{...}}` |
-| server→client | config | `{"type":"config","reconnectInterval":1000,"reconnectMaxInterval":30000,...}` |
-| client→server | subscribe | `{"type":"subscribe","id":"1","method":"Handlers.ListUsers","params":[]}` |
-| client→server | unsubscribe | `{"type":"unsubscribe","id":"1"}` |
-| server→client | connected | `{"type":"connected","connectionId":"abc123"}` (SSE only) |
+## Project Structure
+
+```
+myapp/
+├── api/                      # Shared Go types package
+│   ├── types.go              # Request/response structs
+│   ├── events.go             # Push event types
+│   ├── handlers.go           # Handler implementations
+│   ├── middleware.go          # Custom middleware (optional)
+│   └── registry.go           # NewRegistry() function
+├── server/
+│   └── main.go               # Server entry point
+├── client/                   # Frontend (separate npm project)
+│   ├── package.json
+│   ├── src/
+│   │   └── api/              # Generated code destination
+│   └── ...
+└── tools/
+    └── generate/
+        ├── doc.go            # //go:generate directive
+        └── main.go           # Generator script
+```
 
 ## Examples
 
@@ -1614,14 +369,9 @@ go test ./...
 The `e2e/` directory contains end-to-end tests that run the generated TypeScript client against a live Go server, covering both WebSocket and SSE transports.
 
 ```bash
-# Generate the TypeScript client
-cd e2e/generate && go run main.go
-
-# Install dependencies and run tests
+cd e2e/generate && go run main.go       # Generate client
 cd .. && npm install && npm test
 ```
-
-Tests cover: request/response, error handling, progress reporting, request cancellation, push events, broadcast, authentication middleware, and enum types.
 
 ### Formatting
 
@@ -1636,9 +386,6 @@ git config core.hooksPath .githooks
 ```bash
 # Go (requires golangci-lint v2)
 golangci-lint run ./...
-cd example/vanilla && golangci-lint run ./...
-cd example/react && golangci-lint run ./...
-cd e2e && golangci-lint run ./...
 
 # TypeScript (E2E tests)
 cd e2e && npm run lint
@@ -1648,11 +395,11 @@ cd e2e && npm run lint
 
 GitHub Actions runs five jobs on every push/PR to `master`:
 
-1. **go-fmt** - Verifies all Go files are formatted with `gofmt`
-2. **go-tests** - Go unit and integration tests with race detection
-3. **go-lint** - Runs golangci-lint across all Go modules
-4. **typescript-compile** - Verifies generated TypeScript compiles for both vanilla and React modes
-5. **e2e-tests** - Runs the full E2E suite (with ESLint) against a live server
+1. **go-fmt** — verifies all Go files are formatted with `gofmt`
+2. **go-tests** — Go unit and integration tests with race detection
+3. **go-lint** — runs golangci-lint across all Go modules
+4. **typescript-compile** — verifies generated TypeScript compiles for both vanilla and React modes
+5. **e2e-tests** — runs the full E2E suite (with ESLint) against a live server
 
 ## License
 
