@@ -390,6 +390,72 @@ func TestRESTAdapter_NamingPlugin(t *testing.T) {
 	}
 }
 
+type AdminHandlers struct{}
+
+func (h *AdminHandlers) DeleteEverything(ctx context.Context) error {
+	return nil
+}
+
+func TestRESTAdapter_WithHandlers(t *testing.T) {
+	restHandlers := &RESTHandlers{}
+	adminHandlers := &AdminHandlers{}
+
+	registry := NewRegistry()
+	registry.Register(restHandlers)
+	registry.Register(adminHandlers)
+
+	// Only expose RESTHandlers, not AdminHandlers
+	adapter := NewRESTAdapter(registry, WithHandlers(restHandlers))
+	routes := adapter.Routes()
+
+	for _, r := range routes {
+		if r.GroupName == "AdminHandlers" {
+			t.Errorf("AdminHandlers should not be exposed, found route: %s", r.Pattern)
+		}
+	}
+
+	if len(routes) == 0 {
+		t.Fatal("expected at least some routes from RESTHandlers")
+	}
+
+	// Verify RESTHandlers routes are present
+	found := false
+	for _, r := range routes {
+		if r.GroupName == "RESTHandlers" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected RESTHandlers routes to be present")
+	}
+}
+
+func TestRESTAdapter_WithHandlers_AllByDefault(t *testing.T) {
+	restHandlers := &RESTHandlers{}
+	adminHandlers := &AdminHandlers{}
+
+	registry := NewRegistry()
+	registry.Register(restHandlers)
+	registry.Register(adminHandlers)
+
+	// No WithHandlers — all groups exposed
+	adapter := NewRESTAdapter(registry)
+	routes := adapter.Routes()
+
+	groups := make(map[string]bool)
+	for _, r := range routes {
+		groups[r.GroupName] = true
+	}
+
+	if !groups["RESTHandlers"] {
+		t.Error("expected RESTHandlers")
+	}
+	if !groups["AdminHandlers"] {
+		t.Error("expected AdminHandlers")
+	}
+}
+
 func init() {
 	// Suppress unused variable warning
 	_ = fmt.Sprint
