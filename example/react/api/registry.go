@@ -18,7 +18,7 @@ func NewRegistry() (*aprot.Registry, *Handlers, *Todos) {
 
 	// Register todo handlers (exposed via both WebSocket and REST)
 	todos := NewTodos()
-	registry.Register(todos)
+	registry.RegisterREST(todos)
 
 	// Register enums
 	registry.RegisterEnumFor(handlers, TaskStatusValues())

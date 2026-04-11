@@ -59,36 +59,16 @@ func WithRESTNaming(n NamingPlugin) RESTOption {
 	}
 }
 
-// WithHandlers limits the REST adapter to only the specified handler structs.
-// Pass the same handler instances used in registry.Register().
-// If not called, all registered handlers are exposed.
-//
-// Example:
-//
-//	rest := aprot.NewRESTAdapter(registry, aprot.WithHandlers(&todosHandler, &publicHandler))
-func WithHandlers(handlers ...any) RESTOption {
-	return func(a *RESTAdapter) {
-		a.allowedGroups = make(map[string]bool)
-		for _, h := range handlers {
-			t := reflect.TypeOf(h)
-			if t.Kind() == reflect.Ptr {
-				t = t.Elem()
-			}
-			a.allowedGroups[t.Name()] = true
-		}
-	}
-}
-
 // RESTAdapter serves registered handlers over HTTP/REST.
+// Only handlers registered via RegisterREST are exposed.
 // It implements http.Handler and can be mounted on any stdlib-compatible router.
 type RESTAdapter struct {
-	registry      *Registry
-	routes        []RouteInfo
-	mux           *http.ServeMux
-	naming        NamingPlugin
-	middleware    []Middleware
-	paramNames    map[string]map[string][]string
-	allowedGroups map[string]bool // nil = all groups; non-nil = only listed groups
+	registry   *Registry
+	routes     []RouteInfo
+	mux        *http.ServeMux
+	naming     NamingPlugin
+	middleware []Middleware
+	paramNames map[string]map[string][]string
 }
 
 // NewRESTAdapter creates an HTTP/REST adapter from a registry.
@@ -136,7 +116,7 @@ func (a *RESTAdapter) buildRoutes() {
 	sort.Strings(groupNames)
 
 	for _, groupName := range groupNames {
-		if a.allowedGroups != nil && !a.allowedGroups[groupName] {
+		if !a.registry.IsREST(groupName) {
 			continue
 		}
 		group := a.registry.Groups()[groupName]

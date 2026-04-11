@@ -101,6 +101,7 @@ type Registry struct {
 	generateHooks   []func(results map[string]string, mode OutputMode) // hooks run after generation
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 	validator       StructValidator                                    // optional struct validator (nil = disabled)
+	restGroups      map[string]bool                                    // groups registered via RegisterREST
 }
 
 // NewRegistry creates a new handler registry.
@@ -114,6 +115,7 @@ func NewRegistry() *Registry {
 		errorMappings:  []errorMapping{},
 		nextErrorCode:  1000, // Start custom codes at 1000
 		enumTypes:      make(map[reflect.Type]*EnumInfo),
+		restGroups:     make(map[string]bool),
 	}
 }
 
@@ -179,6 +181,34 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 	}
 
 	r.groups[structName] = group
+}
+
+// RegisterREST registers a handler and marks it for REST/HTTP exposure.
+// Handlers registered with RegisterREST are available via both WebSocket and the
+// REST adapter. The OpenAPI generator also only includes REST-registered handlers.
+//
+// Example:
+//
+//	registry.Register(&UserHandlers{})          // WebSocket only
+//	registry.RegisterREST(&TodoHandlers{})      // WebSocket + REST
+//	registry.RegisterREST(&PublicAPI{}, authMW)  // WebSocket + REST + middleware
+func (r *Registry) RegisterREST(handler any, middleware ...Middleware) {
+	r.Register(handler, middleware...)
+	t := reflect.TypeOf(handler)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	r.restGroups[t.Name()] = true
+}
+
+// IsREST reports whether the named handler group was registered via RegisterREST.
+func (r *Registry) IsREST(groupName string) bool {
+	return r.restGroups[groupName]
+}
+
+// RESTGroups returns the set of handler group names registered via RegisterREST.
+func (r *Registry) RESTGroups() map[string]bool {
+	return r.restGroups
 }
 
 // RegisterPushEventFor registers a push event associated with a specific handler.

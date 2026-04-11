@@ -45,7 +45,7 @@ func (h *RESTHandlers) ListUsers(ctx context.Context) ([]*UserResponse, error) {
 
 func TestRESTAdapter_RouteComputation(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	adapter := NewRESTAdapter(registry)
 	routes := adapter.Routes()
@@ -131,7 +131,7 @@ func TestRESTAdapter_RouteComputation(t *testing.T) {
 
 func TestRESTAdapter_GET(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -160,7 +160,7 @@ func TestRESTAdapter_GET(t *testing.T) {
 
 func TestRESTAdapter_POST(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -187,7 +187,7 @@ func TestRESTAdapter_POST(t *testing.T) {
 
 func TestRESTAdapter_PUT_PathParamAndBody(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -219,7 +219,7 @@ func TestRESTAdapter_PUT_PathParamAndBody(t *testing.T) {
 
 func TestRESTAdapter_DELETE(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -238,7 +238,7 @@ func TestRESTAdapter_DELETE(t *testing.T) {
 
 func TestRESTAdapter_ValidationError(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	registry.SetValidator(NewPlaygroundValidator())
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
@@ -278,7 +278,7 @@ func TestRESTAdapter_Middleware(t *testing.T) {
 			return next(ctx, req)
 		}
 	}
-	registry.Register(&RESTHandlers{}, authMW)
+	registry.RegisterREST(&RESTHandlers{}, authMW)
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -349,7 +349,7 @@ func TestHTTPRequestFromContext(t *testing.T) {
 
 func TestRESTAdapter_ListUsers_GET(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 	adapter := NewRESTAdapter(registry)
 	server := httptest.NewServer(adapter)
 	defer server.Close()
@@ -375,7 +375,7 @@ func TestRESTAdapter_ListUsers_GET(t *testing.T) {
 
 func TestRESTAdapter_NamingPlugin(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	// Use FixAcronyms naming
 	adapter := NewRESTAdapter(registry, WithRESTNaming(DefaultNaming{FixAcronyms: true}))
@@ -396,16 +396,12 @@ func (h *AdminHandlers) DeleteEverything(ctx context.Context) error {
 	return nil
 }
 
-func TestRESTAdapter_WithHandlers(t *testing.T) {
-	restHandlers := &RESTHandlers{}
-	adminHandlers := &AdminHandlers{}
-
+func TestRESTAdapter_RegisterREST(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(restHandlers)
-	registry.Register(adminHandlers)
+	registry.RegisterREST(&RESTHandlers{})
+	registry.Register(&AdminHandlers{}) // not REST
 
-	// Only expose RESTHandlers, not AdminHandlers
-	adapter := NewRESTAdapter(registry, WithHandlers(restHandlers))
+	adapter := NewRESTAdapter(registry)
 	routes := adapter.Routes()
 
 	for _, r := range routes {
@@ -418,7 +414,6 @@ func TestRESTAdapter_WithHandlers(t *testing.T) {
 		t.Fatal("expected at least some routes from RESTHandlers")
 	}
 
-	// Verify RESTHandlers routes are present
 	found := false
 	for _, r := range routes {
 		if r.GroupName == "RESTHandlers" {
@@ -431,28 +426,15 @@ func TestRESTAdapter_WithHandlers(t *testing.T) {
 	}
 }
 
-func TestRESTAdapter_WithHandlers_AllByDefault(t *testing.T) {
-	restHandlers := &RESTHandlers{}
-	adminHandlers := &AdminHandlers{}
-
+func TestRESTAdapter_NoRESTGroups(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(restHandlers)
-	registry.Register(adminHandlers)
+	registry.Register(&RESTHandlers{}) // Register, not RegisterREST
 
-	// No WithHandlers — all groups exposed
 	adapter := NewRESTAdapter(registry)
 	routes := adapter.Routes()
 
-	groups := make(map[string]bool)
-	for _, r := range routes {
-		groups[r.GroupName] = true
-	}
-
-	if !groups["RESTHandlers"] {
-		t.Error("expected RESTHandlers")
-	}
-	if !groups["AdminHandlers"] {
-		t.Error("expected AdminHandlers")
+	if len(routes) != 0 {
+		t.Errorf("expected 0 routes when no groups are REST-registered, got %d", len(routes))
 	}
 }
 

@@ -248,15 +248,6 @@ type GeneratorOptions struct {
 	// Zod enables generation of Zod validation schemas alongside TypeScript interfaces.
 	// When enabled, {handler-name}.schema.ts files are generated for structs with validate tags.
 	Zod bool
-
-	// OpenAPI enables generation of an openapi.json specification file.
-	OpenAPI bool
-
-	// OpenAPITitle sets the info.title in the generated OpenAPI spec.
-	OpenAPITitle string
-
-	// OpenAPIVersion sets the info.version in the generated OpenAPI spec.
-	OpenAPIVersion string
 }
 
 // Generator generates TypeScript client code from a registry.
@@ -579,25 +570,6 @@ func (g *Generator) Generate() (map[string]string, error) {
 		return nil, err
 	}
 	results["client.ts"] = baseBuf.String()
-
-	// Generate OpenAPI spec if enabled
-	if g.options.OpenAPI {
-		title := g.options.OpenAPITitle
-		if title == "" {
-			title = "API"
-		}
-		version := g.options.OpenAPIVersion
-		if version == "" {
-			version = "1.0.0"
-		}
-		oag := NewOpenAPIGenerator(g.registry, title, version)
-		oag.naming = g.naming()
-		data, err := oag.GenerateJSON()
-		if err != nil {
-			return nil, fmt.Errorf("openapi generation failed: %w", err)
-		}
-		results["openapi.json"] = string(data)
-	}
 
 	// Run generate hooks
 	for _, hook := range g.registry.generateHooks {

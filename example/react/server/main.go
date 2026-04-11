@@ -13,7 +13,7 @@ import (
 
 func main() {
 	// Create registry from shared API package
-	registry, handlers, todos := api.NewRegistry()
+	registry, handlers, _ := api.NewRegistry()
 
 	// Create WebSocket server (all handlers)
 	server := aprot.NewServer(registry)
@@ -21,8 +21,8 @@ func main() {
 	// Set broadcaster for push events
 	handlers.SetBroadcaster(server)
 
-	// Create REST adapter (only Todos handler exposed via REST)
-	rest := aprot.NewRESTAdapter(registry, aprot.WithHandlers(todos))
+	// Create REST adapter (serves handlers registered with RegisterREST)
+	rest := aprot.NewRESTAdapter(registry)
 
 	// Serve static files (Vite build output)
 	staticDir := "../client/dist"

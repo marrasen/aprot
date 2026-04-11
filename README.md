@@ -371,9 +371,12 @@ export const CreateUserRequestSchema = z.object({
 
 ## REST Adapter
 
-Serve your handlers as REST/HTTP endpoints alongside WebSocket. The adapter maps handler groups and methods to paths automatically:
+Serve your handlers as REST/HTTP endpoints alongside WebSocket. Register handlers with `RegisterREST` to expose them via both WebSocket and REST:
 
 ```go
+registry.Register(&handlers)          // WebSocket only
+registry.RegisterREST(&todos)         // WebSocket + REST
+
 rest := aprot.NewRESTAdapter(registry)
 http.Handle("/api/", http.StripPrefix("/api", rest))
 ```
@@ -391,24 +394,20 @@ Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
 
 ## OpenAPI Generation
 
-Generate an OpenAPI 3.0 spec from your handlers, including validation constraints:
-
-```go
-gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
-    OutputDir:      "client/src/api",
-    Mode:           aprot.OutputReact,
-    OpenAPI:        true,
-    OpenAPITitle:   "My API",
-    OpenAPIVersion: "1.0.0",
-})
-```
-
-Or use the standalone generator:
+Generate an OpenAPI 3.0 spec from your handlers. Only handlers registered with `RegisterREST` are included:
 
 ```go
 oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0")
 spec, _ := oag.Generate()     // *OpenAPISpec
 data, _ := oag.GenerateJSON() // []byte
+```
+
+Use `WithBasePath` when the API is mounted behind a proxy or at a non-root path:
+
+```go
+oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0").
+    WithBasePath("/rest/api/v1.0")
+// paths: "/rest/api/v1.0/todos/create-todo", etc.
 ```
 
 Validation tags flow into the spec: `validate:"gte=12,lte=110"` → `minimum: 12, maximum: 110`, `validate:"email"` → `format: "email"`.

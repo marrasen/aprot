@@ -9,7 +9,7 @@ import (
 
 func TestOpenAPIGenerator_BasicSpec(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
 	spec, err := gen.Generate()
@@ -52,7 +52,7 @@ func TestOpenAPIGenerator_BasicSpec(t *testing.T) {
 
 func TestOpenAPIGenerator_ValidationConstraints(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
 	spec, err := gen.Generate()
@@ -60,13 +60,11 @@ func TestOpenAPIGenerator_ValidationConstraints(t *testing.T) {
 		t.Fatalf("Generate() failed: %v", err)
 	}
 
-	// Check that CreateUserReq schema has validation constraints
 	schema, ok := spec.Components.Schemas["CreateUserReq"]
 	if !ok {
 		t.Fatal("expected CreateUserReq in components/schemas")
 	}
 
-	// name field should have minLength from validate:"required,min=2"
 	nameSchema, ok := schema.Properties["name"]
 	if !ok {
 		t.Fatal("expected 'name' property")
@@ -75,7 +73,6 @@ func TestOpenAPIGenerator_ValidationConstraints(t *testing.T) {
 		t.Errorf("expected name minLength=2, got %v", nameSchema.MinLength)
 	}
 
-	// email field should have format:"email"
 	emailSchema, ok := schema.Properties["email"]
 	if !ok {
 		t.Fatal("expected 'email' property")
@@ -87,7 +84,7 @@ func TestOpenAPIGenerator_ValidationConstraints(t *testing.T) {
 
 func TestOpenAPIGenerator_HTTPMethods(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
 	spec, err := gen.Generate()
@@ -124,7 +121,7 @@ func TestOpenAPIGenerator_HTTPMethods(t *testing.T) {
 
 func TestOpenAPIGenerator_JSON(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
 
 	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
 	data, err := gen.GenerateJSON()
@@ -142,36 +139,68 @@ func TestOpenAPIGenerator_JSON(t *testing.T) {
 	}
 }
 
-func TestOpenAPIGenerator_ViaGenerator(t *testing.T) {
+func TestOpenAPIGenerator_OnlyRESTGroups(t *testing.T) {
 	registry := NewRegistry()
-	registry.Register(&RESTHandlers{})
+	registry.RegisterREST(&RESTHandlers{})
+	registry.Register(&AdminHandlers{}) // not REST
 
-	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
-		Mode:           OutputVanilla,
-		OpenAPI:        true,
-		OpenAPITitle:   "My API",
-		OpenAPIVersion: "2.0.0",
-	})
-
-	results, err := gen.Generate()
+	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
+	spec, err := gen.Generate()
 	if err != nil {
 		t.Fatalf("Generate() failed: %v", err)
 	}
 
-	content, ok := results["openapi.json"]
-	if !ok {
-		t.Fatal("expected openapi.json in results")
+	for path := range spec.Paths {
+		if strings.Contains(path, "admin") || strings.Contains(path, "delete-everything") {
+			t.Errorf("non-REST handler should not appear in spec: %s", path)
+		}
 	}
 
-	var spec OpenAPISpec
-	if err := json.Unmarshal([]byte(content), &spec); err != nil {
-		t.Fatalf("invalid openapi.json: %v", err)
+	if len(spec.Paths) == 0 {
+		t.Fatal("expected REST handler paths")
 	}
-	if spec.Info.Title != "My API" {
-		t.Errorf("expected title 'My API', got %q", spec.Info.Title)
+}
+
+func TestOpenAPIGenerator_WithBasePath(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&RESTHandlers{})
+
+	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0").
+		WithBasePath("/rest/api/v1.0")
+	spec, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
 	}
-	if spec.Info.Version != "2.0.0" {
-		t.Errorf("expected version '2.0.0', got %q", spec.Info.Version)
+
+	for path := range spec.Paths {
+		if !strings.HasPrefix(path, "/rest/api/v1.0/") {
+			t.Errorf("expected path to start with /rest/api/v1.0/, got %s", path)
+		}
+	}
+
+	if len(spec.Paths) == 0 {
+		t.Fatal("expected paths")
+	}
+}
+
+func TestOpenAPIGenerator_WithBasePath_TrailingSlash(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&RESTHandlers{})
+
+	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0").
+		WithBasePath("/api/v1/")
+	spec, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	for path := range spec.Paths {
+		if strings.Contains(path, "//") {
+			t.Errorf("path should not have double slashes: %s", path)
+		}
+		if !strings.HasPrefix(path, "/api/v1/") {
+			t.Errorf("expected path to start with /api/v1/, got %s", path)
+		}
 	}
 }
 

@@ -94,12 +94,14 @@ type JSONSchema struct {
 }
 
 // OpenAPIGenerator generates an OpenAPI 3.0 spec from a Registry.
+// Only handlers registered via RegisterREST are included in the spec.
 type OpenAPIGenerator struct {
 	registry *Registry
 	naming   NamingPlugin
 	schemas  map[reflect.Type]*JSONSchema
 	title    string
 	version  string
+	basePath string // prepended to all paths, e.g. "/rest/api/v1.0"
 }
 
 // NewOpenAPIGenerator creates an OpenAPI spec generator.
@@ -116,6 +118,19 @@ func NewOpenAPIGenerator(registry *Registry, title, version string) *OpenAPIGene
 // WithNaming sets the naming plugin for path generation.
 func (g *OpenAPIGenerator) WithNaming(n NamingPlugin) *OpenAPIGenerator {
 	g.naming = n
+	return g
+}
+
+// WithBasePath sets a prefix prepended to all paths in the generated spec.
+// Use this when the API is mounted behind a proxy or at a non-root path.
+//
+// Example:
+//
+//	oag.WithBasePath("/rest/api/v1.0")
+//	// paths: "/rest/api/v1.0/todos/create-todo", etc.
+func (g *OpenAPIGenerator) WithBasePath(path string) *OpenAPIGenerator {
+	// Strip trailing slash to avoid double slashes
+	g.basePath = strings.TrimRight(path, "/")
 	return g
 }
 
@@ -147,6 +162,9 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 	sort.Strings(groupNames)
 
 	for _, groupName := range groupNames {
+		if !g.registry.IsREST(groupName) {
+			continue
+		}
 		group := g.registry.Groups()[groupName]
 		prefix := g.naming.PathPrefix(groupName)
 
@@ -240,10 +258,11 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			op.Responses["500"] = Response{Description: "Internal server error"}
 
 			// Add to path item
-			pathItem, ok := spec.Paths[path]
+			fullPath := g.basePath + path
+			pathItem, ok := spec.Paths[fullPath]
 			if !ok {
 				pathItem = &PathItem{}
-				spec.Paths[path] = pathItem
+				spec.Paths[fullPath] = pathItem
 			}
 			switch httpMethod {
 			case HTTPGet:
