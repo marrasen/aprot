@@ -206,6 +206,17 @@ func (c *Conn) sendError(id string, code int, message string) {
 	_ = c.sendJSON(msg)
 }
 
+func (c *Conn) sendProtocolError(id string, perr *ProtocolError) {
+	msg := ErrorMessage{
+		Type:    TypeError,
+		ID:      id,
+		Code:    perr.Code,
+		Message: perr.Message,
+		Data:    perr.Data,
+	}
+	_ = c.sendJSON(msg)
+}
+
 func (c *Conn) sendProgress(id string, current, total int, message string) {
 	msg := ProgressMessage{
 		Type:    TypeProgress,
@@ -312,7 +323,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 
 	if err != nil {
 		if perr, ok := err.(*ProtocolError); ok {
-			c.sendError(msg.ID, perr.Code, perr.Message)
+			c.sendProtocolError(msg.ID, perr)
 		} else if code, found := c.server.registry.LookupError(err); found {
 			c.sendError(msg.ID, code, err.Error())
 		} else {
@@ -376,7 +387,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 
 	if err != nil {
 		if perr, ok := err.(*ProtocolError); ok {
-			c.sendError(msg.ID, perr.Code, perr.Message)
+			c.sendProtocolError(msg.ID, perr)
 		} else if code, found := c.server.registry.LookupError(err); found {
 			c.sendError(msg.ID, code, err.Error())
 		} else {
@@ -466,7 +477,7 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 
 	if err != nil {
 		if perr, ok := err.(*ProtocolError); ok {
-			c.sendError(sub.id, perr.Code, perr.Message)
+			c.sendProtocolError(sub.id, perr)
 		} else if code, found := c.server.registry.LookupError(err); found {
 			c.sendError(sub.id, code, err.Error())
 		} else {

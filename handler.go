@@ -35,6 +35,7 @@ type HandlerInfo struct {
 	IsVoid       bool // true when handler returns only error
 	method       reflect.Value
 	handler      reflect.Value
+	registry     *Registry // back-reference for accessing validator
 }
 
 // PushEventInfo describes a push event for code generation.
@@ -99,6 +100,7 @@ type Registry struct {
 	sharedEnums     []EnumInfo                                         // enums not tied to a handler group
 	generateHooks   []func(results map[string]string, mode OutputMode) // hooks run after generation
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
+	validator       StructValidator                                    // optional struct validator (nil = disabled)
 }
 
 // NewRegistry creates a new handler registry.
@@ -160,6 +162,7 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 			if existing, exists := r.handlers[wireMethod]; exists {
 				panic(fmt.Sprintf("aprot: duplicate method %s (registered by %s and %s)", wireMethod, existing.StructName, structName))
 			}
+			info.registry = r
 			r.handlers[wireMethod] = info
 			group.Handlers[info.Name] = info
 
@@ -399,6 +402,17 @@ func (r *Registry) SharedEnums() []EnumInfo {
 	return r.sharedEnums
 }
 
+// SetValidator sets the struct validator used for automatic parameter validation.
+// When set, struct parameters are validated before handler dispatch.
+// Pass nil to disable validation.
+//
+// Example:
+//
+//	registry.SetValidator(aprot.NewPlaygroundValidator())
+func (r *Registry) SetValidator(v StructValidator) {
+	r.validator = v
+}
+
 // OnGenerate registers a hook called after code generation.
 // The hook receives the results map (filename → content) and the output mode.
 // Hooks can modify existing entries or add new files.
@@ -608,6 +622,25 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 					return nil, ErrInvalidParams(err.Error())
 				}
 				args = append(args, val)
+			}
+		}
+	}
+
+	// Validate struct parameters if a validator is set
+	if info.registry != nil && info.registry.validator != nil {
+		for i, p := range info.Params {
+			pt := p.Type
+			if pt.Kind() == reflect.Ptr {
+				pt = pt.Elem()
+			}
+			if pt.Kind() == reflect.Struct {
+				val := args[i+1] // +1 because args[0] is ctx
+				if val.Kind() == reflect.Ptr {
+					val = val.Elem()
+				}
+				if err := info.registry.validator.ValidateStruct(val.Interface()); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

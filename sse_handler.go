@@ -68,9 +68,11 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	if err := h.server.runConnectHooks(r.Context(), conn); err != nil {
 		code := CodeConnectionRejected
 		var message string
+		var errData any
 		if perr, ok := err.(*ProtocolError); ok {
 			code = perr.Code
 			message = perr.Message
+			errData = perr.Data
 		} else {
 			message = err.Error()
 		}
@@ -78,6 +80,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 			Type:    TypeError,
 			Code:    code,
 			Message: message,
+			Data:    errData,
 		}
 		data, _ := json.Marshal(errMsg)
 		sseT.sendEvent("error", data)

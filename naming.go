@@ -6,7 +6,7 @@ import (
 )
 
 // NamingPlugin controls how Go names are transformed into TypeScript names
-// during code generation.
+// during code generation and REST path construction.
 type NamingPlugin interface {
 	// FileName converts a handler group name (e.g. "PublicHandlers") to a
 	// filename stem (without extension). The generator appends ".ts".
@@ -27,6 +27,14 @@ type NamingPlugin interface {
 	// ErrorMethodName converts a custom error code name to a type-guard method name.
 	// Default: "is" + name (e.g. "isNotFound").
 	ErrorMethodName(errorName string) string
+
+	// PathPrefix converts a handler group name to a URL path prefix.
+	// Default: "/" + kebab-case (e.g. "UserHandlers" → "/user-handlers").
+	PathPrefix(groupName string) string
+
+	// PathSegment converts a method name to a URL path segment.
+	// Default: kebab-case (e.g. "UpdateUser" → "update-user").
+	PathSegment(methodName string) string
 }
 
 // DefaultNaming reproduces the current naming behavior.
@@ -62,6 +70,17 @@ func (d DefaultNaming) ErrorMethodName(errorName string) string {
 	return "is" + errorName
 }
 
+func (d DefaultNaming) PathPrefix(groupName string) string {
+	return "/" + d.FileName(groupName)
+}
+
+func (d DefaultNaming) PathSegment(methodName string) string {
+	if d.FixAcronyms {
+		return toKebabAcronyms(methodName)
+	}
+	return toKebab(methodName)
+}
+
 // PreserveNaming keeps Go PascalCase method names unchanged in the generated
 // TypeScript. Filenames still use kebab-case (filesystem convention).
 type PreserveNaming struct {
@@ -89,6 +108,17 @@ func (p PreserveNaming) HandlerName(eventName string) string {
 
 func (p PreserveNaming) ErrorMethodName(errorName string) string {
 	return "is" + errorName
+}
+
+func (p PreserveNaming) PathPrefix(groupName string) string {
+	return "/" + p.FileName(groupName)
+}
+
+func (p PreserveNaming) PathSegment(methodName string) string {
+	if p.FixAcronyms {
+		return toKebabAcronyms(methodName)
+	}
+	return toKebab(methodName)
 }
 
 // toKebabAcronyms converts PascalCase to kebab-case, treating consecutive

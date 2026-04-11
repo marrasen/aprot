@@ -244,6 +244,19 @@ type GeneratorOptions struct {
 	// Naming controls how Go names are transformed into TypeScript names.
 	// If nil, DefaultNaming{} is used (preserving current behavior).
 	Naming NamingPlugin
+
+	// Zod enables generation of Zod validation schemas alongside TypeScript interfaces.
+	// When enabled, {handler-name}.schema.ts files are generated for structs with validate tags.
+	Zod bool
+
+	// OpenAPI enables generation of an openapi.json specification file.
+	OpenAPI bool
+
+	// OpenAPITitle sets the info.title in the generated OpenAPI spec.
+	OpenAPITitle string
+
+	// OpenAPIVersion sets the info.version in the generated OpenAPI spec.
+	OpenAPIVersion string
 }
 
 // Generator generates TypeScript client code from a registry.
@@ -322,9 +335,11 @@ type interfaceData struct {
 }
 
 type fieldData struct {
-	Name     string
-	Type     string
-	Optional bool
+	Name        string
+	Type        string
+	Optional    bool
+	GoType      string // Go kind for Zod/OpenAPI mapping (e.g., "string", "int", "float64")
+	ValidateTag string // raw validate tag, e.g., "required,min=3,max=100"
 }
 
 type paramData struct {
@@ -540,6 +555,22 @@ func (g *Generator) Generate() (map[string]string, error) {
 		}
 
 		results[data.FileName] = buf.String()
+
+		// Generate Zod schema file if enabled and handler has validated types
+		if g.options.Zod {
+			schemas := buildZodSchemas(data.Interfaces)
+			if len(schemas) > 0 {
+				schemaData := struct {
+					Schemas []zodSchemaData
+				}{Schemas: schemas}
+				var schemaBuf strings.Builder
+				if err := templates.ExecuteTemplate(&schemaBuf, "client-schema.ts.tmpl", schemaData); err != nil {
+					return nil, err
+				}
+				schemaFileName := strings.TrimSuffix(data.FileName, ".ts") + ".schema.ts"
+				results[schemaFileName] = schemaBuf.String()
+			}
+		}
 	}
 
 	// Render base client
@@ -548,6 +579,25 @@ func (g *Generator) Generate() (map[string]string, error) {
 		return nil, err
 	}
 	results["client.ts"] = baseBuf.String()
+
+	// Generate OpenAPI spec if enabled
+	if g.options.OpenAPI {
+		title := g.options.OpenAPITitle
+		if title == "" {
+			title = "API"
+		}
+		version := g.options.OpenAPIVersion
+		if version == "" {
+			version = "1.0.0"
+		}
+		oag := NewOpenAPIGenerator(g.registry, title, version)
+		oag.naming = g.naming()
+		data, err := oag.GenerateJSON()
+		if err != nil {
+			return nil, fmt.Errorf("openapi generation failed: %w", err)
+		}
+		results["openapi.json"] = string(data)
+	}
 
 	// Run generate hooks
 	for _, hook := range g.registry.generateHooks {
@@ -987,9 +1037,11 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		fields = append(fields, fieldData{
-			Name:     g.getJSONName(field),
-			Type:     g.goTypeToTS(field.Type),
-			Optional: g.isOptional(field),
+			Name:        g.getJSONName(field),
+			Type:        g.goTypeToTS(field.Type),
+			Optional:    g.isOptional(field),
+			GoType:      goKindString(field.Type),
+			ValidateTag: field.Tag.Get("validate"),
 		})
 	}
 	return fields
@@ -1109,6 +1161,34 @@ func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
 // struct-field recursion for types whose wire format differs from their Go fields.
 func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 	return g.inferTypeFromMarshalCached(t) != nil || SQLNullTSType(t, g.goTypeToTS) != ""
+}
+
+// goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.
+// Resolves through pointers and named types to the underlying kind.
+func goKindString(t reflect.Type) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "int"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "uint"
+	case reflect.Float32, reflect.Float64:
+		return "float"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Slice:
+		return "slice"
+	case reflect.Map:
+		return "map"
+	case reflect.Struct:
+		return "struct"
+	default:
+		return t.Kind().String()
+	}
 }
 
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.

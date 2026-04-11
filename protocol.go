@@ -46,6 +46,7 @@ type ErrorMessage struct {
 	ID      string      `json:"id"`
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
+	Data    any         `json:"data,omitempty"`
 }
 
 // ProgressMessage represents a request-level progress update from server to client.

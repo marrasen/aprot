@@ -400,9 +400,11 @@ func (s *Server) Registry() *Registry {
 func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
 	code := CodeConnectionRejected
 	message := "connection rejected"
+	var errData any
 	if perr, ok := err.(*ProtocolError); ok {
 		code = perr.Code
 		message = perr.Message
+		errData = perr.Data
 	} else if err != nil {
 		message = err.Error()
 	}
@@ -412,6 +414,7 @@ func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
 		ID:      "",
 		Code:    code,
 		Message: message,
+		Data:    errData,
 	}
 	data, _ := json.Marshal(msg)
 	_ = ws.WriteMessage(websocket.TextMessage, data)
