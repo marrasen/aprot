@@ -130,7 +130,7 @@ describe('WebSocket Transport', () => {
 
         // Subscribe and wait for initial data
         await new Promise<void>((resolve) => {
-            subscribeListUsers(client, (result: ListUsersResponse) => {
+            subscribeListUsers(client, (_result: ListUsersResponse) => {
                 resolve();
             });
         });
