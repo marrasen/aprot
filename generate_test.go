@@ -337,7 +337,7 @@ func TestGenerateReact(t *testing.T) {
 	output := buf.String()
 
 	// Check for React imports
-	if !strings.Contains(output, "import { useState, useEffect, useCallback, useRef") {
+	if !strings.Contains(output, "import { useState, useEffect, useCallback, useMemo, useRef") {
 		t.Error("Missing React imports")
 	}
 

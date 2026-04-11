@@ -137,6 +137,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
 - **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
+- **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
 - **Middleware** — server-level and per-handler middleware chains
 - **Push events** — broadcast to all clients or target specific users
 - **Hierarchical tasks** — nested task trees with progress tracking, streamed to clients (see [`tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks) subpackage)
