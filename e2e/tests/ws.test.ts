@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
 import { ApiClient, ApiError } from '../api/client';
-import { TaskStatus, createUser, getUser, listUsers, getTask, processBatch, sendNotification, onUserCreatedEvent, onSystemNotificationEvent } from '../api/public-handlers';
+import { TaskStatus, createUser, getUser, listUsers, getTask, processBatch, sendNotification, onUserCreatedEvent, onSystemNotificationEvent, subscribeListUsers } from '../api/public-handlers';
+import type { ListUsersResponse } from '../api/public-handlers';
 
 describe('WebSocket Transport', () => {
     let client: ApiClient;
@@ -121,6 +122,22 @@ describe('WebSocket Transport', () => {
             expect(err).toBeInstanceOf(ApiError);
             expect((err as ApiError).isInvalidParams()).toBe(true);
         }
+    });
+
+    test('getLoadingCount excludes subscription pending entries', async () => {
+        // Before subscribing, loading count should be 0
+        expect(client.getLoadingCount()).toBe(0);
+
+        // Subscribe and wait for initial data
+        await new Promise<void>((resolve) => {
+            subscribeListUsers(client, (_result: ListUsersResponse) => {
+                resolve();
+            });
+        });
+
+        // After subscription data arrives, loading count should still be 0.
+        // Subscription pending entries must not count toward getLoadingCount().
+        expect(client.getLoadingCount()).toBe(0);
     });
 
     test('unknown method throws ApiError with isNotFound', async () => {

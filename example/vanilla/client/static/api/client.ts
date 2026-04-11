@@ -431,7 +431,11 @@ export class ApiClient {
     }
 
     getLoadingCount(): number {
-        return this.pending.size + this.buffer.length;
+        let count = this.buffer.length;
+        for (const id of this.pending.keys()) {
+            if (!this.subscriptions.has(id)) count++;
+        }
+        return count;
     }
 
     isConnected(): boolean {
@@ -663,6 +667,7 @@ export class ApiClient {
             });
             this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params });
         }
+        this.notifyLoadingChange();
     }
 
     onPush<T>(event: string, handler: PushHandler<T>): () => void {

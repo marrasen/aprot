@@ -7,8 +7,8 @@ import { EventSource } from 'eventsource';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Polyfill browser APIs for Node.js test environment
-(globalThis as any).WebSocket = WebSocket;
-(globalThis as any).EventSource = EventSource;
+(globalThis as unknown as Record<string, unknown>).WebSocket = WebSocket;
+(globalThis as unknown as Record<string, unknown>).EventSource = EventSource;
 
 export function getServerAddr(): string {
     return readFileSync(join(__dirname, '..', '.test-server-addr'), 'utf-8').trim();
