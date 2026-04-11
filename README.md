@@ -371,11 +371,13 @@ export const CreateUserRequestSchema = z.object({
 
 ## REST Adapter
 
-Serve your handlers as REST/HTTP endpoints alongside WebSocket. Register handlers with `RegisterREST` to expose them via both WebSocket and REST:
+Serve your handlers as REST/HTTP endpoints alongside WebSocket. Use `RegisterREST` for REST-only handlers, or `EnableREST` to expose a WebSocket handler via REST as well:
 
 ```go
 registry.Register(&handlers)          // WebSocket only
-registry.RegisterREST(&todos)         // WebSocket + REST
+registry.RegisterREST(&todos)         // REST only
+registry.Register(&shared)            // WebSocket...
+registry.EnableREST(&shared)          // ...and also REST
 
 rest := aprot.NewRESTAdapter(registry)
 http.Handle("/api/", http.StripPrefix("/api", rest))

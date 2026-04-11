@@ -276,7 +276,7 @@ func (a *RESTAdapter) buildHandler(info *HandlerInfo) Handler {
 	handler := Handler(final)
 
 	// Apply handler-group middleware
-	groupMW := a.registry.GetMiddleware(info.StructName + "." + info.Name)
+	groupMW := a.registry.GroupMiddleware(info.StructName)
 	for i := len(groupMW) - 1; i >= 0; i-- {
 		handler = groupMW[i](handler)
 	}

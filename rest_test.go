@@ -438,6 +438,49 @@ func TestRESTAdapter_NoRESTGroups(t *testing.T) {
 	}
 }
 
+func TestRegisterREST_NotInWSDispatch(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&RESTHandlers{})
+
+	// REST-only handlers should NOT be in the WS dispatch map
+	_, ok := registry.Get("RESTHandlers.GetUser")
+	if ok {
+		t.Error("REST-only handler should not be accessible via Get() (WS dispatch)")
+	}
+
+	// But should be in groups
+	group, ok := registry.Groups()["RESTHandlers"]
+	if !ok {
+		t.Fatal("REST-only handler should be in groups")
+	}
+	if _, ok := group.Handlers["GetUser"]; !ok {
+		t.Error("GetUser should be in group handlers")
+	}
+}
+
+func TestEnableREST(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&RESTHandlers{})
+	registry.EnableREST(&RESTHandlers{})
+
+	// Should be in WS dispatch
+	_, ok := registry.Get("RESTHandlers.GetUser")
+	if !ok {
+		t.Error("expected handler in WS dispatch")
+	}
+
+	// Should also be REST-enabled
+	if !registry.IsREST("RESTHandlers") {
+		t.Error("expected RESTHandlers to be REST-enabled")
+	}
+
+	// REST adapter should serve it
+	adapter := NewRESTAdapter(registry)
+	if len(adapter.Routes()) == 0 {
+		t.Error("expected routes from EnableREST handler")
+	}
+}
+
 func init() {
 	// Suppress unused variable warning
 	_ = fmt.Sprint
