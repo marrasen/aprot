@@ -37,7 +37,7 @@ type IncomingMessage struct {
 type ResponseMessage struct {
 	Type   MessageType `json:"type"`
 	ID     string      `json:"id"`
-	Result any         `json:"result"`
+	Result any         `json:"result,omitempty"`
 }
 
 // ErrorMessage represents an error response from server to client.
