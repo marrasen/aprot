@@ -88,3 +88,42 @@ type GetDashboardResponse struct {
 	FeaturedUsers []*User           `json:"featuredUsers"`
 	TagsByID      map[int]Tag       `json:"tagsById"`
 }
+
+// Validated request types — struct tags flow to server-side validation,
+// generated Zod schemas, and OpenAPI spec constraints.
+
+type CreateUserRequest struct {
+	Name  string `json:"name"  validate:"required,min=2,max=100"`
+	Email string `json:"email" validate:"required,email"`
+}
+
+type UpdateUserRequest struct {
+	Name  string `json:"name,omitempty"  validate:"omitempty,min=2,max=100"`
+	Email string `json:"email,omitempty" validate:"omitempty,email"`
+}
+
+type CreateTodoRequest struct {
+	Title       string `json:"title"       validate:"required,min=1,max=200"`
+	Description string `json:"description" validate:"max=1000"`
+	Priority    int    `json:"priority"    validate:"gte=1,lte=5"`
+}
+
+type UpdateTodoRequest struct {
+	Title       string `json:"title,omitempty"       validate:"omitempty,min=1,max=200"`
+	Description string `json:"description,omitempty" validate:"omitempty,max=1000"`
+	Priority    int    `json:"priority,omitempty"     validate:"omitempty,gte=1,lte=5"`
+	Done        *bool  `json:"done,omitempty"`
+}
+
+type Todo struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Priority    int    `json:"priority"`
+	Done        bool   `json:"done"`
+}
+
+type ListTodosResponse struct {
+	Todos []Todo `json:"todos"`
+	Total int    `json:"total"`
+}

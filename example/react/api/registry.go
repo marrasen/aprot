@@ -6,12 +6,19 @@ import (
 )
 
 // NewRegistry creates and configures the API registry with all handlers and push events.
-func NewRegistry() (*aprot.Registry, *Handlers) {
+func NewRegistry() (*aprot.Registry, *Handlers, *Todos) {
 	registry := aprot.NewRegistry()
+
+	// Enable struct validation (go-playground/validator)
+	registry.SetValidator(aprot.NewPlaygroundValidator())
 
 	// Register handlers
 	handlers := NewHandlers()
 	registry.Register(handlers)
+
+	// Register todo handlers (exposed via both WebSocket and REST)
+	todos := NewTodos()
+	registry.Register(todos)
 
 	// Register enums
 	registry.RegisterEnumFor(handlers, TaskStatusValues())
@@ -24,5 +31,5 @@ func NewRegistry() (*aprot.Registry, *Handlers) {
 	// Enable shared tasks with typed metadata
 	tasks.EnableWithMeta[TaskMeta](registry)
 
-	return registry, handlers
+	return registry, handlers, todos
 }

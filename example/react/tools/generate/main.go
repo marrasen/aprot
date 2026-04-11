@@ -11,11 +11,15 @@ import (
 )
 
 func main() {
-	registry, _ := api.NewRegistry()
+	registry, _, _ := api.NewRegistry()
 
 	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
-		OutputDir: "../../client/src/api",
-		Mode:      aprot.OutputReact,
+		OutputDir:      "../../client/src/api",
+		Mode:           aprot.OutputReact,
+		Zod:            true,
+		OpenAPI:        true,
+		OpenAPITitle:   "aprot React Example API",
+		OpenAPIVersion: "1.0.0",
 	})
 
 	files, err := gen.Generate()
