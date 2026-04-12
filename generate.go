@@ -120,6 +120,40 @@ func SQLNullTSType(t reflect.Type, typeResolver func(reflect.Type) string) strin
 	}
 }
 
+// SQLNullGoKind returns the unwrapped Go kind string ("string", "int", "float",
+// "bool") for database/sql nullable wrappers, parallel to SQLNullTSType. Returns
+// "" if t is not a sql.Null type. kindResolver handles the generic Null[T] case
+// and is typically goKindString.
+//
+// This is the Zod-side companion to SQLNullTSType: rather than sniffing the
+// TypeScript output for a " | null" suffix, we derive the unwrapped kind
+// directly from reflection so fieldData carries the information explicitly.
+func SQLNullGoKind(t reflect.Type, kindResolver func(reflect.Type) string) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.PkgPath() != "database/sql" {
+		return ""
+	}
+	switch t.Name() {
+	case "NullString", "NullTime":
+		return "string"
+	case "NullInt64", "NullInt32", "NullInt16", "NullByte":
+		return "int"
+	case "NullFloat64":
+		return "float"
+	case "NullBool":
+		return "bool"
+	default:
+		if strings.HasPrefix(t.Name(), "Null[") {
+			if vField, ok := t.FieldByName("V"); ok {
+				return kindResolver(vField.Type)
+			}
+		}
+		return ""
+	}
+}
+
 // inferObjectType unmarshals JSON object data and infers a Record<string, T> type.
 // Returns Record<string, any> for empty or heterogeneous objects.
 func inferObjectType(data []byte) *MarshalTSType {
@@ -331,6 +365,11 @@ type fieldData struct {
 	Optional    bool
 	GoType      string // Go kind for Zod/OpenAPI mapping (e.g., "string", "int", "float64")
 	ValidateTag string // raw validate tag, e.g., "required,min=3,max=100"
+	// SQLNullKind is non-empty when the underlying Go type is a database/sql
+	// nullable wrapper (NullString, NullInt64, Null[T], etc.). Its value is the
+	// unwrapped Go kind ("string", "int", "float", "bool"); Zod codegen uses it
+	// to emit the correct base type + a trailing .nullable(). Empty otherwise.
+	SQLNullKind string
 }
 
 type paramData struct {
@@ -1045,6 +1084,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			Optional:    g.isOptional(field),
 			GoType:      goKindString(field.Type),
 			ValidateTag: field.Tag.Get("validate"),
+			SQLNullKind: SQLNullGoKind(field.Type, goKindString),
 		})
 	}
 	return fields

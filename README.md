@@ -364,11 +364,17 @@ This produces `{handler}.schema.ts` files with Zod schemas for any struct that h
 import { z } from 'zod';
 
 export const CreateUserRequestSchema = z.object({
-    name: z.string().min(1).min(2).max(100),
+    name: z.string().min(2).max(100),
     email: z.string().min(1).email(),
     age: z.number().int().min(13).max(120),
 });
 ```
+
+A few validate-tag semantics worth knowing when designing your request structs:
+
+- **`omitempty` on a string** (`validate:"omitempty,url,max=500"`) mirrors `go-playground/validator`'s server behavior: the empty string is the Go zero value, so subsequent rules are skipped. The generated Zod schema wraps the chain in `z.union([z.literal(""), ...]).optional()`, so `""` and `undefined` both pass — useful for optional form fields where the browser submits `""` rather than omitting the key. `omitempty` on non-string kinds just appends `.optional()`.
+- **`sql.NullString` / `sql.NullInt64` / `sql.NullTime` / `sql.NullBool` / `sql.Null[T]`** are unwrapped on both sides: the TypeScript type becomes `T | null` and the Zod schema becomes `z.<base>().nullable()`, with any `validate` tag constraints still applied to the inner type.
+- **`url` and `email` are absolute-only** because that's how `go-playground/validator` defines them upstream. `validate:"url"` rejects app-internal paths like `/images/123/mobile`, and `email` is strict about the formats it accepts. Not an aprot choice — just a footgun to know about so you don't fight it for half an hour. If you need relative URLs, fall back to `validate:"max=500"` or a custom validator.
 
 ## REST Adapter
 
