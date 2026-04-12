@@ -2121,6 +2121,8 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 		{"plain struct unchanged", reflect.TypeOf(CreateUserRequest{}), "CreateUserRequest"},
 		{"int unchanged", reflect.TypeOf(0), "number"},
 		{"string unchanged", reflect.TypeOf(""), "string"},
+		{"unnamed []byte is base64 string", reflect.TypeOf([]byte(nil)), "string"},
+		{"unnamed []uint8 is base64 string", reflect.TypeOf([]uint8(nil)), "string"},
 	}
 
 	for _, tc := range tests {
@@ -2130,6 +2132,163 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
 			}
 		})
+	}
+}
+
+// namedByteSlice documents that named byte slices keep the number[] mapping:
+// go-json-experiment/json (v2) encodes `type Foo []byte` as an array of
+// numbers per Go issue #24746, only unnamed []byte stays base64.
+type namedByteSlice []byte
+
+// ByteSliceFieldStruct covers both shapes side-by-side so the collectInterfaceFields
+// regression test can assert that unnamed []byte gets special-cased but named
+// byte slices fall through to the existing slice-of-number path.
+type ByteSliceFieldStruct struct {
+	Data  []byte         `json:"data"  validate:"required"`
+	Named namedByteSlice `json:"named"`
+}
+
+func TestGoTypeToTSNamedByteSliceUnchanged(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	got := g.goTypeToTS(reflect.TypeOf(namedByteSlice(nil)))
+	if got != "number[]" {
+		t.Errorf("named byte slice should still map to number[] (v2 semantics), got %q", got)
+	}
+}
+
+func TestCollectInterfaceFieldsByteSlice(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	fields := g.collectInterfaceFields(reflect.TypeOf(ByteSliceFieldStruct{}))
+	if len(fields) != 2 {
+		t.Fatalf("expected 2 fields, got %d", len(fields))
+	}
+
+	byName := make(map[string]fieldData, len(fields))
+	for _, f := range fields {
+		byName[f.Name] = f
+	}
+
+	data, ok := byName["data"]
+	if !ok {
+		t.Fatalf("missing `data` field: %+v", fields)
+	}
+	if data.Type != "string" {
+		t.Errorf("unnamed []byte Type = %q, want %q", data.Type, "string")
+	}
+	if data.GoType != "string" {
+		t.Errorf("unnamed []byte GoType = %q, want %q (drives Zod z.string())", data.GoType, "string")
+	}
+	if data.ElemGoKind != "" {
+		t.Errorf("unnamed []byte ElemGoKind = %q, want empty string", data.ElemGoKind)
+	}
+	if data.ElemTypeName != "" {
+		t.Errorf("unnamed []byte ElemTypeName = %q, want empty string", data.ElemTypeName)
+	}
+
+	named, ok := byName["named"]
+	if !ok {
+		t.Fatalf("missing `named` field: %+v", fields)
+	}
+	if named.Type != "number[]" {
+		t.Errorf("named byte slice Type = %q, want %q (v2 encodes as number array)", named.Type, "number[]")
+	}
+	if named.GoType != "slice" {
+		t.Errorf("named byte slice GoType = %q, want %q", named.GoType, "slice")
+	}
+}
+
+// ByteSliceFormatTagStruct covers the per-field go-json-experiment/json v2
+// `format:` tag. The generator should respect the tag so TS/Zod/OpenAPI
+// match the real wire shape: `format:array` forces a number array for
+// unnamed []byte, and `format:base64` (plus the other string-encoding
+// formats) forces a string shape for named byte slices — the inverse
+// defaults from issue #174.
+type ByteSliceFormatTagStruct struct {
+	ArrayFromUnnamed   []byte         `json:"arrayFromUnnamed,format:array"`
+	Base64FromNamed    namedByteSlice `json:"base64FromNamed,format:base64"`
+	Base64URLFromNamed namedByteSlice `json:"base64urlFromNamed,format:base64url"`
+	Base32FromNamed    namedByteSlice `json:"base32FromNamed,format:base32"`
+	Base32HexFromNamed namedByteSlice `json:"base32hexFromNamed,format:base32hex"`
+	Base16FromNamed    namedByteSlice `json:"base16FromNamed,format:base16"`
+	HexFromNamed       namedByteSlice `json:"hexFromNamed,format:hex"`
+	ArrayFromNamed     namedByteSlice `json:"arrayFromNamed,format:array"`
+	Default            []byte         `json:"default"`
+	UnknownFormat      []byte         `json:"unknownFormat,format:weird"`
+}
+
+func TestCollectInterfaceFieldsByteSliceFormatTag(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	fields := g.collectInterfaceFields(reflect.TypeOf(ByteSliceFormatTagStruct{}))
+	byName := make(map[string]fieldData, len(fields))
+	for _, f := range fields {
+		byName[f.Name] = f
+	}
+
+	// format:array forces a number array, even on unnamed []byte
+	// (inverting the issue #174 default).
+	arrayCases := []string{"arrayFromUnnamed", "arrayFromNamed"}
+	for _, name := range arrayCases {
+		f, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing field %q: %+v", name, fields)
+		}
+		if f.Type != "number[]" {
+			t.Errorf("%s Type = %q, want %q", name, f.Type, "number[]")
+		}
+		if f.GoType != "slice" {
+			t.Errorf("%s GoType = %q, want %q", name, f.GoType, "slice")
+		}
+		if f.ElemGoKind != "uint" {
+			t.Errorf("%s ElemGoKind = %q, want %q", name, f.ElemGoKind, "uint")
+		}
+	}
+
+	// All string-encoding formats force `string` — even on a named byte
+	// slice which would otherwise default to number[] under v2.
+	stringCases := []string{
+		"base64FromNamed", "base64urlFromNamed", "base32FromNamed",
+		"base32hexFromNamed", "base16FromNamed", "hexFromNamed",
+	}
+	for _, name := range stringCases {
+		f, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing field %q: %+v", name, fields)
+		}
+		if f.Type != "string" {
+			t.Errorf("%s Type = %q, want %q", name, f.Type, "string")
+		}
+		if f.GoType != "string" {
+			t.Errorf("%s GoType = %q, want %q", name, f.GoType, "string")
+		}
+		if f.ElemGoKind != "" {
+			t.Errorf("%s ElemGoKind = %q, want empty", name, f.ElemGoKind)
+		}
+	}
+
+	// No tag → issue #174 default: unnamed []byte is a base64 string.
+	def, ok := byName["default"]
+	if !ok {
+		t.Fatalf("missing `default` field: %+v", fields)
+	}
+	if def.Type != "string" || def.GoType != "string" {
+		t.Errorf("default unnamed []byte should still be string, got Type=%q GoType=%q", def.Type, def.GoType)
+	}
+
+	// An unknown format value falls through to the default — the codegen
+	// should not guess at it, and v2 would raise a marshal error at
+	// runtime anyway if it genuinely didn't understand the tag.
+	unk, ok := byName["unknownFormat"]
+	if !ok {
+		t.Fatalf("missing `unknownFormat` field: %+v", fields)
+	}
+	if unk.Type != "string" {
+		t.Errorf("unknown format should fall through to default (string), got Type=%q", unk.Type)
 	}
 }
 

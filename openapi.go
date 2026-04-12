@@ -327,6 +327,13 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Bool:
 		return &JSONSchema{Type: "boolean"}
 	case reflect.Slice:
+		if isUnnamedByteSlice(t) {
+			// Unnamed []byte is base64-encoded as a string on the wire under
+			// both encoding/json v1 and go-json-experiment/json v2 (issue
+			// #174). OpenAPI 3.0 represents this as {type: string, format:
+			// byte}.
+			return &JSONSchema{Type: "string", Format: "byte"}
+		}
 		return &JSONSchema{
 			Type:  "array",
 			Items: g.goTypeToJSONSchema(t.Elem()),
@@ -350,6 +357,31 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	default:
 		return &JSONSchema{}
 	}
+}
+
+// byteSliceFieldSchema returns the JSON Schema for a byte-slice field,
+// honoring the go-json-experiment/json v2 `format:` tag (issue #174).
+// Returns nil if the field type is not a byte slice — caller should fall
+// through to the default goTypeToJSONSchema path.
+func byteSliceFieldSchema(field reflect.StructField) *JSONSchema {
+	if !isByteSlice(field.Type) {
+		return nil
+	}
+	format := jsonFormatOption(field)
+	if format != "" {
+		if _, _, _, ok := byteSliceFormatShape(format); ok {
+			if format == "array" {
+				return &JSONSchema{Type: "array", Items: &JSONSchema{Type: "integer"}}
+			}
+			return &JSONSchema{Type: "string", Format: "byte"}
+		}
+		// Unrecognized format tag: fall through to the default shape.
+	}
+	if isUnnamedByteSlice(field.Type) {
+		return &JSONSchema{Type: "string", Format: "byte"}
+	}
+	// Named byte slice with no tag keeps the v2 number-array default.
+	return &JSONSchema{Type: "array", Items: &JSONSchema{Type: "integer"}}
 }
 
 // buildStructSchema builds a JSON Schema for a struct type and registers it.
@@ -393,7 +425,12 @@ func (g *OpenAPIGenerator) buildStructSchema(t reflect.Type) {
 		}
 
 		jsonName := jsonFieldName(field)
-		fieldSchema := g.goTypeToJSONSchema(field.Type)
+		var fieldSchema *JSONSchema
+		if s := byteSliceFieldSchema(field); s != nil {
+			fieldSchema = s
+		} else {
+			fieldSchema = g.goTypeToJSONSchema(field.Type)
+		}
 
 		// Apply validate constraints
 		validateTag := field.Tag.Get("validate")
@@ -427,7 +464,12 @@ func (g *OpenAPIGenerator) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
 			continue
 		}
 		jsonName := jsonFieldName(field)
-		fieldSchema := g.goTypeToJSONSchema(field.Type)
+		var fieldSchema *JSONSchema
+		if s := byteSliceFieldSchema(field); s != nil {
+			fieldSchema = s
+		} else {
+			fieldSchema = g.goTypeToJSONSchema(field.Type)
+		}
 
 		validateTag := field.Tag.Get("validate")
 		if validateTag != "" {

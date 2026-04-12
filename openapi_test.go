@@ -312,3 +312,84 @@ func TestApplyValidateConstraints(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAPIGoTypeToJSONSchema_ByteSlice is a regression test for issue #174:
+// unnamed []byte must map to {type: string, format: byte} because it is
+// serialized as a base64 string by both encoding/json v1 and
+// go-json-experiment/json v2, not as an array of integers. Named byte slices
+// are left on the existing array path to match v2's per-element encoding.
+func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	t.Run("unnamed []byte is string/byte", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf([]byte(nil)))
+		if schema == nil {
+			t.Fatal("schema is nil")
+		}
+		if schema.Type != "string" {
+			t.Errorf("Type = %q, want %q", schema.Type, "string")
+		}
+		if schema.Format != "byte" {
+			t.Errorf("Format = %q, want %q", schema.Format, "byte")
+		}
+		if schema.Items != nil {
+			t.Errorf("Items should be nil for string/byte, got %+v", schema.Items)
+		}
+	})
+
+	t.Run("named byte slice still array", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf(namedByteSlice(nil)))
+		if schema == nil {
+			t.Fatal("schema is nil")
+		}
+		if schema.Type != "array" {
+			t.Errorf("Type = %q, want %q", schema.Type, "array")
+		}
+		if schema.Items == nil || schema.Items.Type != "integer" {
+			t.Errorf("Items = %+v, want integer element", schema.Items)
+		}
+	})
+}
+
+// TestOpenAPIByteSliceFormatTag covers the v2 json `format:` tag end-to-end
+// through the struct schema builder: the emitted JSON Schema for each field
+// must match the on-the-wire shape driven by the tag, inverting the #174
+// defaults where the tag says so.
+func TestOpenAPIByteSliceFormatTag(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	gen.buildStructSchema(reflect.TypeOf(ByteSliceFormatTagStruct{}))
+
+	schema := gen.schemas[reflect.TypeOf(ByteSliceFormatTagStruct{})]
+	if schema == nil {
+		t.Fatal("ByteSliceFormatTagStruct schema not registered")
+	}
+
+	arrayFields := []string{"arrayFromUnnamed", "arrayFromNamed"}
+	for _, name := range arrayFields {
+		prop := schema.Properties[name]
+		if prop == nil {
+			t.Fatalf("property %q missing", name)
+		}
+		if prop.Type != "array" {
+			t.Errorf("%s Type = %q, want %q", name, prop.Type, "array")
+		}
+		if prop.Items == nil || prop.Items.Type != "integer" {
+			t.Errorf("%s Items = %+v, want integer", name, prop.Items)
+		}
+	}
+
+	stringFields := []string{
+		"base64FromNamed", "base64urlFromNamed", "base32FromNamed",
+		"base32hexFromNamed", "base16FromNamed", "hexFromNamed",
+	}
+	for _, name := range stringFields {
+		prop := schema.Properties[name]
+		if prop == nil {
+			t.Fatalf("property %q missing", name)
+		}
+		if prop.Type != "string" || prop.Format != "byte" {
+			t.Errorf("%s = {Type: %q, Format: %q}, want {string, byte}", name, prop.Type, prop.Format)
+		}
+	}
+}
