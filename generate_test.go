@@ -2886,7 +2886,7 @@ func TestRegisterEnum_SharedEnumsAccessor(t *testing.T) {
 // When used by two handler groups it is promoted to aprot.ts, which must
 // then import ColorType from gentestpkg.ts.
 type CrossPkgResp struct {
-	ID    string          `json:"id"`
+	ID    string           `json:"id"`
 	Color gentestpkg.Color `json:"color"`
 }
 
