@@ -2121,6 +2121,8 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 		{"plain struct unchanged", reflect.TypeOf(CreateUserRequest{}), "CreateUserRequest"},
 		{"int unchanged", reflect.TypeOf(0), "number"},
 		{"string unchanged", reflect.TypeOf(""), "string"},
+		{"unnamed []byte is base64 string", reflect.TypeOf([]byte(nil)), "string"},
+		{"unnamed []uint8 is base64 string", reflect.TypeOf([]uint8(nil)), "string"},
 	}
 
 	for _, tc := range tests {
@@ -2130,6 +2132,72 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
 			}
 		})
+	}
+}
+
+// namedByteSlice documents that named byte slices keep the number[] mapping:
+// go-json-experiment/json (v2) encodes `type Foo []byte` as an array of
+// numbers per Go issue #24746, only unnamed []byte stays base64.
+type namedByteSlice []byte
+
+// ByteSliceFieldStruct covers both shapes side-by-side so the collectInterfaceFields
+// regression test can assert that unnamed []byte gets special-cased but named
+// byte slices fall through to the existing slice-of-number path.
+type ByteSliceFieldStruct struct {
+	Data  []byte         `json:"data"  validate:"required"`
+	Named namedByteSlice `json:"named"`
+}
+
+func TestGoTypeToTSNamedByteSliceUnchanged(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	got := g.goTypeToTS(reflect.TypeOf(namedByteSlice(nil)))
+	if got != "number[]" {
+		t.Errorf("named byte slice should still map to number[] (v2 semantics), got %q", got)
+	}
+}
+
+func TestCollectInterfaceFieldsByteSlice(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	fields := g.collectInterfaceFields(reflect.TypeOf(ByteSliceFieldStruct{}))
+	if len(fields) != 2 {
+		t.Fatalf("expected 2 fields, got %d", len(fields))
+	}
+
+	byName := make(map[string]fieldData, len(fields))
+	for _, f := range fields {
+		byName[f.Name] = f
+	}
+
+	data, ok := byName["data"]
+	if !ok {
+		t.Fatalf("missing `data` field: %+v", fields)
+	}
+	if data.Type != "string" {
+		t.Errorf("unnamed []byte Type = %q, want %q", data.Type, "string")
+	}
+	if data.GoType != "string" {
+		t.Errorf("unnamed []byte GoType = %q, want %q (drives Zod z.string())", data.GoType, "string")
+	}
+	if data.ElemGoKind != "" {
+		t.Errorf("unnamed []byte ElemGoKind = %q, want empty string", data.ElemGoKind)
+	}
+	if data.ElemTypeName != "" {
+		t.Errorf("unnamed []byte ElemTypeName = %q, want empty string", data.ElemTypeName)
+	}
+
+	named, ok := byName["named"]
+	if !ok {
+		t.Fatalf("missing `named` field: %+v", fields)
+	}
+	if named.Type != "number[]" {
+		t.Errorf("named byte slice Type = %q, want %q (v2 encodes as number array)", named.Type, "number[]")
+	}
+	if named.GoType != "slice" {
+		t.Errorf("named byte slice GoType = %q, want %q", named.GoType, "slice")
 	}
 }
 

@@ -327,6 +327,13 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Bool:
 		return &JSONSchema{Type: "boolean"}
 	case reflect.Slice:
+		if isUnnamedByteSlice(t) {
+			// Unnamed []byte is base64-encoded as a string on the wire under
+			// both encoding/json v1 and go-json-experiment/json v2 (issue
+			// #174). OpenAPI 3.0 represents this as {type: string, format:
+			// byte}.
+			return &JSONSchema{Type: "string", Format: "byte"}
+		}
 		return &JSONSchema{
 			Type:  "array",
 			Items: g.goTypeToJSONSchema(t.Elem()),

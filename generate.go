@@ -1088,11 +1088,21 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
+		goType := goKindString(field.Type)
+		if isUnnamedByteSlice(field.Type) {
+			// Unnamed []byte is encoded as a base64 string on the wire (issue
+			// #174). Report it as a string kind so Zod codegen emits
+			// z.string() instead of z.array(z.number().int()), and clear the
+			// element info that would otherwise drive z.array(...).
+			goType = "string"
+			elemGoKind = ""
+			elemTypeName = ""
+		}
 		fields = append(fields, fieldData{
 			Name:         g.getJSONName(field),
 			Type:         g.goTypeToTS(field.Type),
 			Optional:     g.isOptional(field),
-			GoType:       goKindString(field.Type),
+			GoType:       goType,
 			ValidateTag:  field.Tag.Get("validate"),
 			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
 			ElemGoKind:   elemGoKind,
@@ -1258,6 +1268,16 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 	return kind, ""
 }
 
+// isUnnamedByteSlice reports whether t is the unnamed type []byte. Under
+// both encoding/json v1 and go-json-experiment/json v2, unnamed byte slices
+// marshal as base64 strings, not number arrays — so TS/Zod/OpenAPI codegen
+// must emit a string shape. Named byte slices (`type Foo []byte`) are
+// treated as number arrays by v2 per Go issue #24746, so those intentionally
+// fall through to the default slice path.
+func isUnnamedByteSlice(t reflect.Type) bool {
+	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 && t.Name() == ""
+}
+
 // goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.
 // Resolves through pointers and named types to the underlying kind.
 func goKindString(t reflect.Type) string {
@@ -1332,6 +1352,9 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	case reflect.Bool:
 		return "boolean"
 	case reflect.Slice:
+		if isUnnamedByteSlice(t) {
+			return "string"
+		}
 		elemType := g.goTypeToTS(t.Elem())
 		if strings.Contains(elemType, " | ") {
 			return "(" + elemType + ")[]"

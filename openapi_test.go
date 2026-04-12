@@ -312,3 +312,41 @@ func TestApplyValidateConstraints(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAPIGoTypeToJSONSchema_ByteSlice is a regression test for issue #174:
+// unnamed []byte must map to {type: string, format: byte} because it is
+// serialized as a base64 string by both encoding/json v1 and
+// go-json-experiment/json v2, not as an array of integers. Named byte slices
+// are left on the existing array path to match v2's per-element encoding.
+func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	t.Run("unnamed []byte is string/byte", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf([]byte(nil)))
+		if schema == nil {
+			t.Fatal("schema is nil")
+		}
+		if schema.Type != "string" {
+			t.Errorf("Type = %q, want %q", schema.Type, "string")
+		}
+		if schema.Format != "byte" {
+			t.Errorf("Format = %q, want %q", schema.Format, "byte")
+		}
+		if schema.Items != nil {
+			t.Errorf("Items should be nil for string/byte, got %+v", schema.Items)
+		}
+	})
+
+	t.Run("named byte slice still array", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf(namedByteSlice(nil)))
+		if schema == nil {
+			t.Fatal("schema is nil")
+		}
+		if schema.Type != "array" {
+			t.Errorf("Type = %q, want %q", schema.Type, "array")
+		}
+		if schema.Items == nil || schema.Items.Type != "integer" {
+			t.Errorf("Items = %+v, want integer element", schema.Items)
+		}
+	})
+}
