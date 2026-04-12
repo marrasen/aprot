@@ -22,24 +22,76 @@ type zodFieldData struct {
 // goKind is "string", "int", "uint", "float", "bool", "slice", "map", or "struct".
 // tsType is the TypeScript type from goTypeToTS.
 // validateTag is the raw validate struct tag.
-func goTypeToZod(goKind string, tsType string, validateTag string, optional bool) string {
-	base := zodBaseType(goKind, tsType)
+// sqlNullKind is non-empty for database/sql nullable wrappers (NullString, etc.);
+// its value is the unwrapped kind ("string", "int", "float", "bool") and the
+// emitted chain gets a trailing .nullable().
+func goTypeToZod(goKind string, tsType string, validateTag string, optional bool, sqlNullKind string) string {
 	rules := ParseValidateTag(validateTag)
 
+	// Issue 3: sql.Null* wrappers. Use the unwrapped kind for base + constraints,
+	// then append .nullable() after constraints but before .optional().
+	effectiveKind := goKind
+	isNullable := false
+	if sqlNullKind != "" {
+		effectiveKind = sqlNullKind
+		isNullable = true
+	}
+
+	// Issue 1: validate-tag omitempty forces .optional(). For string kind, also
+	// wrap the chain in z.union([z.literal(""), ...]) so empty strings pass —
+	// go-playground/validator skips subsequent rules on the zero value ("" for
+	// strings), and client forms almost always emit "" rather than undefined.
+	hasValidateOmitempty := false
+	for _, r := range rules {
+		if r.Tag == "omitempty" {
+			hasValidateOmitempty = true
+			break
+		}
+	}
+	if hasValidateOmitempty {
+		optional = true
+	}
+
+	// Issue 2: if an explicit min rule is present on a string, skip the
+	// implicit required -> min(1) so we don't emit .min(1).min(N).
+	hasExplicitMin := false
+	for _, r := range rules {
+		if r.Tag == "min" {
+			hasExplicitMin = true
+			break
+		}
+	}
+
 	var chain []string
-	chain = append(chain, base)
+	chain = append(chain, zodBaseType(effectiveKind, tsType))
 
 	for _, r := range rules {
-		if zod := zodConstraint(goKind, r); zod != "" {
+		if r.Tag == "omitempty" {
+			continue
+		}
+		if r.Tag == "required" && effectiveKind == "string" && hasExplicitMin {
+			continue
+		}
+		if zod := zodConstraint(effectiveKind, r); zod != "" {
 			chain = append(chain, zod)
 		}
 	}
 
-	if optional {
-		chain = append(chain, "optional()")
+	if isNullable {
+		chain = append(chain, "nullable()")
 	}
 
-	return "z." + strings.Join(chain, ".")
+	body := "z." + strings.Join(chain, ".")
+
+	if hasValidateOmitempty && effectiveKind == "string" {
+		body = `z.union([z.literal(""), ` + body + `])`
+	}
+
+	if optional {
+		body += ".optional()"
+	}
+
+	return body
 }
 
 // zodBaseType returns the base Zod type for a Go kind.
@@ -138,7 +190,7 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 		for _, f := range iface.Fields {
 			schema.Fields = append(schema.Fields, zodFieldData{
 				Name:    f.Name,
-				ZodType: goTypeToZod(f.GoType, f.Type, f.ValidateTag, f.Optional),
+				ZodType: goTypeToZod(f.GoType, f.Type, f.ValidateTag, f.Optional, f.SQLNullKind),
 			})
 		}
 		schemas = append(schemas, schema)

@@ -2,7 +2,7 @@
 import { z } from 'zod';
 
 export const CreateTodoRequestSchema = z.object({
-    title: z.string().min(1).min(1).max(200),
+    title: z.string().min(1).max(200),
     description: z.string().max(1000),
     priority: z.number().int().min(1).max(5),
 });
@@ -10,8 +10,8 @@ export const CreateTodoRequestSchema = z.object({
 export type CreateTodoRequest = z.infer<typeof CreateTodoRequestSchema>;
 
 export const UpdateTodoRequestSchema = z.object({
-    title: z.string().min(1).max(200).optional(),
-    description: z.string().max(1000).optional(),
+    title: z.union([z.literal(""), z.string().min(1).max(200)]).optional(),
+    description: z.union([z.literal(""), z.string().max(1000)]).optional(),
     priority: z.number().int().min(1).max(5).optional(),
     done: z.boolean().optional(),
 });
