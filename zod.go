@@ -18,29 +18,29 @@ type zodFieldData struct {
 	ZodType string // e.g., "z.string().min(3).max(100)"
 }
 
-// goTypeToZod converts a Go type + validate tag to a Zod schema string.
-// goKind is "string", "int", "uint", "float", "bool", "slice", "map", or "struct".
-// tsType is the TypeScript type from goTypeToTS.
-// validateTag is the raw validate struct tag.
-// sqlNullKind is non-empty for database/sql nullable wrappers (NullString, etc.);
-// its value is the unwrapped kind ("string", "int", "float", "bool") and the
-// emitted chain gets a trailing .nullable().
-func goTypeToZod(goKind string, tsType string, validateTag string, optional bool, sqlNullKind string) string {
-	rules := ParseValidateTag(validateTag)
+// fieldToZod converts a fieldData (with all the type/kind/tag info collected
+// during reflection) to a Zod schema string. knownSchemas is the set of
+// interface names that will produce a generated schema, used to substitute
+// element schemas into z.array(...) / z.record(...) for slice and map fields
+// whose element type is itself a generated schema.
+func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
+	rules := ParseValidateTag(f.ValidateTag)
 
-	// Issue 3: sql.Null* wrappers. Use the unwrapped kind for base + constraints,
-	// then append .nullable() after constraints but before .optional().
-	effectiveKind := goKind
+	// Issue 3 (#163): sql.Null* wrappers. Use the unwrapped kind for base +
+	// constraints, then append .nullable() after constraints but before
+	// .optional().
+	effectiveKind := f.GoType
 	isNullable := false
-	if sqlNullKind != "" {
-		effectiveKind = sqlNullKind
+	if f.SQLNullKind != "" {
+		effectiveKind = f.SQLNullKind
 		isNullable = true
 	}
 
-	// Issue 1: validate-tag omitempty forces .optional(). For string kind, also
-	// wrap the chain in z.union([z.literal(""), ...]) so empty strings pass —
-	// go-playground/validator skips subsequent rules on the zero value ("" for
-	// strings), and client forms almost always emit "" rather than undefined.
+	// Issue 1 (#163): validate-tag omitempty forces .optional(). For string
+	// kind, also wrap the chain in z.union([z.literal(""), ...]) so empty
+	// strings pass — go-playground/validator skips subsequent rules on the
+	// zero value ("" for strings), and client forms almost always emit ""
+	// rather than undefined.
 	hasValidateOmitempty := false
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -48,12 +48,13 @@ func goTypeToZod(goKind string, tsType string, validateTag string, optional bool
 			break
 		}
 	}
+	optional := f.Optional
 	if hasValidateOmitempty {
 		optional = true
 	}
 
-	// Issue 2: if an explicit min rule is present on a string, skip the
-	// implicit required -> min(1) so we don't emit .min(1).min(N).
+	// Issue 2 (#163): if an explicit min rule is present on a string, skip
+	// the implicit required -> min(1) so we don't emit .min(1).min(N).
 	hasExplicitMin := false
 	for _, r := range rules {
 		if r.Tag == "min" {
@@ -63,7 +64,7 @@ func goTypeToZod(goKind string, tsType string, validateTag string, optional bool
 	}
 
 	var chain []string
-	chain = append(chain, zodBaseType(effectiveKind, tsType))
+	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, knownSchemas))
 
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -94,8 +95,11 @@ func goTypeToZod(goKind string, tsType string, validateTag string, optional bool
 	return body
 }
 
-// zodBaseType returns the base Zod type for a Go kind.
-func zodBaseType(goKind string, tsType string) string {
+// zodBaseType returns the base Zod type for a Go kind. For slice and map
+// kinds, elemGoKind/elemTypeName provide the element's type info so the array
+// or record can substitute the element schema (#169) instead of falling
+// through to z.any().
+func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, knownSchemas map[string]bool) string {
 	switch goKind {
 	case "string":
 		return "string()"
@@ -106,13 +110,35 @@ func zodBaseType(goKind string, tsType string) string {
 	case "bool":
 		return "boolean()"
 	case "slice":
-		// For arrays, we wrap the element type
-		return "array(z.any())"
+		return "array(" + zodElemExpr(elemGoKind, elemTypeName, knownSchemas) + ")"
 	case "map":
-		return "record(z.string(), z.any())"
+		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, knownSchemas) + ")"
 	default:
 		// Struct or unknown — use any()
 		return "any()"
+	}
+}
+
+// zodElemExpr builds a Zod expression for a slice or map element. Returns
+// "z.any()" when the element type is unknown or unsupported (recursive types,
+// anonymous structs, slices of slices) so callers can wrap it directly.
+func zodElemExpr(elemGoKind string, elemTypeName string, knownSchemas map[string]bool) string {
+	switch elemGoKind {
+	case "string":
+		return "z.string()"
+	case "int", "uint":
+		return "z.number().int()"
+	case "float":
+		return "z.number()"
+	case "bool":
+		return "z.boolean()"
+	case "struct":
+		if elemTypeName != "" && knownSchemas[elemTypeName] {
+			return elemTypeName + "Schema"
+		}
+		return "z.any()"
+	default:
+		return "z.any()"
 	}
 }
 
@@ -173,24 +199,30 @@ func zodConstraint(goKind string, rule ValidateRule) string {
 // buildZodSchemas builds Zod schema data from interface data.
 // Only includes interfaces that have at least one field with a validate tag.
 func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
-	var schemas []zodSchemaData
+	// Pre-pass: collect the names of every interface that will produce a
+	// schema, so slice/map element types can be substituted (#169). An
+	// interface gets a schema iff it has at least one validate tag on any
+	// field.
+	knownSchemas := make(map[string]bool)
 	for _, iface := range interfaces {
-		hasValidation := false
 		for _, f := range iface.Fields {
 			if f.ValidateTag != "" {
-				hasValidation = true
+				knownSchemas[iface.Name] = true
 				break
 			}
 		}
-		if !hasValidation {
+	}
+
+	var schemas []zodSchemaData
+	for _, iface := range interfaces {
+		if !knownSchemas[iface.Name] {
 			continue
 		}
-
 		schema := zodSchemaData{Name: iface.Name}
 		for _, f := range iface.Fields {
 			schema.Fields = append(schema.Fields, zodFieldData{
 				Name:    f.Name,
-				ZodType: goTypeToZod(f.GoType, f.Type, f.ValidateTag, f.Optional, f.SQLNullKind),
+				ZodType: fieldToZod(f, knownSchemas),
 			})
 		}
 		schemas = append(schemas, schema)

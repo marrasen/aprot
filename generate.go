@@ -370,6 +370,15 @@ type fieldData struct {
 	// unwrapped Go kind ("string", "int", "float", "bool"); Zod codegen uses it
 	// to emit the correct base type + a trailing .nullable(). Empty otherwise.
 	SQLNullKind string
+	// ElemGoKind is non-empty when the field is a slice or map. Its value is the
+	// Go kind of the element type ("string", "int", "struct", etc.) so Zod codegen
+	// can emit z.array(z.string()), z.array(<TypeName>Schema), etc. instead of
+	// falling through to z.array(z.any()). Empty otherwise.
+	ElemGoKind string
+	// ElemTypeName is the TS type name of the slice/map element when the element
+	// is a named struct (e.g., "EventLinkInput"). Used by Zod codegen to look up
+	// the element's generated schema. Empty for primitive elements.
+	ElemTypeName string
 }
 
 type paramData struct {
@@ -1078,13 +1087,16 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 				continue
 			}
 		}
+		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		fields = append(fields, fieldData{
-			Name:        g.getJSONName(field),
-			Type:        g.goTypeToTS(field.Type),
-			Optional:    g.isOptional(field),
-			GoType:      goKindString(field.Type),
-			ValidateTag: field.Tag.Get("validate"),
-			SQLNullKind: SQLNullGoKind(field.Type, goKindString),
+			Name:         g.getJSONName(field),
+			Type:         g.goTypeToTS(field.Type),
+			Optional:     g.isOptional(field),
+			GoType:       goKindString(field.Type),
+			ValidateTag:  field.Tag.Get("validate"),
+			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
+			ElemGoKind:   elemGoKind,
+			ElemTypeName: elemTypeName,
 		})
 	}
 	return fields
@@ -1204,6 +1216,46 @@ func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
 // struct-field recursion for types whose wire format differs from their Go fields.
 func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 	return g.inferTypeFromMarshalCached(t) != nil || SQLNullTSType(t, g.goTypeToTS) != ""
+}
+
+// elemTypeInfo inspects a slice or map type and returns the element's Go kind
+// (e.g., "string", "int", "struct") and TS type name (for named structs only).
+// Returns ("", "") for non-slice/map types or for elements that aren't usefully
+// describable for Zod codegen (e.g., interfaces, anonymous structs, slices of
+// slices). The TS type name is only set when the element is a named struct type
+// — primitive elements have an empty type name and rely on the kind alone.
+//
+// Used by Zod codegen to substitute element schemas into z.array(...) /
+// z.record(...) instead of falling through to z.any().
+func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map {
+		return "", ""
+	}
+	elem := t.Elem()
+	if elem.Kind() == reflect.Ptr {
+		elem = elem.Elem()
+	}
+	kind := goKindString(elem)
+	if kind == "struct" {
+		// Only named structs from a real package can be referenced as
+		// <Name>Schema. Anonymous structs (PkgPath == "") and types with no
+		// name fall through to z.any() at the call site.
+		if elem.Name() != "" && elem.PkgPath() != "" {
+			return kind, elem.Name()
+		}
+		return "", ""
+	}
+	// Primitive elements (string, int, etc.) — return the kind, no name.
+	// Slices of slices and slices of maps are punted to z.any(): the
+	// recursive case requires a structured nested fieldData and is out of
+	// scope for the initial fix.
+	if kind == "slice" || kind == "map" {
+		return "", ""
+	}
+	return kind, ""
 }
 
 // goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.
