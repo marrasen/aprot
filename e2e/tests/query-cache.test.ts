@@ -18,6 +18,14 @@ interface Snapshot<T = unknown> {
     isLoading: boolean;
 }
 
+// Stable fallback returned by getSnapshot before data arrives. Mirrors the
+// generated client -- see templates/_client-common.ts.tmpl.
+const EMPTY_SNAPSHOT: Snapshot = Object.freeze({
+    data: null,
+    error: null,
+    isLoading: true,
+});
+
 interface CacheEntry {
     snapshot: Snapshot;
     listeners: Set<() => void>;
@@ -94,7 +102,7 @@ function subscribeCached<T>(
 
     function getSnapshot(): Snapshot<T> {
         const entry = cache.get(key);
-        return (entry?.snapshot ?? { data: null, error: null, isLoading: true }) as Snapshot<T>;
+        return (entry?.snapshot ?? EMPTY_SNAPSHOT) as Snapshot<T>;
     }
 
     return { subscribe, getSnapshot };
@@ -298,5 +306,23 @@ describe('Query Subscription Cache', () => {
         expect(snap.data).toBeNull();
         expect(snap.isLoading).toBe(true);
         expect(snap.error).toBeNull();
+    });
+
+    test('getSnapshot returns stable reference before data arrives (issue #164)', () => {
+        const store = subscribeCached<ListUsersResponse>(
+            client, 'stable-ref:[]', 'PublicHandlers.ListUsers', [],
+        );
+
+        const s1 = store.getSnapshot();
+        const s2 = store.getSnapshot();
+        const s3 = store.getSnapshot();
+
+        // Object.is -- same identity check React's useSyncExternalStore uses.
+        // Without a stable fallback, React aborts with an "infinite loop"
+        // warning and the hook never receives subscription updates.
+        expect(Object.is(s1, s2)).toBe(true);
+        expect(Object.is(s2, s3)).toBe(true);
+        expect(s1.data).toBeNull();
+        expect(s1.isLoading).toBe(true);
     });
 });
