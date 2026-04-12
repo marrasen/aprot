@@ -927,6 +927,16 @@ interface SubscriptionSnapshot<T = unknown> {
     isLoading: boolean;
 }
 
+// Stable fallback returned by getSnapshot before the subscription has produced
+// data. React's useSyncExternalStore compares snapshots with Object.is and
+// aborts with an "infinite loop" warning if getSnapshot returns a fresh object
+// on each call.
+const EMPTY_SNAPSHOT: SubscriptionSnapshot = Object.freeze({
+    data: null,
+    error: null,
+    isLoading: true,
+});
+
 interface SubscriptionCacheEntry {
     snapshot: SubscriptionSnapshot;
     listeners: Set<() => void>;
@@ -1003,7 +1013,7 @@ function subscribeCached<T>(
 
     function getSnapshot(): SubscriptionSnapshot<T> {
         const entry = cache.get(key);
-        return (entry?.snapshot ?? { data: null, error: null, isLoading: true }) as SubscriptionSnapshot<T>;
+        return (entry?.snapshot ?? EMPTY_SNAPSHOT) as SubscriptionSnapshot<T>;
     }
 
     return { subscribe, getSnapshot };
