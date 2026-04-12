@@ -8,6 +8,7 @@ export const ErrorCode = {
     MethodNotFound: -32601,
     InvalidParams: -32602,
     InternalError: -32603,
+    ValidationFailed: -32604,
     Canceled: -32800,
     Unauthorized: -32001,
     ConnectionRejected: -32002,
@@ -18,14 +19,31 @@ export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
 
 
 
+// FieldError is one entry in the structured payload that the server returns
+// alongside CodeValidationFailed (-32604) responses. The shape mirrors the Go
+// FieldError struct in validate.go on the server side.
+export interface FieldError {
+    field: string;
+    tag: string;
+    value: unknown;
+    param: string;
+    message: string;
+}
+
 // ApiError is thrown when the server returns an error response
 export class ApiError extends Error {
     readonly code: number;
+    // data is the structured payload the server attached to the error, if any.
+    // For CodeValidationFailed responses this is FieldError[]; for other codes
+    // it may be undefined or carry a code-specific shape. Use getValidationErrors
+    // to safely extract field-level validation failures.
+    readonly data?: unknown;
 
-    constructor(code: number, message: string) {
+    constructor(code: number, message: string, data?: unknown) {
         super(message);
         this.name = 'ApiError';
         this.code = code;
+        this.data = data;
     }
 
     // Helper methods for checking error types
@@ -33,8 +51,19 @@ export class ApiError extends Error {
     isForbidden(): boolean { return this.code === ErrorCode.Forbidden; }
     isNotFound(): boolean { return this.code === ErrorCode.MethodNotFound; }
     isInvalidParams(): boolean { return this.code === ErrorCode.InvalidParams; }
+    isValidationFailed(): boolean { return this.code === ErrorCode.ValidationFailed; }
     isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
     isConnectionRejected(): boolean { return this.code === ErrorCode.ConnectionRejected; }
+}
+
+// getValidationErrors returns the structured FieldError list when err is a
+// validation failure (code -32604), or null otherwise. Use this instead of
+// hand-rolling the instanceof + code check + Array.isArray + cast pattern.
+export function getValidationErrors(err: unknown): FieldError[] | null {
+    if (!(err instanceof ApiError)) return null;
+    if (err.code !== ErrorCode.ValidationFailed) return null;
+    if (!Array.isArray(err.data)) return null;
+    return err.data as FieldError[];
 }
 
 
@@ -517,17 +546,17 @@ export class ApiClient {
                 if (p) {
                     this.pending.delete(msg.id);
                     p.onSettle?.();
-                    p.reject(new ApiError(msg.code, msg.message));
+                    p.reject(new ApiError(msg.code, msg.message, msg.data));
                     this.notifyLoadingChange();
                 } else if (msg.code === ErrorCode.ConnectionRejected) {
                     this.manualDisconnect = true;
-                    this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message));
+                    this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message, msg.data));
                     this.transport.disconnect();
                 } else {
                     // Server-driven subscription refresh error
                     const sub = this.subscriptions.get(msg.id);
                     if (sub) {
-                        sub.onError?.(new ApiError(msg.code, msg.message));
+                        sub.onError?.(new ApiError(msg.code, msg.message, msg.data));
                     }
                 }
                 break;
