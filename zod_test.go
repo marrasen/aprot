@@ -189,6 +189,83 @@ func TestZodGeneration_Integration(t *testing.T) {
 	}
 }
 
+func TestZodGeneration_LeafSchemasEmittedBeforeReferences(t *testing.T) {
+	// Regression for the v0.37.2 bug introduced by #169: a parent schema
+	// that referenced a leaf schema (e.g. Links: z.array(EventTagSchema))
+	// could be emitted *before* the leaf's `const`, causing a TDZ
+	// ReferenceError at module load. Fix is topological sort in
+	// buildZodSchemas. This test asserts the order constraint directly on
+	// the generated file.
+	registry := NewRegistry()
+	registry.Register(&SliceElemHandlers{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputVanilla,
+		Zod:  true,
+	})
+
+	results, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	var schemaFile string
+	for name, content := range results {
+		if strings.HasSuffix(name, ".schema.ts") {
+			schemaFile = content
+			break
+		}
+	}
+	if schemaFile == "" {
+		t.Fatal("expected a .schema.ts file to be generated")
+	}
+
+	leafIdx := strings.Index(schemaFile, "EventTagSchema = z.object")
+	parentIdx := strings.Index(schemaFile, "SliceElemRequestSchema = z.object")
+	if leafIdx < 0 {
+		t.Fatalf("EventTagSchema declaration not found in generated file:\n%s", schemaFile)
+	}
+	if parentIdx < 0 {
+		t.Fatalf("SliceElemRequestSchema declaration not found in generated file:\n%s", schemaFile)
+	}
+	if leafIdx > parentIdx {
+		t.Errorf("EventTagSchema must be declared before SliceElemRequestSchema (leafIdx=%d, parentIdx=%d)\n---\n%s", leafIdx, parentIdx, schemaFile)
+	}
+}
+
+func TestTopoSortSchemas(t *testing.T) {
+	// Direct unit test for the sort: leaf must come before parent.
+	schemas := []zodSchemaData{
+		{Name: "Parent"},
+		{Name: "Leaf"},
+		{Name: "Unrelated"},
+	}
+	deps := map[string][]string{
+		"Parent":    {"Leaf"},
+		"Leaf":      nil,
+		"Unrelated": nil,
+	}
+	got := topoSortSchemas(schemas, deps)
+	pos := make(map[string]int)
+	for i, s := range got {
+		pos[s.Name] = i
+	}
+	if pos["Leaf"] >= pos["Parent"] {
+		t.Errorf("Leaf must come before Parent: got positions Leaf=%d Parent=%d", pos["Leaf"], pos["Parent"])
+	}
+	if len(got) != 3 {
+		t.Errorf("expected 3 schemas, got %d", len(got))
+	}
+
+	// Cycle: A -> B -> A. Should not infinite-loop, both should appear.
+	cyclicSchemas := []zodSchemaData{{Name: "A"}, {Name: "B"}}
+	cyclicDeps := map[string][]string{"A": {"B"}, "B": {"A"}}
+	cyclicGot := topoSortSchemas(cyclicSchemas, cyclicDeps)
+	if len(cyclicGot) != 2 {
+		t.Errorf("cycle: expected 2 schemas, got %d", len(cyclicGot))
+	}
+}
+
 func TestZodGeneration_SliceAndMapElements(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&SliceElemHandlers{})
