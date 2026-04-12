@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marrasen/aprot/internal/gentestpkg"
 )
 
 // Test types
@@ -2868,5 +2870,84 @@ func TestRegisterEnum_SharedEnumsAccessor(t *testing.T) {
 	}
 	if !found {
 		t.Error("Enums() should include shared enums")
+	}
+}
+
+// --- Cross-package shared-file imports ---
+//
+// Regression for a bug where a shared file emitted for one package referenced
+// a type defined in a *different* shared package without importing it. The
+// classic shape: a shared struct in package A has a field whose type is an
+// enum registered from package B. Two handlers must use the struct for it to
+// be promoted to package A's shared file; the shared file for A then needed
+// `import type { ColorType } from './gentestpkg'` which was not being emitted.
+
+// CrossPkgResp lives in the aprot package and holds a cross-package enum.
+// When used by two handler groups it is promoted to aprot.ts, which must
+// then import ColorType from gentestpkg.ts.
+type CrossPkgResp struct {
+	ID    string          `json:"id"`
+	Color gentestpkg.Color `json:"color"`
+}
+
+type CrossPkgGroupA struct{}
+
+func (h *CrossPkgGroupA) GetA(ctx context.Context) (*CrossPkgResp, error) { return nil, nil }
+
+type CrossPkgGroupB struct{}
+
+func (h *CrossPkgGroupB) GetB(ctx context.Context) (*CrossPkgResp, error) { return nil, nil }
+
+func TestGenerateSharedFileCrossPackageImports(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&CrossPkgGroupA{})
+	registry.Register(&CrossPkgGroupB{})
+	registry.RegisterEnum(gentestpkg.ColorValues())
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	aprotShared, ok := files["aprot.ts"]
+	if !ok {
+		t.Fatalf("Expected aprot.ts, got files: %v", mapKeys(files))
+	}
+	gentestpkgShared, ok := files["gentestpkg.ts"]
+	if !ok {
+		t.Fatalf("Expected gentestpkg.ts, got files: %v", mapKeys(files))
+	}
+
+	// CrossPkgResp landed in aprot.ts and references ColorType.
+	if !strings.Contains(aprotShared, "export interface CrossPkgResp") {
+		t.Fatalf("Expected CrossPkgResp in aprot.ts, got:\n%s", aprotShared)
+	}
+	if !strings.Contains(aprotShared, "color: ColorType") {
+		t.Errorf("Expected `color: ColorType` field in aprot.ts, got:\n%s", aprotShared)
+	}
+
+	// aprot.ts must import ColorType from gentestpkg.ts — this is the bug fix.
+	if !strings.Contains(aprotShared, "from './gentestpkg'") {
+		t.Errorf("Expected `from './gentestpkg'` import in aprot.ts (cross-package shared reference), got:\n%s", aprotShared)
+	}
+	if !strings.Contains(aprotShared, "ColorType") {
+		t.Errorf("Expected ColorType reference in aprot.ts, got:\n%s", aprotShared)
+	}
+
+	// The color enum definition itself lives only in gentestpkg.ts.
+	if !strings.Contains(gentestpkgShared, "export const Color") {
+		t.Errorf("Expected Color enum definition in gentestpkg.ts, got:\n%s", gentestpkgShared)
+	}
+	if strings.Contains(aprotShared, "export const Color") {
+		t.Error("Color enum definition should not be duplicated in aprot.ts")
+	}
+
+	// A shared file must never import from itself.
+	if strings.Contains(aprotShared, "from './aprot'") {
+		t.Errorf("aprot.ts must not import from itself, got:\n%s", aprotShared)
+	}
+	if strings.Contains(gentestpkgShared, "from './gentestpkg'") {
+		t.Errorf("gentestpkg.ts must not import from itself, got:\n%s", gentestpkgShared)
 	}
 }

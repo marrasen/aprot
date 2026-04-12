@@ -447,6 +447,12 @@ func (g *Generator) Generate() (map[string]string, error) {
 	}
 	sort.Strings(sortedPkgs)
 
+	// Pass 1: build pkgData for every shared package and accumulate
+	// sharedTypeNames across all of them. Rendering is deferred so that Pass 2
+	// can resolve cross-package references using the complete name map —
+	// otherwise a shared file processed first would fail to import types
+	// declared by a shared file processed later.
+	pkgDataByPkg := make(map[string]*templateData, len(sortedPkgs))
 	for _, pkg := range sortedPkgs {
 		g.types = make(map[reflect.Type]string)
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
@@ -464,7 +470,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 			}
 		}
 
-		pkgData := templateData{
+		pkgData := &templateData{
 			StructName: pkg,
 			FileName:   pkg + ".ts",
 		}
@@ -478,6 +484,31 @@ func (g *Generator) Generate() (map[string]string, error) {
 		for _, enum := range pkgData.Enums {
 			sharedTypeNames[enum.Name+"Type"] = module
 		}
+
+		pkgDataByPkg[pkg] = pkgData
+	}
+
+	// Pass 2: resolve SharedImports for each shared file against the complete
+	// name map and render. Self-references (types defined in the same file)
+	// are excluded so a file never imports from itself.
+	for _, pkg := range sortedPkgs {
+		pkgData := pkgDataByPkg[pkg]
+		selfModule := "./" + pkg
+		selfNames := make(map[string]bool, len(pkgData.Interfaces)+len(pkgData.Enums))
+		for _, iface := range pkgData.Interfaces {
+			selfNames[iface.Name] = true
+		}
+		for _, enum := range pkgData.Enums {
+			selfNames[enum.Name+"Type"] = true
+		}
+		scoped := make(map[string]string, len(sharedTypeNames))
+		for name, module := range sharedTypeNames {
+			if module == selfModule && selfNames[name] {
+				continue
+			}
+			scoped[name] = module
+		}
+		pkgData.SharedImports = findSharedTypeImports(pkgData, scoped)
 
 		var buf strings.Builder
 		if err := templates.ExecuteTemplate(&buf, "client-shared.ts.tmpl", pkgData); err != nil {
