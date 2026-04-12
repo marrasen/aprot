@@ -1089,18 +1089,34 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		}
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		goType := goKindString(field.Type)
-		if isUnnamedByteSlice(field.Type) {
-			// Unnamed []byte is encoded as a base64 string on the wire (issue
-			// #174). Report it as a string kind so Zod codegen emits
-			// z.string() instead of z.array(z.number().int()), and clear the
-			// element info that would otherwise drive z.array(...).
-			goType = "string"
-			elemGoKind = ""
-			elemTypeName = ""
+		tsType := g.goTypeToTS(field.Type)
+		if isByteSlice(field.Type) {
+			// go-json-experiment/json v2 per-field `format:` tag (issue
+			// #174). A tag value wins over the issue #174 default — it can
+			// force an unnamed []byte to serialize as a number array, or
+			// force a named byte slice to serialize as a base-N string.
+			// Unrecognized tag values fall through so the default shape
+			// still applies.
+			if format := jsonFormatOption(field); format != "" {
+				if ts, gk, ek, ok := byteSliceFormatShape(format); ok {
+					tsType = ts
+					goType = gk
+					elemGoKind = ek
+					elemTypeName = ""
+				}
+			} else if isUnnamedByteSlice(field.Type) {
+				// Unnamed []byte with no format tag is encoded as a base64
+				// string on the wire. Report it as a string kind so Zod
+				// codegen emits z.string() instead of z.array(z.number()),
+				// and clear the element info that would drive z.array(...).
+				goType = "string"
+				elemGoKind = ""
+				elemTypeName = ""
+			}
 		}
 		fields = append(fields, fieldData{
 			Name:         g.getJSONName(field),
-			Type:         g.goTypeToTS(field.Type),
+			Type:         tsType,
 			Optional:     g.isOptional(field),
 			GoType:       goType,
 			ValidateTag:  field.Tag.Get("validate"),
@@ -1276,6 +1292,50 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 // fall through to the default slice path.
 func isUnnamedByteSlice(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 && t.Name() == ""
+}
+
+// isByteSlice reports whether t is any byte slice — named or unnamed. Used
+// to gate the go-json-experiment/json v2 `format:` tag override, which
+// applies to every []byte / `type Foo []byte` regardless of naming.
+func isByteSlice(t reflect.Type) bool {
+	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8
+}
+
+// jsonFormatOption parses the `format:X` option from a go-json-experiment
+// json struct tag and returns X, or "" if the tag has no format option.
+// The tag grammar is `name,opt1,opt2,...` where each option is a bare word
+// or `key:value`. Only the first format: option is honored.
+func jsonFormatOption(field reflect.StructField) string {
+	tag := field.Tag.Get("json")
+	if tag == "" {
+		return ""
+	}
+	parts := strings.Split(tag, ",")
+	for _, p := range parts[1:] { // skip the name
+		if strings.HasPrefix(p, "format:") {
+			return strings.TrimPrefix(p, "format:")
+		}
+	}
+	return ""
+}
+
+// byteSliceFormatShape returns the TS / Go-kind / element-kind tuple that a
+// byte slice should use under a given v2 json format tag value. Returns
+// ok=false for an empty or unrecognized format (caller falls through to the
+// default behavior). Supported formats per the v2 package docs:
+//
+//   - "array": JSON array of per-byte numbers → TS number[]
+//   - "base64" (default for unnamed []byte), "base64url", "base32",
+//     "base32hex", "base16", "hex": base-N string → TS string
+func byteSliceFormatShape(format string) (tsType string, goKind string, elemGoKind string, ok bool) {
+	switch format {
+	case "array":
+		return "number[]", "slice", "uint", true
+	case "base64", "base64url", "base32", "base32hex", "base16", "hex":
+		return "string", "string", "", true
+	default:
+		return "", "", "", false
+	}
 }
 
 // goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.

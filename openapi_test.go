@@ -350,3 +350,46 @@ func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
 		}
 	})
 }
+
+// TestOpenAPIByteSliceFormatTag covers the v2 json `format:` tag end-to-end
+// through the struct schema builder: the emitted JSON Schema for each field
+// must match the on-the-wire shape driven by the tag, inverting the #174
+// defaults where the tag says so.
+func TestOpenAPIByteSliceFormatTag(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	gen.buildStructSchema(reflect.TypeOf(ByteSliceFormatTagStruct{}))
+
+	schema := gen.schemas[reflect.TypeOf(ByteSliceFormatTagStruct{})]
+	if schema == nil {
+		t.Fatal("ByteSliceFormatTagStruct schema not registered")
+	}
+
+	arrayFields := []string{"arrayFromUnnamed", "arrayFromNamed"}
+	for _, name := range arrayFields {
+		prop := schema.Properties[name]
+		if prop == nil {
+			t.Fatalf("property %q missing", name)
+		}
+		if prop.Type != "array" {
+			t.Errorf("%s Type = %q, want %q", name, prop.Type, "array")
+		}
+		if prop.Items == nil || prop.Items.Type != "integer" {
+			t.Errorf("%s Items = %+v, want integer", name, prop.Items)
+		}
+	}
+
+	stringFields := []string{
+		"base64FromNamed", "base64urlFromNamed", "base32FromNamed",
+		"base32hexFromNamed", "base16FromNamed", "hexFromNamed",
+	}
+	for _, name := range stringFields {
+		prop := schema.Properties[name]
+		if prop == nil {
+			t.Fatalf("property %q missing", name)
+		}
+		if prop.Type != "string" || prop.Format != "byte" {
+			t.Errorf("%s = {Type: %q, Format: %q}, want {string, byte}", name, prop.Type, prop.Format)
+		}
+	}
+}
