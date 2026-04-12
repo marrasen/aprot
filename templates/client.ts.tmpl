@@ -349,7 +349,7 @@ export class ApiClient {
                 if (p) {
                     this.pending.delete(msg.id);
                     p.onSettle?.();
-                    p.reject(new ApiError(msg.code, msg.message));
+                    p.reject(new ApiError(msg.code, msg.message, msg.data));
                     this.notifyLoadingChange();
                 }
                 break;

@@ -289,6 +289,32 @@ func TestGenerateMultipleFiles(t *testing.T) {
 		t.Error("Missing ApiError in client.ts")
 	}
 
+	// #170: ApiError should carry the structured `data` payload from
+	// CodeValidationFailed responses, and `getValidationErrors` should be
+	// exported as the safe way to extract it.
+	apiErrorChecks := []struct {
+		substr string
+		desc   string
+	}{
+		{"readonly data?: unknown", "ApiError.data field"},
+		{"constructor(code: number, message: string, data?: unknown)", "ApiError constructor accepts data"},
+		{"this.data = data", "ApiError stores data"},
+		{"export interface FieldError", "FieldError interface exported"},
+		{"export function getValidationErrors", "getValidationErrors helper exported"},
+		{"isValidationFailed(): boolean", "isValidationFailed helper method"},
+		{"ValidationFailed: -32604", "ErrorCode.ValidationFailed constant"},
+	}
+	for _, c := range apiErrorChecks {
+		if !strings.Contains(baseContent, c.substr) {
+			t.Errorf("ApiError #170: %s — expected substring %q in client.ts", c.desc, c.substr)
+		}
+	}
+
+	// #170: every site that constructs an ApiError must pass msg.data through.
+	if strings.Contains(baseContent, "new ApiError(msg.code, msg.message)") {
+		t.Error("ApiError #170: at least one new ApiError(...) site does not pass msg.data through")
+	}
+
 	// Check handler file
 	handlerContent, ok := files["test-handlers.ts"]
 	if !ok {

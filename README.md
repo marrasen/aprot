@@ -346,6 +346,28 @@ registry.SetValidator(aprot.NewPlaygroundValidator())
 
 Invalid requests are automatically rejected with structured errors (code `-32604`) before reaching your handler. Uses [go-playground/validator](https://github.com/go-playground/validator) — see their docs for the full tag reference.
 
+The structured error payload (a `[]FieldError`) flows through to the generated TypeScript client. Catch `ApiError` and use the exported `getValidationErrors` helper to map server-side failures to per-field UI state without re-implementing the type-narrowing dance:
+
+```typescript
+import { ApiError, getValidationErrors } from "./api/client";
+
+try {
+    await api.users.update(input);
+} catch (err) {
+    const fields = getValidationErrors(err);
+    if (fields) {
+        for (const f of fields) setFieldError(f.field, f.message);
+        return;
+    }
+    if (err instanceof ApiError) {
+        // Other server error — generic toast, etc.
+    }
+    throw err;
+}
+```
+
+`getValidationErrors` returns `null` for any error that isn't a `CodeValidationFailed` response, so the same form-submit catch block can handle both validation failures and other errors with a single check. The `FieldError` interface mirrors the Go `FieldError` struct in `validate.go`.
+
 ### Zod Schemas
 
 Enable Zod to generate TypeScript validation schemas from the same struct tags:
