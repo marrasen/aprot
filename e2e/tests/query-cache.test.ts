@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
 import { ApiClient } from '../api/client';
-import { createUser } from '../api/public-handlers';
+import { createUser, listUsers } from '../api/public-handlers';
 import type { ListUsersResponse } from '../api/public-handlers';
 
 // ---------------------------------------------------------------------------
@@ -106,6 +106,22 @@ function subscribeCached<T>(
     }
 
     return { subscribe, getSnapshot };
+}
+
+// Mirrors the generated client's updateCachedSnapshot helper. Used by
+// useQuery.refetch() in cached mode to publish fresh data into the shared
+// cache and notify every listener.
+function updateCachedSnapshot<T>(
+    client: ApiClient,
+    key: string,
+    snapshot: Snapshot<T>,
+): void {
+    const cache = caches.get(client);
+    if (!cache) return;
+    const entry = cache.get(key);
+    if (!entry) return;
+    entry.snapshot = snapshot as Snapshot;
+    for (const l of entry.listeners) l();
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +310,54 @@ describe('Query Subscription Cache', () => {
 
         expect(snap.data).not.toBeNull();
         expect(Array.isArray(snap.data!.users)).toBe(true);
+    });
+
+    test('updateCachedSnapshot notifies all subscribers with fresh data', async () => {
+        const key = 'listUsers:[]';
+        const store = subscribeCached<ListUsersResponse>(
+            client, key, 'PublicHandlers.ListUsers', [],
+        );
+
+        let notifyCountA = 0;
+        let notifyCountB = 0;
+        let lastSnapA: Snapshot<ListUsersResponse> | null = null;
+        let lastSnapB: Snapshot<ListUsersResponse> | null = null;
+
+        // Wait for initial subscription data before adding the second listener.
+        await new Promise<void>((resolve) => {
+            store.subscribe(() => {
+                const s = store.getSnapshot();
+                lastSnapA = s;
+                notifyCountA++;
+                if (!s.isLoading) resolve();
+            });
+        });
+        store.subscribe(() => {
+            lastSnapB = store.getSnapshot();
+            notifyCountB++;
+        });
+
+        const notifyCountABefore = notifyCountA;
+        const notifyCountBBefore = notifyCountB;
+
+        // Fetch fresh data out-of-band (simulates what refetch() does in
+        // cached mode) and publish it into the shared cache. No server-side
+        // TriggerRefresh is involved -- the push must be driven purely by
+        // updateCachedSnapshot's notify loop.
+        const fresh = await listUsers(client);
+        updateCachedSnapshot<ListUsersResponse>(client, key, {
+            data: fresh,
+            error: null,
+            isLoading: false,
+        });
+
+        expect(notifyCountA).toBe(notifyCountABefore + 1);
+        expect(notifyCountB).toBe(notifyCountBBefore + 1);
+        expect(lastSnapA).not.toBeNull();
+        expect(lastSnapB).not.toBeNull();
+        expect(lastSnapA!.data).toBe(fresh);
+        expect(lastSnapB!.data).toBe(fresh);
+        expect(store.getSnapshot().data).toBe(fresh);
     });
 
     test('snapshot starts with isLoading true before data arrives', () => {
