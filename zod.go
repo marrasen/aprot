@@ -198,6 +198,13 @@ func zodConstraint(goKind string, rule ValidateRule) string {
 
 // buildZodSchemas builds Zod schema data from interface data.
 // Only includes interfaces that have at least one field with a validate tag.
+//
+// Output is topologically sorted so that leaf schemas always appear before
+// schemas that reference them. This is required because the generated file
+// uses top-level `const X = z.object({...})` declarations: a schema that
+// substitutes an element schema (e.g., `Links: z.array(EventLinkInputSchema)`)
+// must be evaluated after the element schema's `const` runs, otherwise the
+// reference hits a temporal-dead-zone error at module init time.
 func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 	// Pre-pass: collect the names of every interface that will produce a
 	// schema, so slice/map element types can be substituted (#169). An
@@ -213,7 +220,8 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 		}
 	}
 
-	var schemas []zodSchemaData
+	// Build the schema list in source order first.
+	bySource := make([]zodSchemaData, 0, len(interfaces))
 	for _, iface := range interfaces {
 		if !knownSchemas[iface.Name] {
 			continue
@@ -225,7 +233,78 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 				ZodType: fieldToZod(f, knownSchemas),
 			})
 		}
-		schemas = append(schemas, schema)
+		bySource = append(bySource, schema)
 	}
-	return schemas
+
+	// Topologically sort so leaf schemas come before any schema that
+	// references them. We collect dependencies by walking each interface's
+	// field list once, looking at slice/map element type names. Cycles fall
+	// back to source order (cycles are out of scope for #169 — the codegen
+	// emits z.any() for self-referential structs).
+	deps := make(map[string][]string, len(bySource))
+	ifaceByName := make(map[string]interfaceData, len(interfaces))
+	for _, iface := range interfaces {
+		ifaceByName[iface.Name] = iface
+	}
+	for _, schema := range bySource {
+		iface := ifaceByName[schema.Name]
+		var schemaDeps []string
+		seen := make(map[string]bool)
+		for _, f := range iface.Fields {
+			if f.ElemTypeName != "" && knownSchemas[f.ElemTypeName] && !seen[f.ElemTypeName] {
+				schemaDeps = append(schemaDeps, f.ElemTypeName)
+				seen[f.ElemTypeName] = true
+			}
+		}
+		deps[schema.Name] = schemaDeps
+	}
+
+	return topoSortSchemas(bySource, deps)
+}
+
+// topoSortSchemas reorders schemas so that every schema appears after its
+// dependencies. Uses iterative DFS with three-color marking; on cycles, the
+// affected schemas are emitted in their original order (the runtime
+// reference still works because cycles can only happen via z.any(), which
+// doesn't dereference the cyclic name).
+func topoSortSchemas(schemas []zodSchemaData, deps map[string][]string) []zodSchemaData {
+	const (
+		white = 0 // unvisited
+		gray  = 1 // on stack (cycle marker)
+		black = 2 // finished
+	)
+	color := make(map[string]int, len(schemas))
+	byName := make(map[string]zodSchemaData, len(schemas))
+	for _, s := range schemas {
+		color[s.Name] = white
+		byName[s.Name] = s
+	}
+
+	out := make([]zodSchemaData, 0, len(schemas))
+	var visit func(name string)
+	visit = func(name string) {
+		if color[name] != white {
+			return
+		}
+		color[name] = gray
+		for _, dep := range deps[name] {
+			if _, ok := byName[dep]; !ok {
+				continue
+			}
+			if color[dep] == gray {
+				// Cycle: skip this edge so the original-order fallback
+				// is preserved for the affected schemas.
+				continue
+			}
+			visit(dep)
+		}
+		color[name] = black
+		out = append(out, byName[name])
+	}
+
+	// Walk in original order so unrelated schemas keep their declared order.
+	for _, s := range schemas {
+		visit(s.Name)
+	}
+	return out
 }
