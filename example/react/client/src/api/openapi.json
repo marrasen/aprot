@@ -1,0 +1,305 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "aprot React Example API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/todos/create-todo": {
+      "post": {
+        "operationId": "Todos_CreateTodo",
+        "tags": [
+          "Todos"
+        ],
+        "summary": "CreateTodo creates a new todo item.",
+        "description": "CreateTodo creates a new todo item.\nThe CreateTodoRequest struct is validated automatically before this handler runs.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTodoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/todos/delete-todo/{id}": {
+      "delete": {
+        "operationId": "Todos_DeleteTodo",
+        "tags": [
+          "Todos"
+        ],
+        "summary": "DeleteTodo deletes a todo by ID.",
+        "description": "DeleteTodo deletes a todo by ID.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No content"
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/todos/get-todo/{id}": {
+      "get": {
+        "operationId": "Todos_GetTodo",
+        "tags": [
+          "Todos"
+        ],
+        "summary": "GetTodo retrieves a single todo by ID.",
+        "description": "GetTodo retrieves a single todo by ID.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/todos/list-todos": {
+      "get": {
+        "operationId": "Todos_ListTodos",
+        "tags": [
+          "Todos"
+        ],
+        "summary": "ListTodos returns all todo items.",
+        "description": "ListTodos returns all todo items.",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTodosResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/todos/update-todo/{id}": {
+      "put": {
+        "operationId": "Todos_UpdateTodo",
+        "tags": [
+          "Todos"
+        ],
+        "summary": "UpdateTodo updates an existing todo item.",
+        "description": "UpdateTodo updates an existing todo item.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTodoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Todo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateTodoRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Description is an optional longer description (up to 1000 characters)."
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Priority is a 1–5 ranking, with 1 being highest priority."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Title is the short title of the todo item (1–200 characters)."
+          }
+        },
+        "required": [
+          "description",
+          "priority",
+          "title"
+        ],
+        "description": "CreateTodoRequest is the payload accepted by the CreateTodo endpoint."
+      },
+      "ListTodosResponse": {
+        "type": "object",
+        "properties": {
+          "todos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Todo"
+            },
+            "description": "Todos is the full list of todo items."
+          },
+          "total": {
+            "type": "integer",
+            "description": "Total is the number of todo items in Todos, for convenience."
+          }
+        },
+        "required": [
+          "todos",
+          "total"
+        ],
+        "description": "ListTodosResponse is the payload returned by ListTodos."
+      },
+      "Todo": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Description is an optional longer description of the todo item."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Done is true when the todo item has been marked complete."
+          },
+          "id": {
+            "type": "string",
+            "description": "ID is the unique identifier of the todo item."
+          },
+          "priority": {
+            "type": "integer",
+            "description": "Priority is a 1–5 ranking, with 1 being highest priority."
+          },
+          "title": {
+            "type": "string",
+            "description": "Title is the short title of the todo item."
+          }
+        },
+        "required": [
+          "description",
+          "done",
+          "id",
+          "priority",
+          "title"
+        ],
+        "description": "Todo represents a todo item stored by the demo API."
+      },
+      "UpdateTodoRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Description is the new description (up to 1000 characters) if provided."
+          },
+          "done": {
+            "type": "boolean",
+            "description": "Done is the new completion state if provided."
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Priority is the new 1–5 priority ranking if provided."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Title is the new title of the todo item (1–200 characters) if provided."
+          }
+        },
+        "description": "UpdateTodoRequest is the payload accepted by the UpdateTodo endpoint.\nAll fields are optional; only provided fields are updated."
+      }
+    }
+  }
+}

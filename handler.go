@@ -35,6 +35,7 @@ type HandlerInfo struct {
 	IsVoid       bool // true when handler returns only error
 	method       reflect.Value
 	handler      reflect.Value
+	registry     *Registry // back-reference for accessing validator
 }
 
 // PushEventInfo describes a push event for code generation.
@@ -99,6 +100,8 @@ type Registry struct {
 	sharedEnums     []EnumInfo                                         // enums not tied to a handler group
 	generateHooks   []func(results map[string]string, mode OutputMode) // hooks run after generation
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
+	validator       StructValidator                                    // optional struct validator (nil = disabled)
+	restGroups      map[string]bool                                    // groups registered via RegisterREST
 }
 
 // NewRegistry creates a new handler registry.
@@ -112,6 +115,7 @@ func NewRegistry() *Registry {
 		errorMappings:  []errorMapping{},
 		nextErrorCode:  1000, // Start custom codes at 1000
 		enumTypes:      make(map[reflect.Type]*EnumInfo),
+		restGroups:     make(map[string]bool),
 	}
 }
 
@@ -135,6 +139,43 @@ func NewRegistry() *Registry {
 //	registry.Register(&UserHandlers{}, authMiddleware)      // With auth
 //	registry.Register(&AdminHandlers{}, authMiddleware, adminMiddleware)
 func (r *Registry) Register(handler any, middleware ...Middleware) {
+	r.register(handler, true, middleware...)
+}
+
+// RegisterREST registers a handler for REST/HTTP only.
+// The handler is NOT available via WebSocket — only through the REST adapter
+// and OpenAPI generator.
+//
+// To expose a handler via both WebSocket and REST, use Register + EnableREST:
+//
+//	registry.Register(&UserHandlers{})          // WebSocket only
+//	registry.RegisterREST(&TodoHandlers{})      // REST only
+//	registry.Register(&BothHandlers{})          // WebSocket...
+//	registry.EnableREST(&BothHandlers{})        // ...and also REST
+func (r *Registry) RegisterREST(handler any, middleware ...Middleware) {
+	r.register(handler, false, middleware...)
+	t := reflect.TypeOf(handler)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	r.restGroups[t.Name()] = true
+}
+
+// EnableREST marks an already-registered handler for REST/HTTP exposure
+// in addition to WebSocket.
+func (r *Registry) EnableREST(handler any) {
+	t := reflect.TypeOf(handler)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name := t.Name()
+	if _, ok := r.groups[name]; !ok {
+		panic("aprot: EnableREST called with unregistered handler: " + name)
+	}
+	r.restGroups[name] = true
+}
+
+func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Middleware) {
 	v := reflect.ValueOf(handler)
 	t := v.Type()
 
@@ -157,10 +198,13 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
 			wireMethod := structName + "." + info.Name
-			if existing, exists := r.handlers[wireMethod]; exists {
-				panic(fmt.Sprintf("aprot: duplicate method %s (registered by %s and %s)", wireMethod, existing.StructName, structName))
+			info.registry = r
+			if addToWSDispatch {
+				if existing, exists := r.handlers[wireMethod]; exists {
+					panic(fmt.Sprintf("aprot: duplicate method %s (registered by %s and %s)", wireMethod, existing.StructName, structName))
+				}
+				r.handlers[wireMethod] = info
 			}
-			r.handlers[wireMethod] = info
 			group.Handlers[info.Name] = info
 
 			// Extract source directory from the first valid method
@@ -176,6 +220,16 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 	}
 
 	r.groups[structName] = group
+}
+
+// IsREST reports whether the named handler group was registered via RegisterREST.
+func (r *Registry) IsREST(groupName string) bool {
+	return r.restGroups[groupName]
+}
+
+// RESTGroups returns the set of handler group names registered via RegisterREST.
+func (r *Registry) RESTGroups() map[string]bool {
+	return r.restGroups
 }
 
 // RegisterPushEventFor registers a push event associated with a specific handler.
@@ -399,6 +453,17 @@ func (r *Registry) SharedEnums() []EnumInfo {
 	return r.sharedEnums
 }
 
+// SetValidator sets the struct validator used for automatic parameter validation.
+// When set, struct parameters are validated before handler dispatch.
+// Pass nil to disable validation.
+//
+// Example:
+//
+//	registry.SetValidator(aprot.NewPlaygroundValidator())
+func (r *Registry) SetValidator(v StructValidator) {
+	r.validator = v
+}
+
 // OnGenerate registers a hook called after code generation.
 // The hook receives the results map (filename → content) and the output mode.
 // Hooks can modify existing entries or add new files.
@@ -411,6 +476,16 @@ func (r *Registry) OnGenerate(hook func(results map[string]string, mode OutputMo
 // tasks/ defer server-side setup to server creation time.
 func (r *Registry) OnServerInit(hook func(s *Server)) {
 	r.serverInitHooks = append(r.serverInitHooks, hook)
+}
+
+// GroupMiddleware returns the middleware for a handler group by group name.
+// Works for both WS-registered and REST-only handlers.
+func (r *Registry) GroupMiddleware(groupName string) []Middleware {
+	group, ok := r.groups[groupName]
+	if !ok {
+		return nil
+	}
+	return group.middleware
 }
 
 // GenerateHooks returns the registered generation hooks.
@@ -608,6 +683,25 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 					return nil, ErrInvalidParams(err.Error())
 				}
 				args = append(args, val)
+			}
+		}
+	}
+
+	// Validate struct parameters if a validator is set
+	if info.registry != nil && info.registry.validator != nil {
+		for i, p := range info.Params {
+			pt := p.Type
+			if pt.Kind() == reflect.Ptr {
+				pt = pt.Elem()
+			}
+			if pt.Kind() == reflect.Struct {
+				val := args[i+1] // +1 because args[0] is ctx
+				if val.Kind() == reflect.Ptr {
+					val = val.Elem()
+				}
+				if err := info.registry.validator.ValidateStruct(val.Interface()); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

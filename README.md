@@ -147,6 +147,10 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
+- **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
+- **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
+- **REST adapter** — serve handlers as REST/HTTP endpoints alongside WebSocket, with convention-based HTTP method detection and path parameter mapping
+- **OpenAPI generation** — opt-in OpenAPI 3.0 spec generation from handler metadata, including validation constraints from struct tags
 
 ## Installation
 
@@ -324,6 +328,92 @@ onUserCreatedEvent(client, (event) => {
     console.log('User created:', event);
 });
 ```
+
+## Validation
+
+Add `validate` struct tags to request structs and enable validation on the registry. Validation is opt-in — nothing changes unless you call `SetValidator`.
+
+```go
+type CreateUserRequest struct {
+    Name  string `json:"name"  validate:"required,min=2,max=100"`
+    Email string `json:"email" validate:"required,email"`
+    Age   int    `json:"age"   validate:"gte=13,lte=120"`
+}
+
+// Enable validation
+registry.SetValidator(aprot.NewPlaygroundValidator())
+```
+
+Invalid requests are automatically rejected with structured errors (code `-32604`) before reaching your handler. Uses [go-playground/validator](https://github.com/go-playground/validator) — see their docs for the full tag reference.
+
+### Zod Schemas
+
+Enable Zod to generate TypeScript validation schemas from the same struct tags:
+
+```go
+gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+    OutputDir: "client/src/api",
+    Mode:      aprot.OutputReact,
+    Zod:       true, // generates .schema.ts files
+})
+```
+
+This produces `{handler}.schema.ts` files with Zod schemas for any struct that has `validate` tags:
+
+```typescript
+import { z } from 'zod';
+
+export const CreateUserRequestSchema = z.object({
+    name: z.string().min(1).min(2).max(100),
+    email: z.string().min(1).email(),
+    age: z.number().int().min(13).max(120),
+});
+```
+
+## REST Adapter
+
+Serve your handlers as REST/HTTP endpoints alongside WebSocket. Use `RegisterREST` for REST-only handlers, or `EnableREST` to expose a WebSocket handler via REST as well:
+
+```go
+registry.Register(&handlers)          // WebSocket only
+registry.RegisterREST(&todos)         // REST only
+registry.Register(&shared)            // WebSocket...
+registry.EnableREST(&shared)          // ...and also REST
+
+rest := aprot.NewRESTAdapter(registry)
+http.Handle("/api/", http.StripPrefix("/api", rest))
+```
+
+Mapping conventions:
+- **Group name** → path prefix: `Users` → `/users`
+- **Method name** → path segment: `UpdateUser` → `/update-user`
+- **Primitive params** → path parameters: `func(ctx, id string, ...)` → `/{id}`
+- **Struct param** → JSON request body
+- **HTTP method** inferred from name prefix: `Get`/`List` → GET, `Create`/`Add` → POST, `Update` → PUT, `Set` → PATCH, `Delete`/`Remove` → DELETE
+
+Example: `func (h *Users) UpdateUser(ctx context.Context, id string, req *UpdateReq) error` becomes `PUT /users/update-user/{id}` with JSON body.
+
+Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
+
+## OpenAPI Generation
+
+Generate an OpenAPI 3.0 spec from your handlers. Only handlers registered with `RegisterREST` are included:
+
+```go
+oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0")
+spec, _ := oag.Generate()     // *OpenAPISpec
+data, _ := oag.GenerateJSON() // []byte
+```
+
+Use `WithBasePath` when the API is mounted behind a proxy or at a non-root path:
+
+```go
+oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0").
+    WithBasePath("/rest/api/v1.0")
+// paths: "/rest/api/v1.0/todos/create-todo", etc.
+```
+
+Validation tags flow into the spec: `validate:"gte=12,lte=110"` → `minimum: 12, maximum: 110`, `validate:"email"` → `format: "email"`.
 
 ## Project Structure
 

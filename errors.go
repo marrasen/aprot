@@ -9,6 +9,7 @@ const (
 	CodeMethodNotFound     = -32601
 	CodeInvalidParams      = -32602
 	CodeInternalError      = -32603
+	CodeValidationFailed   = -32604
 	CodeCanceled           = -32800
 	CodeUnauthorized       = -32001
 	CodeConnectionRejected = -32002
@@ -20,6 +21,7 @@ type ProtocolError struct {
 	Code    int
 	Message string
 	Cause   error
+	Data    any // optional structured data (e.g., []FieldError for validation errors)
 }
 
 func (e *ProtocolError) Error() string {

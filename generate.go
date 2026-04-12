@@ -244,6 +244,10 @@ type GeneratorOptions struct {
 	// Naming controls how Go names are transformed into TypeScript names.
 	// If nil, DefaultNaming{} is used (preserving current behavior).
 	Naming NamingPlugin
+
+	// Zod enables generation of Zod validation schemas alongside TypeScript interfaces.
+	// When enabled, {handler-name}.schema.ts files are generated for structs with validate tags.
+	Zod bool
 }
 
 // Generator generates TypeScript client code from a registry.
@@ -322,9 +326,11 @@ type interfaceData struct {
 }
 
 type fieldData struct {
-	Name     string
-	Type     string
-	Optional bool
+	Name        string
+	Type        string
+	Optional    bool
+	GoType      string // Go kind for Zod/OpenAPI mapping (e.g., "string", "int", "float64")
+	ValidateTag string // raw validate tag, e.g., "required,min=3,max=100"
 }
 
 type paramData struct {
@@ -513,8 +519,8 @@ func (g *Generator) Generate() (map[string]string, error) {
 		handlerTemplateName = "client-handler-react.ts.tmpl"
 	}
 
-	// Extract param names from AST
-	paramNames := g.extractAllParamNames()
+	// Extract source metadata from AST
+	meta := g.extractAllSourceMeta()
 
 	// Phase 2: handler groups
 	for _, group := range g.registry.Groups() {
@@ -530,7 +536,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 			delete(g.collectedEnums, t)
 		}
 
-		data := g.buildTemplateData(group, paramNames)
+		data := g.buildTemplateData(group, meta)
 		data.BaseTypeImports = findBaseTypeImports(&data, baseTypeNames)
 		data.SharedImports = findSharedTypeImports(&data, sharedTypeNames)
 
@@ -540,6 +546,22 @@ func (g *Generator) Generate() (map[string]string, error) {
 		}
 
 		results[data.FileName] = buf.String()
+
+		// Generate Zod schema file if enabled and handler has validated types
+		if g.options.Zod {
+			schemas := buildZodSchemas(data.Interfaces)
+			if len(schemas) > 0 {
+				schemaData := struct {
+					Schemas []zodSchemaData
+				}{Schemas: schemas}
+				var schemaBuf strings.Builder
+				if err := templates.ExecuteTemplate(&schemaBuf, "client-schema.ts.tmpl", schemaData); err != nil {
+					return nil, err
+				}
+				schemaFileName := strings.TrimSuffix(data.FileName, ".ts") + ".schema.ts"
+				results[schemaFileName] = schemaBuf.String()
+			}
+		}
 	}
 
 	// Render base client
@@ -599,8 +621,8 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 		g.collectedEnums[ei.Type] = ei
 	}
 
-	// Extract param names from AST
-	paramNames := g.extractAllParamNames()
+	// Extract source metadata from AST
+	meta := g.extractAllSourceMeta()
 
 	// Build combined template data
 	data := templateData{
@@ -635,7 +657,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			SubscribeName: "subscribe" + shortName,
 			ResponseType:  respType,
 			IsVoid:        isVoid,
-			Params:        g.buildParamData(info, paramNames),
+			Params:        g.buildParamData(info, meta),
 		})
 	}
 
@@ -687,7 +709,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	return err
 }
 
-func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string]map[string][]string) templateData {
+func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) templateData {
 	data := templateData{
 		StructName: group.Name,
 		FileName:   g.naming().FileName(group.Name) + ".ts",
@@ -730,7 +752,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, paramNames map[string
 			SubscribeName: "subscribe" + name,
 			ResponseType:  respType,
 			IsVoid:        isVoid,
-			Params:        g.buildParamData(info, paramNames),
+			Params:        g.buildParamData(info, meta),
 		})
 	}
 
@@ -987,9 +1009,11 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		fields = append(fields, fieldData{
-			Name:     g.getJSONName(field),
-			Type:     g.goTypeToTS(field.Type),
-			Optional: g.isOptional(field),
+			Name:        g.getJSONName(field),
+			Type:        g.goTypeToTS(field.Type),
+			Optional:    g.isOptional(field),
+			GoType:      goKindString(field.Type),
+			ValidateTag: field.Tag.Get("validate"),
 		})
 	}
 	return fields
@@ -1111,6 +1135,34 @@ func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 	return g.inferTypeFromMarshalCached(t) != nil || SQLNullTSType(t, g.goTypeToTS) != ""
 }
 
+// goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.
+// Resolves through pointers and named types to the underlying kind.
+func goKindString(t reflect.Type) string {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "int"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "uint"
+	case reflect.Float32, reflect.Float64:
+		return "float"
+	case reflect.Bool:
+		return "bool"
+	case reflect.Slice:
+		return "slice"
+	case reflect.Map:
+		return "map"
+	case reflect.Struct:
+		return "struct"
+	default:
+		return t.Kind().String()
+	}
+}
+
 // shouldSkipField returns true for fields that should be excluded from reflected interfaces.
 // Fields with json:"-" are skipped to match encoding/json behavior.
 func shouldSkipField(field reflect.StructField) bool {
@@ -1205,16 +1257,12 @@ func toKebab(s string) string {
 }
 
 // buildParamData converts HandlerInfo params to template paramData using AST names.
-func (g *Generator) buildParamData(info *HandlerInfo, paramNames map[string]map[string][]string) []paramData {
+func (g *Generator) buildParamData(info *HandlerInfo, meta *sourceMeta) []paramData {
 	if len(info.Params) == 0 {
 		return nil
 	}
 
-	// Look up AST names
-	var astNames []string
-	if methods, ok := paramNames[info.StructName]; ok {
-		astNames = methods[info.Name]
-	}
+	astNames := meta.paramNames(info.StructName, info.Name)
 
 	params := make([]paramData, len(info.Params))
 	for i, p := range info.Params {
@@ -1235,78 +1283,195 @@ func (g *Generator) buildParamData(info *HandlerInfo, paramNames map[string]map[
 	return params
 }
 
-// extractAllParamNames extracts parameter names from source files for all handler groups.
-// Returns structName → methodName → []paramName.
-func (g *Generator) extractAllParamNames() map[string]map[string][]string {
-	// Collect unique source directories from all groups
+// sourceMeta holds godoc and parameter-name metadata collected from handler source files.
+type sourceMeta struct {
+	// Handlers is keyed by receiver struct name, then method name.
+	Handlers map[string]map[string]handlerMeta
+	// Types is keyed by struct type name.
+	Types map[string]typeMeta
+}
+
+// handlerMeta is the per-method metadata extracted from the AST.
+type handlerMeta struct {
+	ParamNames []string // parameter names, excluding the first context.Context param
+	Doc        string   // raw godoc text above the method's FuncDecl
+}
+
+// typeMeta is the per-struct metadata extracted from the AST.
+type typeMeta struct {
+	Doc       string            // godoc text above the TypeSpec (or its GenDecl)
+	FieldDocs map[string]string // Go field name → godoc (Doc preferred, Comment as fallback)
+}
+
+// ParamNames returns the parameter names extracted for a handler method.
+func (m *sourceMeta) paramNames(structName, methodName string) []string {
+	if m == nil {
+		return nil
+	}
+	if methods, ok := m.Handlers[structName]; ok {
+		return methods[methodName].ParamNames
+	}
+	return nil
+}
+
+// HandlerDoc returns the godoc comment extracted above a handler method.
+func (m *sourceMeta) handlerDoc(structName, methodName string) string {
+	if m == nil {
+		return ""
+	}
+	if methods, ok := m.Handlers[structName]; ok {
+		return methods[methodName].Doc
+	}
+	return ""
+}
+
+// TypeDoc returns the godoc comment extracted above a struct type declaration.
+func (m *sourceMeta) typeDoc(typeName string) string {
+	if m == nil {
+		return ""
+	}
+	return m.Types[typeName].Doc
+}
+
+// FieldDoc returns the godoc comment extracted for a struct field (by Go field name).
+func (m *sourceMeta) fieldDoc(typeName, fieldName string) string {
+	if m == nil {
+		return ""
+	}
+	if t, ok := m.Types[typeName]; ok {
+		return t.FieldDocs[fieldName]
+	}
+	return ""
+}
+
+// extractAllSourceMeta extracts source metadata for all registered handler groups.
+func (g *Generator) extractAllSourceMeta() *sourceMeta {
 	dirs := make(map[string]bool)
 	for _, group := range g.registry.Groups() {
 		if dir := group.SourceDir(); dir != "" {
 			dirs[dir] = true
 		}
 	}
-
-	return extractParamNames(dirs)
+	return extractSourceMeta(dirs)
 }
 
-// extractParamNames parses Go source files and extracts parameter names for handler methods.
-// Returns structName → methodName → []paramName (excluding the first context.Context param).
-func extractParamNames(dirs map[string]bool) map[string]map[string][]string {
-	result := make(map[string]map[string][]string)
+// extractSourceMeta parses Go source files and collects parameter names and godoc comments
+// for handler methods and struct types declared within the given directories.
+func extractSourceMeta(dirs map[string]bool) *sourceMeta {
+	result := &sourceMeta{
+		Handlers: make(map[string]map[string]handlerMeta),
+		Types:    make(map[string]typeMeta),
+	}
 
 	for dir := range dirs {
 		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, dir, nil, 0)
+		pkgs, err := parser.ParseDir(fset, dir, nil, parser.ParseComments)
 		if err != nil {
 			continue
 		}
 		for _, pkg := range pkgs {
 			for _, file := range pkg.Files {
 				for _, decl := range file.Decls {
-					fn, ok := decl.(*ast.FuncDecl)
-					if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
-						continue
-					}
-
-					// Get struct name from receiver
-					recvType := fn.Recv.List[0].Type
-					if star, ok := recvType.(*ast.StarExpr); ok {
-						recvType = star.X
-					}
-					ident, ok := recvType.(*ast.Ident)
-					if !ok {
-						continue
-					}
-					structName := ident.Name
-					methodName := fn.Name.Name
-
-					// Extract parameter names, skipping the first (context.Context) param
-					var names []string
-					if fn.Type.Params != nil {
-						first := true
-						for _, field := range fn.Type.Params.List {
-							if first {
-								first = false
-								continue
-							}
-							if len(field.Names) == 0 {
-								names = append(names, "arg")
-							} else {
-								for _, n := range field.Names {
-									names = append(names, n.Name)
-								}
-							}
+					switch d := decl.(type) {
+					case *ast.FuncDecl:
+						collectHandlerMeta(d, result)
+					case *ast.GenDecl:
+						if d.Tok == token.TYPE {
+							collectTypeMeta(d, result)
 						}
 					}
-
-					if result[structName] == nil {
-						result[structName] = make(map[string][]string)
-					}
-					result[structName][methodName] = names
 				}
 			}
 		}
 	}
 
 	return result
+}
+
+func collectHandlerMeta(fn *ast.FuncDecl, result *sourceMeta) {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return
+	}
+
+	recvType := fn.Recv.List[0].Type
+	if star, ok := recvType.(*ast.StarExpr); ok {
+		recvType = star.X
+	}
+	ident, ok := recvType.(*ast.Ident)
+	if !ok {
+		return
+	}
+	structName := ident.Name
+	methodName := fn.Name.Name
+
+	// Extract parameter names, skipping the first (context.Context) param.
+	var names []string
+	if fn.Type.Params != nil {
+		first := true
+		for _, field := range fn.Type.Params.List {
+			if first {
+				first = false
+				continue
+			}
+			if len(field.Names) == 0 {
+				names = append(names, "arg")
+			} else {
+				for _, n := range field.Names {
+					names = append(names, n.Name)
+				}
+			}
+		}
+	}
+
+	if result.Handlers[structName] == nil {
+		result.Handlers[structName] = make(map[string]handlerMeta)
+	}
+	result.Handlers[structName][methodName] = handlerMeta{
+		ParamNames: names,
+		Doc:        strings.TrimSpace(fn.Doc.Text()),
+	}
+}
+
+func collectTypeMeta(gd *ast.GenDecl, result *sourceMeta) {
+	for _, spec := range gd.Specs {
+		ts, ok := spec.(*ast.TypeSpec)
+		if !ok {
+			continue
+		}
+		st, ok := ts.Type.(*ast.StructType)
+		if !ok {
+			continue
+		}
+
+		// Go attaches the comment to TypeSpec.Doc for grouped `type (…)` blocks,
+		// and to GenDecl.Doc for single-spec `type Foo struct { … }` declarations.
+		typeDoc := ts.Doc.Text()
+		if typeDoc == "" {
+			typeDoc = gd.Doc.Text()
+		}
+
+		fieldDocs := make(map[string]string)
+		if st.Fields != nil {
+			for _, f := range st.Fields.List {
+				if len(f.Names) == 0 {
+					continue
+				}
+				doc := strings.TrimSpace(f.Doc.Text())
+				if doc == "" {
+					doc = strings.TrimSpace(f.Comment.Text())
+				}
+				if doc == "" {
+					continue
+				}
+				for _, name := range f.Names {
+					fieldDocs[name.Name] = doc
+				}
+			}
+		}
+
+		result.Types[ts.Name.Name] = typeMeta{
+			Doc:       strings.TrimSpace(typeDoc),
+			FieldDocs: fieldDocs,
+		}
+	}
 }
