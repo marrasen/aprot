@@ -68,7 +68,7 @@ type RESTAdapter struct {
 	mux        *http.ServeMux
 	naming     NamingPlugin
 	middleware []Middleware
-	paramNames map[string]map[string][]string
+	meta       *sourceMeta
 }
 
 // NewRESTAdapter creates an HTTP/REST adapter from a registry.
@@ -83,14 +83,14 @@ func NewRESTAdapter(registry *Registry, opts ...RESTOption) *RESTAdapter {
 		opt(a)
 	}
 
-	// Extract param names from AST for path parameter naming
+	// Extract AST metadata (parameter names and godoc) for path generation
 	dirs := make(map[string]bool)
 	for _, group := range registry.Groups() {
 		if dir := group.SourceDir(); dir != "" {
 			dirs[dir] = true
 		}
 	}
-	a.paramNames = extractParamNames(dirs)
+	a.meta = extractSourceMeta(dirs)
 
 	a.buildRoutes()
 	a.registerRoutes()
@@ -138,11 +138,7 @@ func (a *RESTAdapter) buildRoutes() {
 			var pathParams []routeParam
 			var bodyParam *ParamInfo
 
-			// Look up AST names for this method
-			var astNames []string
-			if methods, ok := a.paramNames[info.StructName]; ok {
-				astNames = methods[info.Name]
-			}
+			astNames := a.meta.paramNames(info.StructName, info.Name)
 
 			for i := range info.Params {
 				p := &info.Params[i]

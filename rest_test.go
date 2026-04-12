@@ -16,8 +16,11 @@ type UserResponse struct {
 	Age  int    `json:"age"`
 }
 
+// CreateUserReq is the payload accepted by the CreateUser and UpdateUser endpoints.
 type CreateUserReq struct {
-	Name  string `json:"name"  validate:"required,min=2"`
+	// Name is the user's full display name.
+	Name string `json:"name"  validate:"required,min=2"`
+	// Email is the user's primary contact address.
 	Email string `json:"email" validate:"required,email"`
 }
 
@@ -27,6 +30,9 @@ func (h *RESTHandlers) GetUser(ctx context.Context, id string) (*UserResponse, e
 	return &UserResponse{ID: id, Name: "Alice", Age: 30}, nil
 }
 
+// CreateUser provisions a new user account.
+//
+// The created user is immediately active and can sign in right away.
 func (h *RESTHandlers) CreateUser(ctx context.Context, req *CreateUserReq) (*UserResponse, error) {
 	return &UserResponse{ID: "new-123", Name: req.Name, Age: 25}, nil
 }

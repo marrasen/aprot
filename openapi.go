@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"encoding/json"
+	"go/doc"
 	"reflect"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ type Operation struct {
 	OperationID string              `json:"operationId"`
 	Tags        []string            `json:"tags,omitempty"`
 	Summary     string              `json:"summary,omitempty"`
+	Description string              `json:"description,omitempty"`
 	Parameters  []Parameter         `json:"parameters,omitempty"`
 	RequestBody *RequestBody        `json:"requestBody,omitempty"`
 	Responses   map[string]Response `json:"responses"`
@@ -101,7 +103,8 @@ type OpenAPIGenerator struct {
 	schemas  map[reflect.Type]*JSONSchema
 	title    string
 	version  string
-	basePath string // prepended to all paths, e.g. "/rest/api/v1.0"
+	basePath string      // prepended to all paths, e.g. "/rest/api/v1.0"
+	meta     *sourceMeta // AST-extracted godoc and parameter names, populated by Generate
 }
 
 // NewOpenAPIGenerator creates an OpenAPI spec generator.
@@ -145,14 +148,14 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 		},
 	}
 
-	// Extract param names from AST
+	// Extract AST metadata (parameter names and godoc) from handler source dirs
 	dirs := make(map[string]bool)
 	for _, group := range g.registry.Groups() {
 		if dir := group.SourceDir(); dir != "" {
 			dirs[dir] = true
 		}
 	}
-	paramNames := extractParamNames(dirs)
+	g.meta = extractSourceMeta(dirs)
 
 	// Sort groups for deterministic output
 	groupNames := make([]string, 0, len(g.registry.Groups()))
@@ -183,10 +186,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			var pathParams []routeParam
 			var bodyParam *ParamInfo
 
-			var astNames []string
-			if methods, ok := paramNames[info.StructName]; ok {
-				astNames = methods[info.Name]
-			}
+			astNames := g.meta.paramNames(info.StructName, info.Name)
 
 			for i := range info.Params {
 				p := &info.Params[i]
@@ -212,10 +212,18 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			}
 
 			// Build operation
+			summary := groupName + "." + methodName
+			description := ""
+			if handlerDoc := g.meta.handlerDoc(info.StructName, info.Name); handlerDoc != "" {
+				summary = doc.Synopsis(handlerDoc)
+				description = handlerDoc
+			}
+
 			op := &Operation{
 				OperationID: groupName + "_" + methodName,
 				Tags:        []string{groupName},
-				Summary:     groupName + "." + methodName,
+				Summary:     summary,
+				Description: description,
 				Responses:   make(map[string]Response),
 			}
 
@@ -347,8 +355,9 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 // buildStructSchema builds a JSON Schema for a struct type and registers it.
 func (g *OpenAPIGenerator) buildStructSchema(t reflect.Type) {
 	schema := &JSONSchema{
-		Type:       "object",
-		Properties: make(map[string]*JSONSchema),
+		Type:        "object",
+		Properties:  make(map[string]*JSONSchema),
+		Description: g.meta.typeDoc(t.Name()),
 	}
 	// Register early to handle circular references
 	g.schemas[t] = schema
@@ -392,6 +401,11 @@ func (g *OpenAPIGenerator) buildStructSchema(t reflect.Type) {
 			applyValidateConstraints(fieldSchema, validateTag, field.Type)
 		}
 
+		// Attach field godoc. The Go field name (not JSON name) is what the AST knows.
+		if fdoc := g.meta.fieldDoc(t.Name(), field.Name); fdoc != "" {
+			fieldSchema.Description = fdoc
+		}
+
 		schema.Properties[jsonName] = fieldSchema
 
 		// Determine if required
@@ -418,6 +432,10 @@ func (g *OpenAPIGenerator) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
 		validateTag := field.Tag.Get("validate")
 		if validateTag != "" {
 			applyValidateConstraints(fieldSchema, validateTag, field.Type)
+		}
+
+		if fdoc := g.meta.fieldDoc(t.Name(), field.Name); fdoc != "" {
+			fieldSchema.Description = fdoc
 		}
 
 		schema.Properties[jsonName] = fieldSchema

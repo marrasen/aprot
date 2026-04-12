@@ -204,6 +204,80 @@ func TestOpenAPIGenerator_WithBasePath_TrailingSlash(t *testing.T) {
 	}
 }
 
+func TestOpenAPIGenerator_DocComments(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&RESTHandlers{})
+
+	gen := NewOpenAPIGenerator(registry, "Test API", "1.0.0")
+	spec, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate() failed: %v", err)
+	}
+
+	// Locate the CreateUser operation by path.
+	var createOp *Operation
+	for path, item := range spec.Paths {
+		if strings.Contains(path, "create-user") {
+			createOp = item.Post
+			break
+		}
+	}
+	if createOp == nil {
+		t.Fatal("expected to find CreateUser operation")
+	}
+
+	wantSummary := "CreateUser provisions a new user account."
+	if createOp.Summary != wantSummary {
+		t.Errorf("Summary: got %q, want %q", createOp.Summary, wantSummary)
+	}
+	if !strings.Contains(createOp.Description, "immediately active") {
+		t.Errorf("Description should contain 'immediately active', got %q", createOp.Description)
+	}
+
+	// Undocumented handlers still fall back to the generated synthetic summary.
+	var getOp *Operation
+	for path, item := range spec.Paths {
+		if strings.Contains(path, "get-user") {
+			getOp = item.Get
+			break
+		}
+	}
+	if getOp == nil {
+		t.Fatal("expected to find GetUser operation")
+	}
+	if getOp.Summary != "RESTHandlers.GetUser" {
+		t.Errorf("undocumented Summary: got %q, want fallback %q", getOp.Summary, "RESTHandlers.GetUser")
+	}
+	if getOp.Description != "" {
+		t.Errorf("undocumented Description: got %q, want empty", getOp.Description)
+	}
+
+	// Struct type doc → schema Description.
+	schema, ok := spec.Components.Schemas["CreateUserReq"]
+	if !ok {
+		t.Fatal("expected CreateUserReq in components/schemas")
+	}
+	if !strings.Contains(schema.Description, "payload accepted by the CreateUser") {
+		t.Errorf("schema Description: got %q", schema.Description)
+	}
+
+	// Struct field doc → property Description.
+	nameProp, ok := schema.Properties["name"]
+	if !ok {
+		t.Fatal("expected 'name' property")
+	}
+	if !strings.Contains(nameProp.Description, "full display name") {
+		t.Errorf("name field Description: got %q", nameProp.Description)
+	}
+	emailProp, ok := schema.Properties["email"]
+	if !ok {
+		t.Fatal("expected 'email' property")
+	}
+	if !strings.Contains(emailProp.Description, "primary contact address") {
+		t.Errorf("email field Description: got %q", emailProp.Description)
+	}
+}
+
 func TestApplyValidateConstraints(t *testing.T) {
 	stringType := reflect.TypeOf("")
 	intType := reflect.TypeOf(0)
