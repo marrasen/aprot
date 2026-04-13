@@ -1975,6 +1975,84 @@ func TestTriggerRefreshNow_MidHandlerFlush(t *testing.T) {
 	}
 }
 
+// TestServerTriggerRefresh_OutOfRequest verifies that Server.TriggerRefresh
+// dispatches refreshes to subscribers from a background goroutine that has
+// no request context — the out-of-request entry point that the package-level
+// TriggerRefresh(ctx, ...) can't serve.
+func TestServerTriggerRefresh_OutOfRequest(t *testing.T) {
+	ts, server, _ := setupTestServer(t)
+	defer ts.Close()
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	sub := IncomingMessage{
+		Type:   TypeSubscribe,
+		ID:     "sub-1",
+		Method: "IntegrationHandlers.SubscribeUsers",
+	}
+	if err := ws.WriteJSON(sub); err != nil {
+		t.Fatalf("Write subscribe failed: %v", err)
+	}
+
+	var initial ResponseMessage
+	if err := ws.ReadJSON(&initial); err != nil {
+		t.Fatalf("Read initial response failed: %v", err)
+	}
+	if initial.ID != "sub-1" || initial.Type != TypeResponse {
+		t.Fatalf("Expected response for sub-1, got %+v", initial)
+	}
+
+	// Fire a refresh from a detached goroutine with no request context. This
+	// is the scenario that the package-level TriggerRefresh can't serve: the
+	// goroutine has no refreshQueue in its ctx (or no ctx at all), so the
+	// only way to fan out a refresh is through the server-scoped method.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.TriggerRefresh("users")
+	}()
+	<-done
+
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var refresh ResponseMessage
+	if err := ws.ReadJSON(&refresh); err != nil {
+		t.Fatalf("Read refresh failed: %v", err)
+	}
+	if refresh.ID != "sub-1" || refresh.Type != TypeResponse {
+		t.Fatalf("Expected sub-1 refresh response, got %+v", refresh)
+	}
+}
+
+// TestServerTriggerRefresh_CompositeKey verifies that Server.TriggerRefresh
+// treats its variadic arguments as a single composite key, matching the
+// convention used by RegisterRefreshTrigger and the package-level
+// TriggerRefresh. A subscription registered with the composite key
+// {"user", "123"} must fire on Server.TriggerRefresh("user", "123") but
+// must NOT fire on Server.TriggerRefresh("user") alone.
+func TestServerTriggerRefresh_CompositeKey(t *testing.T) {
+	sm := newSubscriptionManager()
+
+	sm.register(&subscription{
+		conn: &Conn{
+			id:        1,
+			transport: &mockTransport{},
+			requests:  make(map[string]context.CancelCauseFunc),
+		},
+		id:     "sub-1",
+		method: "Handlers.GetUser",
+		keys:   map[string]struct{}{"user\x00123": {}},
+	})
+
+	// Only the full composite should match.
+	if subs := sm.getSubscriptionsForKey("user\x00123"); len(subs) != 1 {
+		t.Fatalf("expected 1 match for composite key, got %d", len(subs))
+	}
+	if subs := sm.getSubscriptionsForKey("user"); len(subs) != 0 {
+		t.Fatalf("expected 0 matches for partial key 'user', got %d", len(subs))
+	}
+}
+
 func TestRefreshBatching(t *testing.T) {
 	// Test that multiple TriggerRefresh calls for overlapping keys
 	// result in only one subscription being resolved for refresh.

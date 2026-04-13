@@ -247,7 +247,9 @@ func RegisterRefreshTrigger(ctx context.Context, keys ...string) {
 // TriggerRefresh queues a refresh for all subscriptions matching the given keys.
 // Called from mutation handlers to notify subscribed clients of data changes.
 // Triggers are batched per-request and deduplicated by subscription when the
-// request handler completes. This is a no-op outside a request context.
+// request handler completes. This is a no-op outside a request context — for
+// background goroutines, cron jobs, or other out-of-request callers, use
+// [Server.TriggerRefresh] instead.
 func TriggerRefresh(ctx context.Context, keys ...string) {
 	rq, ok := ctx.Value(refreshQueueKey).(*refreshQueue)
 	if !ok || rq == nil {
@@ -293,4 +295,24 @@ func TriggerRefreshNow(ctx context.Context, keys ...string) {
 	if server != nil {
 		server.processRefreshQueue(rq)
 	}
+}
+
+// TriggerRefresh fires a refresh for all subscriptions matching the given keys,
+// across every connection. Unlike the package-level [TriggerRefresh] — which
+// batches within a request handler and flushes after the handler returns —
+// this method flushes immediately and is safe to call from background
+// goroutines, cron jobs, webhook fan-in, or any other out-of-request code path.
+//
+// Matching subscriptions are re-executed once, each in its own goroutine, the
+// same way request-scoped triggers are dispatched. Cascading refreshes remain
+// prevented because subscription re-execution runs without a refresh queue
+// in its context (TriggerRefresh calls from inside a re-executed subscription
+// handler are no-ops).
+//
+// Keys are variadic strings that form a single composite key, matching the
+// convention used by [RegisterRefreshTrigger] and [TriggerRefresh]. To fire
+// multiple distinct keys, call this method multiple times.
+func (s *Server) TriggerRefresh(keys ...string) {
+	rq := &refreshQueue{keys: []string{compositeKey(keys...)}}
+	s.processRefreshQueue(rq)
 }
