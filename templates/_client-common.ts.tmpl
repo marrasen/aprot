@@ -1630,6 +1630,14 @@ export function useMutation<TArgs extends unknown[], TRes>(
  * are captured in `error` — consumers do not need try/catch.
  */
 export function useStream<TRes>(
+    fn: (client: ApiClient, signal: AbortSignal) => AsyncIterable<TRes>,
+    options?: UseStreamOptions,
+): UseStreamResult<TRes>;
+export function useStream<TArgs extends unknown[], TRes>(
+    fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => AsyncIterable<TRes>,
+    options: UseStreamOptions & { params: TArgs },
+): UseStreamResult<TRes>;
+export function useStream<TRes>(
     fn: (client: ApiClient, signal: AbortSignal, ...args: unknown[]) => AsyncIterable<TRes>,
     options?: UseStreamOptions,
 ): UseStreamResult<TRes> {

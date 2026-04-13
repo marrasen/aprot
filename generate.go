@@ -237,6 +237,13 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return strings.Join(parts, ", ")
 	},
+	"paramTypes": func(params []paramData) string {
+		var parts []string
+		for _, p := range params {
+			parts = append(parts, p.Type)
+		}
+		return strings.Join(parts, ", ")
+	},
 	"paramArray": func(params []paramData) string {
 		var parts []string
 		for _, p := range params {

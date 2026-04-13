@@ -91,7 +91,11 @@ export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}
         (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
         [],
     );
-    return useStream<{{.ResponseType}}>(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
 }
 {{- else if .IsStream2}}
 /**
@@ -104,7 +108,11 @@ export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}
         (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
         [],
     );
-    return useStream<[{{.ItemKeyType}}, {{.ResponseType}}]>(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
 }
 {{- else if not (hasParams .Params)}}
 /**
