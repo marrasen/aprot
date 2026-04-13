@@ -567,7 +567,19 @@ export class ApiClient {
                     p.onSettle?.();
                     p.reject(new ApiError(msg.code, msg.message, msg.data));
                     this.notifyLoadingChange();
-                } else if (msg.code === ErrorCode.ConnectionRejected) {
+                    break;
+                }
+                // Preflight errors from a streaming handler arrive as a
+                // regular `error` envelope (not `stream_end`). Terminate the
+                // stream with the error so the for-await loop throws.
+                const stream = this.streams.get(msg.id);
+                if (stream) {
+                    this.streams.delete(msg.id);
+                    stream.end(new ApiError(msg.code, msg.message, msg.data));
+                    this.notifyLoadingChange();
+                    break;
+                }
+                if (msg.code === ErrorCode.ConnectionRejected) {
                     this.manualDisconnect = true;
                     this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message, msg.data));
                     this.transport.disconnect();

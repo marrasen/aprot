@@ -487,7 +487,7 @@ function NumberStreamPanel() {
   // The version bump is folded into the param key so clicking "Restart"
   // forces useStreamNumbers to start a fresh stream even when count/delay
   // are unchanged.
-  const { items, done, error, isLoading, restart } = useStreamNumbers(count, delayMs)
+  const { items, done, error, isLoading, restart, cancel } = useStreamNumbers(count, delayMs)
 
   return (
     <div className="card">
@@ -530,6 +530,9 @@ function NumberStreamPanel() {
           }}
         >
           Restart
+        </button>
+        <button type="button" onClick={cancel} disabled={!isLoading}>
+          Cancel
         </button>
       </div>
 

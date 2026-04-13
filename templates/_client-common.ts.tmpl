@@ -1079,6 +1079,17 @@ export interface UseQueryResult<TRes> {
      * for triggering a side effect and refreshing the query in one call.
      */
     mutate: (action: Promise<unknown> | (() => Promise<unknown>)) => Promise<void>;
+    /**
+     * Cancel any in-flight fetch for this query. The Go handler's
+     * `context.Context` is canceled. `isLoading` flips to `false` and
+     * `data` is left untouched. Useful for long-running query handlers
+     * that stream progress via push events or tasks during execution.
+     *
+     * In cached subscription mode, this only cancels an in-flight
+     * `refetch()`; the underlying shared subscription is unaffected
+     * because other components may depend on it.
+     */
+    cancel: () => void;
 }
 
 /**
@@ -1176,6 +1187,13 @@ export interface UseStreamResult<T> {
     isLoading: boolean;
     /** Manually restart the stream from scratch. Clears `items`. */
     restart: () => void;
+    /**
+     * Stop the stream now without unmounting or changing parameters.
+     * Already-received `items` are preserved, `isLoading` flips to `false`,
+     * and the Go handler's `context.Context` is canceled so it stops
+     * yielding. Call `restart()` afterwards to start a fresh stream.
+     */
+    cancel: () => void;
 }
 {{end}}
 
@@ -1547,6 +1565,23 @@ export function useQuery<TArgs extends unknown[], TRes>(
         }
     }, [fetch, shouldCache]);
 
+    const cancel = useCallback(() => {
+        // Abort any in-flight fetch/refetch. In cached subscription mode the
+        // shared subscription itself is unaffected — only the most recent
+        // imperative refetch is canceled, since other components may share
+        // the cache entry.
+        const controller = abortRef.current;
+        if (controller) {
+            abortRef.current = null;
+            controller.abort();
+        }
+        // The fetch's finally clause skips its setIsLoading(false) when
+        // abortRef no longer points at its own controller, so do it here
+        // to give consumers a synchronous "no longer loading" signal.
+        setIsLoading(false);
+        setLocalLoading(false);
+    }, []);
+
     if (shouldCache) {
         return {
             data: effectiveSnapshot.data,
@@ -1554,10 +1589,11 @@ export function useQuery<TArgs extends unknown[], TRes>(
             isLoading: localLoading || effectiveSnapshot.isLoading,
             refetch,
             mutate,
+            cancel,
         };
     }
 
-    return { data, error, isLoading, refetch, mutate };
+    return { data, error, isLoading, refetch, mutate, cancel };
 }
 
 /**
@@ -1678,7 +1714,12 @@ export function useStream<TRes>(
                 }
             } catch (err) {
                 if (myTick !== tickRef.current) return;
-                if (controller.signal.aborted) return;
+                if (controller.signal.aborted) {
+                    // Cancellation is not an error; flip loading off and
+                    // leave items / error untouched.
+                    setIsLoading(false);
+                    return;
+                }
                 setError(err as Error);
                 setIsLoading(false);
             }
@@ -1695,7 +1736,19 @@ export function useStream<TRes>(
         };
     }, [start]);
 
-    return { items, done, error, isLoading, restart: start };
+    const cancel = useCallback(() => {
+        const controller = abortRef.current;
+        if (controller) {
+            abortRef.current = null;
+            controller.abort();
+        }
+        // Bump the tick so the in-flight async loop's stale-check returns
+        // before it can flip done/error/isLoading on us.
+        tickRef.current++;
+        setIsLoading(false);
+    }, []);
+
+    return { items, done, error, isLoading, restart: start, cancel };
 }
 
 /**
