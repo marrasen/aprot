@@ -379,6 +379,17 @@ type fieldData struct {
 	// is a named struct (e.g., "EventLinkInput"). Used by Zod codegen to look up
 	// the element's generated schema. Empty for primitive elements.
 	ElemTypeName string
+	// Enum is non-nil when the field's type is a registered enum. Zod codegen
+	// uses it to emit z.enum([...]) (string enums) or z.union([z.literal(...),
+	// ...]) (int enums), matching the branded enum type the TS interface
+	// generator emits. Without this, enum fields would fall through to plain
+	// z.string() / z.number().int() and the inferred Zod type would not be
+	// assignable to the generated params type (aprot issue #176).
+	Enum *EnumInfo
+	// ElemEnum is non-nil when the field is a slice or map whose element type
+	// is a registered enum. Zod codegen uses it to emit the enum expression
+	// inside z.array(...) / z.record(...).
+	ElemEnum *EnumInfo
 }
 
 type paramData struct {
@@ -1123,6 +1134,8 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
 			ElemGoKind:   elemGoKind,
 			ElemTypeName: elemTypeName,
+			Enum:         g.lookupEnum(field.Type),
+			ElemEnum:     g.lookupElemEnum(field.Type),
 		})
 	}
 	return fields
@@ -1242,6 +1255,35 @@ func (g *Generator) inferTypeFromMarshalCached(t reflect.Type) *MarshalTSType {
 // struct-field recursion for types whose wire format differs from their Go fields.
 func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 	return g.inferTypeFromMarshalCached(t) != nil || SQLNullTSType(t, g.goTypeToTS) != ""
+}
+
+// lookupEnum returns the registered EnumInfo for t (unwrapping a pointer),
+// or nil if t is not a registered enum. Used by collectInterfaceFields to
+// populate fieldData.Enum so Zod codegen can emit z.enum(...) instead of
+// falling through to z.string() / z.number().int() on the underlying kind
+// (aprot issue #176).
+func (g *Generator) lookupEnum(t reflect.Type) *EnumInfo {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return g.registry.GetEnum(t)
+}
+
+// lookupElemEnum returns the registered EnumInfo for the element type of a
+// slice or map (unwrapping pointers), or nil otherwise. Used by
+// collectInterfaceFields to populate fieldData.ElemEnum.
+func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map {
+		return nil
+	}
+	elem := t.Elem()
+	if elem.Kind() == reflect.Ptr {
+		elem = elem.Elem()
+	}
+	return g.registry.GetEnum(elem)
 }
 
 // elemTypeInfo inspects a slice or map type and returns the element's Go kind
