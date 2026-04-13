@@ -34,4 +34,6 @@ dist/
 example/vanilla/client/static/app.js
 example/react/client/dist/
 e2e/api/
-e2e/.test-server-addr
+
+# e2e server binary built by tests/setup.ts globalSetup (issue #180)
+e2e/server/server
