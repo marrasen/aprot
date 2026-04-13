@@ -331,6 +331,15 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	rq := &refreshQueue{server: c.server}
 	ctx = withRefreshQueue(ctx, rq)
 
+	// For streaming handlers, attach a hooks container so middleware can
+	// register post-iteration callbacks via OnStreamComplete. Unary
+	// handlers never populate the slot; OnStreamComplete is a no-op for
+	// them.
+	var sHooks *streamHooks
+	if info.Kind != HandlerKindUnary {
+		ctx, sHooks = withStreamCompleteHooks(ctx)
+	}
+
 	// Build and execute middleware chain
 	handler := c.server.buildHandler(info)
 	result, err := handler(ctx, req)
@@ -356,7 +365,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	// iter.Seq / iter.Seq2. Drive iteration now that middleware has returned.
 	if info.Kind == HandlerKindStream || info.Kind == HandlerKindStream2 {
 		seqVal, _ := result.(reflect.Value)
-		c.streamIterator(ctx, msg.ID, seqVal, info)
+		c.streamIterator(ctx, msg.ID, seqVal, info, sHooks)
 		c.server.processRefreshQueue(rq)
 		return
 	}
@@ -373,14 +382,25 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 // StreamEndMessage always terminates the stream, carrying an error code
 // only on abnormal termination (handler panic, marshal/send error). Clean
 // client-side cancellation produces an empty StreamEndMessage.
-func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Value, info *HandlerInfo) {
+//
+// After iteration ends — for any reason — any callbacks registered via
+// OnStreamComplete on the request context are invoked with the final
+// cause and the number of items yielded. Cancellation causes surface
+// as the sentinel the context carries (ErrClientCanceled,
+// ErrConnectionClosed, or ErrServerShutdown), so logging middleware
+// can distinguish client disconnect from server shutdown.
+func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Value, info *HandlerInfo, hooks *streamHooks) {
 	if !seq.IsValid() || seq.Kind() == reflect.Func && seq.IsNil() {
 		c.sendStreamEnd(reqID, nil)
+		if hooks != nil {
+			hooks.run(nil, 0)
+		}
 		return
 	}
 
 	yieldType := seq.Type().In(0)
 	var streamErr error
+	itemCount := 0
 	yieldFn := reflect.MakeFunc(yieldType, func(args []reflect.Value) []reflect.Value {
 		if ctx.Err() != nil {
 			return []reflect.Value{reflect.ValueOf(false)}
@@ -399,6 +419,7 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 			streamErr = err
 			return []reflect.Value{reflect.ValueOf(false)}
 		}
+		itemCount++
 		return []reflect.Value{reflect.ValueOf(true)}
 	})
 
@@ -410,6 +431,25 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 		}()
 		seq.Call([]reflect.Value{yieldFn})
 	}()
+
+	// Compute the final cause for the completion hooks. Cancellation
+	// wins over a late transport error because the cancel is the root
+	// reason the handler stopped; we surface the specific CancelReason
+	// (ErrClientCanceled / ErrConnectionClosed / ErrServerShutdown)
+	// rather than a downstream send error caused by the same shutdown.
+	var finalErr error
+	if ctx.Err() != nil {
+		finalErr = context.Cause(ctx)
+	} else if streamErr != nil {
+		finalErr = streamErr
+	}
+
+	// Run hooks before sending the terminal message. Running first
+	// guarantees the log entry reflects the real outcome even if the
+	// transport is already torn down by the time sendStreamEnd fires.
+	if hooks != nil {
+		hooks.run(finalErr, itemCount)
+	}
 
 	// Context cancellation or transport close are clean terminations from
 	// the client's point of view — no error payload on the end message.

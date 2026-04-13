@@ -386,6 +386,55 @@ Cancellation works exactly like any other request: break out of the `for await` 
 
 Streaming handlers are WebSocket/SSE only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
 
+### Middleware and streaming handlers
+
+Middleware sees a streaming handler return as soon as the iterator value is in hand — *not* after every row has been streamed. For unary handlers that's the normal post-handler hook point; for streams, the duration and success you see at that moment reflect the time it took to produce the iterator, not the time to drain it. To observe the real end of a stream (duration, item count, cancellation cause, panic), register a callback via `aprot.OnStreamComplete(ctx, fn)`:
+
+```go
+func Logging(next aprot.Handler) aprot.Handler {
+    return func(ctx context.Context, req *aprot.Request) (any, error) {
+        start := time.Now()
+        aprot.OnStreamComplete(ctx, func(err error, items int) {
+            slog.Info("stream done",
+                "method", req.Method,
+                "dur", time.Since(start),
+                "items", items,
+                "err", err)
+        })
+        result, err := next(ctx, req)
+        if info := aprot.HandlerInfoFromContext(ctx); info != nil &&
+            info.Kind != aprot.HandlerKindUnary {
+            // Streaming handler: the hook above will fire when iteration
+            // finishes. Preflight errors (handler returned (nil, err)) never
+            // invoke the hook — log them here instead.
+            if err != nil {
+                slog.Error("stream preflight error",
+                    "method", req.Method, "dur", time.Since(start), "err", err)
+            }
+            return result, err
+        }
+        slog.Info("unary done",
+            "method", req.Method, "dur", time.Since(start), "err", err)
+        return result, err
+    }
+}
+```
+
+The `err` passed to the hook distinguishes every termination path:
+
+| Termination | `err` value |
+|---|---|
+| Clean completion (iterator returned normally) | `nil` |
+| Client canceled (`break`, `AbortSignal`, `cancel()`) | `aprot.ErrClientCanceled` |
+| Client disconnected mid-stream | `aprot.ErrConnectionClosed` |
+| Server shutdown | `aprot.ErrServerShutdown` |
+| Handler panicked mid-stream | wrapped recover value |
+| Transport send failure | underlying transport error |
+
+Use `errors.Is(err, aprot.ErrClientCanceled)` etc. to distinguish. The hook also receives `items int` — the number of elements successfully yielded to the client (for `iter.Seq2`, each `(key, value)` pair counts as one).
+
+`OnStreamComplete` is a no-op on a unary handler's context — the hooks slot is only populated when the dispatcher sees a streaming return type. Middleware that calls it on every request (as in the example above) works uniformly across both.
+
 ## Validation
 
 Add `validate` struct tags to request structs and enable validation on the registry. Validation is opt-in — nothing changes unless you call `SetValidator`.
