@@ -94,15 +94,26 @@ func TestFieldToZod(t *testing.T) {
 		{"string required + max keeps min(1)", fieldData{GoType: "string", Type: "string", ValidateTag: "required,max=50"}, "z.string().min(1).max(50)"},
 		{"int required no min(1)", fieldData{GoType: "int", Type: "number", ValidateTag: "required,gte=1"}, "z.number().int().min(1)"},
 
-		// Issue 1 (#163): validate-tag omitempty on strings wraps with empty-literal union
-		{"string omitempty url max", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty,url,max=500"}, `z.union([z.literal(""), z.string().url().max(500)]).optional()`},
-		{"string omitempty alone", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty"}, `z.union([z.literal(""), z.string()]).optional()`},
-		{"string omitempty email", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty,email"}, `z.union([z.literal(""), z.string().email()]).optional()`},
-		// Non-string kinds just get .optional(), no union wrap
-		{"int omitempty gte", fieldData{GoType: "int", Type: "number", ValidateTag: "omitempty,gte=1"}, "z.number().int().min(1).optional()"},
-		{"bool omitempty", fieldData{GoType: "bool", Type: "boolean", ValidateTag: "omitempty"}, "z.boolean().optional()"},
-		// json-omitempty (already sets optional=true) on a string without validate omitempty keeps plain .optional()
+		// Issue 1 (#163): validate-tag omitempty on strings wraps with empty-literal union.
+		// Issue #178: validate-omitempty alone does NOT force .optional() — it only tells
+		// the Go validator to skip rules on the zero value. The wire still always carries
+		// the field, matching the TS interface generator's view. Optionality is driven by
+		// f.Optional (pointer / json:,omitempty), which isOptional also uses.
+		{"string omitempty url max", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty,url,max=500"}, `z.union([z.literal(""), z.string().url().max(500)])`},
+		{"string omitempty alone", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty"}, `z.union([z.literal(""), z.string()])`},
+		{"string omitempty email", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty,email"}, `z.union([z.literal(""), z.string().email()])`},
+		// Non-string kinds: no union wrap, no .optional() unless f.Optional is set separately.
+		{"int omitempty gte", fieldData{GoType: "int", Type: "number", ValidateTag: "omitempty,gte=1"}, "z.number().int().min(1)"},
+		{"bool omitempty", fieldData{GoType: "bool", Type: "boolean", ValidateTag: "omitempty"}, "z.boolean()"},
+		// f.Optional (pointer or json:,omitempty) still drives .optional() on its own.
 		{"pointer string no validate omitempty", fieldData{GoType: "string", Type: "string", Optional: true}, "z.string().optional()"},
+		// Issue #178 regression: pointer + validate-omitempty stacks both the empty-literal
+		// wrap and .optional(). The pointer carries json-level optionality (f.Optional=true),
+		// the validate tag still contributes the empty-string tolerance.
+		{"pointer string with validate omitempty", fieldData{GoType: "string", Type: "string", Optional: true, ValidateTag: "omitempty,url,max=500"}, `z.union([z.literal(""), z.string().url().max(500)]).optional()`},
+		// Same story for json:,omitempty on a non-pointer field — f.Optional is true because
+		// isOptional sees the json tag, so .optional() is retained.
+		{"json omitempty string with validate omitempty", fieldData{GoType: "string", Type: "string", Optional: true, ValidateTag: "omitempty,email"}, `z.union([z.literal(""), z.string().email()]).optional()`},
 
 		// Issue 3 (#163): SQLNullKind drives nullable base + constraints
 		{"sql NullString", fieldData{GoType: "struct", Type: "string | null", SQLNullKind: "string"}, "z.string().nullable()"},
@@ -152,6 +163,11 @@ func TestFieldToZod(t *testing.T) {
 		{
 			"string enum with omitempty",
 			fieldData{GoType: "string", Type: "TargetTypeType", ValidateTag: "omitempty", Enum: stringEnumFixture("TargetType", "event", "post")},
+			`z.union([z.literal(""), z.enum(["event", "post"])])`,
+		},
+		{
+			"pointer string enum with omitempty",
+			fieldData{GoType: "string", Type: "TargetTypeType", Optional: true, ValidateTag: "omitempty", Enum: stringEnumFixture("TargetType", "event", "post")},
 			`z.union([z.literal(""), z.enum(["event", "post"])]).optional()`,
 		},
 		{
@@ -422,8 +438,10 @@ func TestZodGeneration_PilotQuirks(t *testing.T) {
 	}{
 		// Issue 2: required,min=2,max=50 emits .min(2).max(50), not .min(1).min(2).max(50)
 		{"name: z.string().min(2).max(50)", "Name field: no redundant .min(1)"},
-		// Issue 1: omitempty,url,max=500 on string wraps in empty-literal union and appends .optional()
-		{`imageUrl: z.union([z.literal(""), z.string().url().max(500)]).optional()`, "ImageURL: empty-literal union + optional"},
+		// Issue 1 + #178: omitempty,url,max=500 on a non-pointer string wraps in the
+		// empty-literal union but does NOT append .optional() — optionality is driven
+		// by pointer / json:,omitempty alone, matching the TS interface generator.
+		{`imageUrl: z.union([z.literal(""), z.string().url().max(500)])`, "ImageURL: empty-literal union, no .optional()"},
 		// Issue 3: sql.NullInt64 → z.number().int().nullable()
 		{"parentId: z.number().int().nullable()", "ParentID: nullable int base"},
 		// Issue 3 + existing constraint: sql.NullString with validate max=500 → z.string().max(500).nullable()
@@ -442,6 +460,12 @@ func TestZodGeneration_PilotQuirks(t *testing.T) {
 	// Regression: no .any() fallthrough for sql.Null fields (Issue 3 fix applies)
 	if strings.Contains(schemaFile, "parentId: z.any()") || strings.Contains(schemaFile, "bio: z.any()") {
 		t.Error("sql.Null* fields should not fall through to z.any()")
+	}
+	// Regression (#178): non-pointer validate-omitempty string must not grow a
+	// trailing .optional() — isOptional treats it as required and the Zod
+	// inferred type has to match.
+	if strings.Contains(schemaFile, `imageUrl: z.union([z.literal(""), z.string().url().max(500)]).optional()`) {
+		t.Error("#178: validate-omitempty alone should not append .optional() on a non-pointer string field")
 	}
 }
 
@@ -528,8 +552,9 @@ func TestZodGeneration_EnumFields(t *testing.T) {
 	}{
 		// Required string enum: plain z.enum([...]) literal, no .min(1) noise.
 		{`target: z.enum(["event", "post", "comment"])`, "Target: string enum"},
-		// Optional+omitempty string enum: empty-literal union wrap + .optional().
-		{`opt: z.union([z.literal(""), z.enum(["event", "post", "comment"])]).optional()`, "Opt: string enum with omitempty wrap"},
+		// validate-omitempty string enum: empty-literal union wrap, no .optional()
+		// since the Go field is a non-pointer string (#178).
+		{`opt: z.union([z.literal(""), z.enum(["event", "post", "comment"])])`, "Opt: string enum with omitempty wrap"},
 		// Slice of string enum → z.array(z.enum([...])).
 		{`related: z.array(z.enum(["event", "post", "comment"]))`, "Related: slice of string enum"},
 		// Int enum → z.union of literals.

@@ -36,11 +36,18 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 		isNullable = true
 	}
 
-	// Issue 1 (#163): validate-tag omitempty forces .optional(). For string
-	// kind, also wrap the chain in z.union([z.literal(""), ...]) so empty
-	// strings pass — go-playground/validator skips subsequent rules on the
-	// zero value ("" for strings), and client forms almost always emit ""
-	// rather than undefined.
+	// Issue 1 (#163): validate-tag omitempty on strings wraps the chain in
+	// z.union([z.literal(""), ...]) so empty strings pass the schema — the
+	// go-playground/validator skips subsequent rules on the zero value ("")
+	// and client forms almost always emit "" rather than undefined.
+	//
+	// Issue #178: validate-omitempty does NOT imply Zod .optional(). It only
+	// tells the Go validator to skip rules on the zero value; a non-pointer,
+	// non-json-omitempty field is still always marshaled to the wire. The TS
+	// interface generator (isOptional) agrees — it only flags pointer /
+	// json:,omitempty fields as optional, so Zod must do the same to keep
+	// z.infer assignable to the generated params type. Optionality stays
+	// gated on f.Optional alone.
 	hasValidateOmitempty := false
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -49,9 +56,6 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 		}
 	}
 	optional := f.Optional
-	if hasValidateOmitempty {
-		optional = true
-	}
 
 	// Issue #176: registered enum fields emit z.enum([...]) (string) or
 	// z.union([z.literal(...), ...]) (int) so z.infer matches the branded
