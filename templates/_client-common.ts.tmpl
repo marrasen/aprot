@@ -836,6 +836,29 @@ export interface UseQueryOptions {
      * Override the global default with {@link setQueryCacheEnabled}.
      */
     cache?: boolean;
+    /**
+     * When `true` (default), the hook keeps rendering the previously fetched
+     * `data` while a parameter change is in flight, instead of flashing
+     * `data: null` between the old and new cache entries.
+     *
+     * Cached subscriptions are keyed by the JSON of their params, so changing
+     * params (e.g. clicking a date-picker arrow) switches the hook to a fresh
+     * cache entry whose initial snapshot has `data: null, isLoading: true`.
+     * Without this option, every param-driven component would flash an empty
+     * state for a few frames on every change.
+     *
+     * The kept-data is held in a per-hook-instance ref, not in the shared
+     * cache, so it never leaks across components. `isLoading` and `error`
+     * always reflect the CURRENT cache entry, so you can still tell whether
+     * a refresh is in flight or has failed.
+     *
+     * Set to `false` to opt back into the old "flash null while transitioning"
+     * behaviour — for instance if a consumer reads structural fields off
+     * `data` that would no longer match the current params.
+     *
+     * Only applies in subscription mode with caching enabled.
+     */
+    keepPreviousData?: boolean;
     /** @internal Subscription metadata for auto-refresh. */
     _subscribe?: { method: string; params: unknown[] };
 }
@@ -1076,6 +1099,47 @@ function subscribeCached<T>(
 }
 
 /**
+ * Given the current cached snapshot and a ref holding the last snapshot this
+ * hook instance saw that had non-null data, return an "effective" snapshot
+ * that keeps the previous data visible while a new subscription loads. This
+ * is the core of {@link UseQueryOptions.keepPreviousData}.
+ *
+ * Subscriptions are keyed by method + JSON-encoded params in the shared
+ * cache. When a hook's params change, `useSyncExternalStore` switches to a
+ * fresh cache entry whose initial snapshot has `data: null, isLoading: true`.
+ * Without this selector, param-driven components flash an empty state for a
+ * few frames on every change — see issue #181 and the zeit "Logs by day"
+ * flash that triggered this fix.
+ *
+ * The selector is split out so it's unit-testable without React or a running
+ * aprot server. The only mutation is to the passed-in ref, which represents
+ * per-hook-instance state.
+ */
+function selectWithPreviousData<T>(
+    previousRef: { current: SubscriptionSnapshot<T> | null },
+    snapshot: SubscriptionSnapshot<T>,
+): SubscriptionSnapshot<T> {
+    if (snapshot.data !== null) {
+        // Fresh data landed — update the ref and return the snapshot as-is.
+        previousRef.current = snapshot;
+        return snapshot;
+    }
+    if (previousRef.current && previousRef.current.data !== null) {
+        // No current data yet, but we have a previous snapshot. Present the
+        // kept data with the CURRENT snapshot's isLoading and error so the
+        // consumer can still tell whether a refresh is in flight or has
+        // failed, and surface the error via QueryErrors / Alert.
+        return {
+            data: previousRef.current.data,
+            error: snapshot.error,
+            isLoading: snapshot.isLoading,
+        };
+    }
+    // First mount, no previous data to fall back on.
+    return snapshot;
+}
+
+/**
  * Push a new snapshot into a shared subscription cache entry and notify all
  * listeners. Used by `useQuery.refetch()` in cached mode to publish manually
  * fetched data so every subscriber across components sees the update --
@@ -1155,6 +1219,19 @@ export function useQuery<TArgs extends unknown[], TRes>(
         cacheStore ? cacheStore.subscribe : noopSubscribe,
         cacheStore ? cacheStore.getSnapshot : () => defaultSnapshot.current,
     );
+
+    // Stale-while-revalidate across cache-key transitions. Holds the most
+    // recent snapshot this hook instance has seen that had non-null data.
+    // When params change, the new cache entry starts empty (data: null,
+    // isLoading: true); without this fallback the consumer would see data
+    // flash to null for a few frames. Per-hook-instance (useRef), so it
+    // never leaks between components. Computed on every render so the
+    // returned snapshot always reflects the current cache state.
+    const previousSnapshotRef = useRef<SubscriptionSnapshot<TRes> | null>(null);
+    const keepPreviousData = options?.keepPreviousData ?? true;
+    const effectiveSnapshot = (shouldCache && keepPreviousData)
+        ? selectWithPreviousData<TRes>(previousSnapshotRef, cachedSnapshot)
+        : cachedSnapshot;
 
     // Local state for mutate/refetch — per-component, never shared via cache.
     const [localLoading, setLocalLoading] = useState(false);
@@ -1276,9 +1353,9 @@ export function useQuery<TArgs extends unknown[], TRes>(
 
     if (shouldCache) {
         return {
-            data: cachedSnapshot.data,
-            error: localError ?? cachedSnapshot.error,
-            isLoading: localLoading || cachedSnapshot.isLoading,
+            data: effectiveSnapshot.data,
+            error: localError ?? effectiveSnapshot.error,
+            isLoading: localLoading || effectiveSnapshot.isLoading,
             refetch,
             mutate,
         };
