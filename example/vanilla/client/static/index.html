@@ -132,6 +132,38 @@
         <div id="progressText" class="progress-text">Ready</div>
     </div>
     <div class="card">
+        <h2>Streaming Numbers (iter.Seq)</h2>
+        <p style="color: #666; font-size: 13px; margin: 0 0 10px 0;">
+            The Go handler returns <code>iter.Seq[*StreamNumberItem]</code>,
+            yielding rows one at a time. The generated <code>numbers()</code>
+            function returns <code>AsyncIterable&lt;StreamNumberItem&gt;</code>;
+            this UI iterates with <code>for await</code> and appends each row
+            to the table as it arrives.
+        </p>
+        <div class="form-group" style="display: flex; gap: 12px; align-items: flex-end;">
+            <div>
+                <label>Rows</label>
+                <input type="number" id="streamCount" value="8" min="0" max="100" style="width: 80px;">
+            </div>
+            <div>
+                <label>Delay (ms)</label>
+                <input type="number" id="streamDelay" value="400" min="0" max="2000" style="width: 100px;">
+            </div>
+            <button id="streamStartBtn" onclick="startNumbersStream()">Start</button>
+            <button id="streamCancelBtn" class="danger" onclick="cancelNumbersStream()" disabled>Cancel</button>
+        </div>
+        <div id="streamStatus" style="margin-top: 10px; font-size: 13px; color: #666;">Idle</div>
+        <table id="streamTable" style="width: 100%; margin-top: 8px; font-size: 13px; border-collapse: collapse;">
+            <thead>
+                <tr style="text-align: left; border-bottom: 1px solid #ddd;">
+                    <th style="padding: 4px 8px;">#</th>
+                    <th style="padding: 4px 8px;">Label</th>
+                </tr>
+            </thead>
+            <tbody id="streamTbody"></tbody>
+        </table>
+    </div>
+    <div class="card">
         <h2>Event Log</h2>
         <button onclick="clearLog()">Clear Log</button>
         <div id="log" class="log"></div>

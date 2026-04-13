@@ -2,10 +2,10 @@ import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import { wsUrl } from './helpers';
 import { ApiClient, ApiError } from '../api/client';
 import {
-    streamNumbers,
-    streamFailing,
-    streamPairs,
-    streamPanics,
+    numbers,
+    failing,
+    pairs,
+    panics,
 } from '../api/streaming-handlers';
 import type { StreamNumberItem } from '../api/streaming-handlers';
 
@@ -23,7 +23,7 @@ describe('Streaming handlers (iter.Seq)', () => {
 
     test('iter.Seq handler yields items in order via for-await', async () => {
         const items: StreamNumberItem[] = [];
-        for await (const item of streamNumbers(client, 5)) {
+        for await (const item of numbers(client, 5, 0)) {
             items.push(item);
         }
         expect(items).toHaveLength(5);
@@ -39,7 +39,7 @@ describe('Streaming handlers (iter.Seq)', () => {
 
     test('breaking out of for-await cancels the server-side stream', async () => {
         const items: StreamNumberItem[] = [];
-        for await (const item of streamNumbers(client, 1000)) {
+        for await (const item of numbers(client, 1000, 0)) {
             items.push(item);
             if (items.length === 3) break;
         }
@@ -53,7 +53,7 @@ describe('Streaming handlers (iter.Seq)', () => {
     test('preflight error is thrown on first iteration', async () => {
         await expect(async () => {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            for await (const _ of streamFailing(client)) {
+            for await (const _ of failing(client)) {
                 // should throw before the first item
             }
         }).rejects.toBeInstanceOf(ApiError);
@@ -63,7 +63,7 @@ describe('Streaming handlers (iter.Seq)', () => {
         const items: number[] = [];
         let caught: unknown = null;
         try {
-            for await (const n of streamPanics(client)) {
+            for await (const n of panics(client)) {
                 items.push(n);
             }
         } catch (err) {
@@ -74,11 +74,11 @@ describe('Streaming handlers (iter.Seq)', () => {
     });
 
     test('iter.Seq2 handler yields [key, value] tuples', async () => {
-        const pairs: [string, number][] = [];
-        for await (const pair of streamPairs(client)) {
-            pairs.push(pair);
+        const collected: [string, number][] = [];
+        for await (const pair of pairs(client)) {
+            collected.push(pair);
         }
-        expect(pairs).toEqual([
+        expect(collected).toEqual([
             ['alpha', 1],
             ['beta', 2],
             ['gamma', 3],
@@ -88,8 +88,10 @@ describe('Streaming handlers (iter.Seq)', () => {
     test('AbortSignal aborts an in-flight stream', async () => {
         const controller = new AbortController();
         const items: StreamNumberItem[] = [];
-        const iter = streamNumbers(client, 1000, { signal: controller.signal });
-        setTimeout(() => controller.abort(), 20);
+        // Give the handler a small per-item delay so we can reliably abort
+        // mid-stream before all items have arrived.
+        const iter = numbers(client, 1000, 5, { signal: controller.signal });
+        setTimeout(() => controller.abort(), 50);
         try {
             for await (const item of iter) {
                 items.push(item);
@@ -105,14 +107,14 @@ describe('Streaming handlers (iter.Seq)', () => {
 
     test('empty count yields zero items and terminates cleanly', async () => {
         const items: StreamNumberItem[] = [];
-        for await (const item of streamNumbers(client, 0)) {
+        for await (const item of numbers(client, 0, 0)) {
             items.push(item);
         }
         expect(items).toHaveLength(0);
     });
 
     test('multiple iterations of the same iterable start independent streams', async () => {
-        const iterable = streamNumbers(client, 3);
+        const iterable = numbers(client, 3, 0);
         const first: number[] = [];
         const second: number[] = [];
         for await (const item of iterable) first.push(item.index);

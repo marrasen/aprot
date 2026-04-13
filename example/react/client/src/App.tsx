@@ -13,7 +13,7 @@ import {
   TaskStatus,
 } from './api/handlers'
 import type { TaskStatusType } from './api/handlers'
-import { useStreamNumbers } from './api/streaming-handlers'
+import { useNumbers } from './api/streaming-handlers'
 import type { SharedTaskState } from './api/tasks-handler'
 import { useSharedTasks, cancelSharedTask } from './api/tasks'
 
@@ -485,16 +485,16 @@ function NumberStreamPanel() {
   const [delayMs, setDelayMs] = useState(400)
   const [version, setVersion] = useState(0)
   // The version bump is folded into the param key so clicking "Restart"
-  // forces useStreamNumbers to start a fresh stream even when count/delay
+  // forces useNumbers to start a fresh stream even when count/delay
   // are unchanged.
-  const { items, done, error, isLoading, restart, cancel } = useStreamNumbers(count, delayMs)
+  const { items, done, error, isLoading, restart, cancel } = useNumbers(count, delayMs)
 
   return (
     <div className="card">
       <h2>Streaming Numbers (iter.Seq)</h2>
       <p style={{ marginTop: 0, fontSize: 13, color: '#666' }}>
         The Go handler yields one row at a time with a configurable delay.
-        <code> useStreamNumbers</code> is a generated hook that accumulates rows
+        <code> useNumbers</code> is a generated hook that accumulates rows
         into local state as they arrive — the table grows incrementally
         without waiting for the full response.
       </p>

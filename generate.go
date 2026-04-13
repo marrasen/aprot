@@ -422,19 +422,17 @@ type paramData struct {
 }
 
 type methodData struct {
-	Name           string // short method name (e.g., "CreateUser")
-	WireMethod     string // qualified wire name (e.g., "PublicHandlers.CreateUser")
-	MethodName     string // camelCase function name (e.g., "createUser")
-	HookName       string // React hook name (e.g., "useCreateUser")
-	SubscribeName  string // subscribe function name (e.g., "subscribeCreateUser")
-	StreamName     string // stream function name (e.g., "streamUsers") — only for IsStream/IsStream2
-	StreamHookName string // React hook name for streams (e.g., "useStreamUsers")
-	ResponseType   string // TS type of the response (unary) or per-item type (streams)
-	ItemKeyType    string // TS type of the K in iter.Seq2 — only for IsStream2
-	IsVoid         bool
-	IsStream       bool // handler returns iter.Seq[T]
-	IsStream2      bool // handler returns iter.Seq2[K, V]
-	Params         []paramData
+	Name          string // short method name (e.g., "CreateUser")
+	WireMethod    string // qualified wire name (e.g., "PublicHandlers.CreateUser")
+	MethodName    string // camelCase function name (e.g., "createUser" or "numbers")
+	HookName      string // React hook name (e.g., "useCreateUser" or "useNumbers")
+	SubscribeName string // subscribe function name (e.g., "subscribeCreateUser") — unary only
+	ResponseType  string // TS type of the response (unary) or per-item type (streams)
+	ItemKeyType   string // TS type of the K in iter.Seq2 — only for IsStream2
+	IsVoid        bool
+	IsStream      bool // handler returns iter.Seq[T]
+	IsStream2     bool // handler returns iter.Seq2[K, V]
+	Params        []paramData
 }
 
 type pushEventData struct {
@@ -839,19 +837,17 @@ func (g *Generator) buildMethodData(info *HandlerInfo, wireMethod, shortName str
 	}
 
 	return methodData{
-		Name:           shortName,
-		WireMethod:     wireMethod,
-		MethodName:     g.naming().MethodName(shortName),
-		HookName:       g.naming().HookName(shortName),
-		SubscribeName:  "subscribe" + shortName,
-		StreamName:     "stream" + shortName,
-		StreamHookName: "useStream" + shortName,
-		ResponseType:   respType,
-		ItemKeyType:    keyType,
-		IsVoid:         isVoid,
-		IsStream:       isStream,
-		IsStream2:      isStream2,
-		Params:         g.buildParamData(info, meta),
+		Name:          shortName,
+		WireMethod:    wireMethod,
+		MethodName:    g.naming().MethodName(shortName),
+		HookName:      g.naming().HookName(shortName),
+		SubscribeName: "subscribe" + shortName,
+		ResponseType:  respType,
+		ItemKeyType:   keyType,
+		IsVoid:        isVoid,
+		IsStream:      isStream,
+		IsStream2:     isStream2,
+		Params:        g.buildParamData(info, meta),
 	}
 }
 

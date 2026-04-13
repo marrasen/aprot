@@ -52,12 +52,12 @@ export interface {{.Name}} {
 {{end -}}
 {{range .Methods -}}
 {{- if .IsStream}}
-export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
     return client.requestStream<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 
 {{else if .IsStream2}}
-export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
     return client.requestStream<[{{.ItemKeyType}}, {{.ResponseType}}]>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 
@@ -86,9 +86,9 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
  * The stream restarts when parameters change and cleans up on unmount.
  * See {@link UseStreamResult} for return value details.
  */
-export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<{{.ResponseType}}> {
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
-        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
         [],
     );
 {{- if hasParams .Params}}
@@ -103,9 +103,9 @@ export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}
  * into `items`. The stream restarts when parameters change and cleans up
  * on unmount. See {@link UseStreamResult} for return value details.
  */
-export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<[{{.ItemKeyType}}, {{.ResponseType}}]> {
     const wrappedFn = useCallback(
-        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
         [],
     );
 {{- if hasParams .Params}}

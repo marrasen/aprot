@@ -21,15 +21,25 @@ func NewStreamingHandlers() *StreamingHandlers {
 
 // StreamNumberItem is a single element of the StreamNumbers sequence.
 type StreamNumberItem struct {
-	Index int    `json:"index"`
-	Label string `json:"label"`
+	Index   int    `json:"index"`
+	Label   string `json:"label"`
+	DelayMs int    `json:"delayMs"`
 }
 
-// Numbers yields `count` sequential items with a small delay between
-// each, simulating a server-side generator that produces results over time.
-func (h *StreamingHandlers) Numbers(ctx context.Context, count int) (iter.Seq[*StreamNumberItem], error) {
+// Numbers yields `count` sequential items with a configurable delay between
+// each, simulating a server-side generator that produces results over time
+// (e.g. paging through an upstream API one row at a time). E2E tests pass
+// delayMs=0 for fast runs; UI demos pass a few hundred ms so the table
+// fills row-by-row in a visible way.
+func (h *StreamingHandlers) Numbers(ctx context.Context, count int, delayMs int) (iter.Seq[*StreamNumberItem], error) {
 	if count < 0 {
 		return nil, errors.New("count must be non-negative")
+	}
+	if delayMs < 0 {
+		delayMs = 0
+	}
+	if delayMs > 5000 {
+		delayMs = 5000
 	}
 	return func(yield func(*StreamNumberItem) bool) {
 		for i := 1; i <= count; i++ {
@@ -38,15 +48,16 @@ func (h *StreamingHandlers) Numbers(ctx context.Context, count int) (iter.Seq[*S
 				return
 			default:
 			}
-			if !yield(&StreamNumberItem{Index: i, Label: fmt.Sprintf("item-%d", i)}) {
+			if !yield(&StreamNumberItem{Index: i, Label: fmt.Sprintf("item-%d", i), DelayMs: delayMs}) {
 				return
 			}
-			// Tiny sleep so progressive rendering is observable in demos,
-			// but fast enough that tests stay well under a second.
+			if delayMs == 0 {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(2 * time.Millisecond):
+			case <-time.After(time.Duration(delayMs) * time.Millisecond):
 			}
 		}
 	}, nil

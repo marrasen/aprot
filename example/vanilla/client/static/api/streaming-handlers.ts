@@ -7,25 +7,26 @@ import type { RequestOptions } from './client';
 export interface StreamNumberItem {
     index: number;
     label: string;
+    delayMs: number;
 }
 
 
-export function streamFailing(client: ApiClient, options?: RequestOptions): AsyncIterable<number> {
+export function failing(client: ApiClient, options?: RequestOptions): AsyncIterable<number> {
     return client.requestStream<number>('StreamingHandlers.Failing', [], options);
 }
 
 
-export function streamNumbers(client: ApiClient, count: number, options?: RequestOptions): AsyncIterable<StreamNumberItem> {
-    return client.requestStream<StreamNumberItem>('StreamingHandlers.Numbers', [count], options);
+export function numbers(client: ApiClient, count: number, delayMs: number, options?: RequestOptions): AsyncIterable<StreamNumberItem> {
+    return client.requestStream<StreamNumberItem>('StreamingHandlers.Numbers', [count, delayMs], options);
 }
 
 
-export function streamPairs(client: ApiClient, options?: RequestOptions): AsyncIterable<[string, number]> {
+export function pairs(client: ApiClient, options?: RequestOptions): AsyncIterable<[string, number]> {
     return client.requestStream<[string, number]>('StreamingHandlers.Pairs', [], options);
 }
 
 
-export function streamPanics(client: ApiClient, options?: RequestOptions): AsyncIterable<number> {
+export function panics(client: ApiClient, options?: RequestOptions): AsyncIterable<number> {
     return client.requestStream<number>('StreamingHandlers.Panics', [], options);
 }
 

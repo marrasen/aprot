@@ -15,7 +15,7 @@ export interface StreamRow {
 }
 
 
-export function streamNumbers(client: ApiClient, count: number, delayMs: number, options?: RequestOptions): AsyncIterable<StreamRow> {
+export function numbers(client: ApiClient, count: number, delayMs: number, options?: RequestOptions): AsyncIterable<StreamRow> {
     return client.requestStream<StreamRow>('StreamingHandlers.Numbers', [count, delayMs], options);
 }
 
@@ -26,9 +26,9 @@ export function streamNumbers(client: ApiClient, count: number, delayMs: number,
  * The stream restarts when parameters change and cleans up on unmount.
  * See {@link UseStreamResult} for return value details.
  */
-export function useStreamNumbers(count: number, delayMs: number, options?: UseStreamOptions): UseStreamResult<StreamRow> {
+export function useNumbers(count: number, delayMs: number, options?: UseStreamOptions): UseStreamResult<StreamRow> {
     const wrappedFn = useCallback(
-        (client: ApiClient, signal: AbortSignal, count: number, delayMs: number) => streamNumbers(client, count, delayMs, { signal }),
+        (client: ApiClient, signal: AbortSignal, count: number, delayMs: number) => numbers(client, count, delayMs, { signal }),
         [],
     );
     return useStream(wrappedFn, { ...(options ?? {}), params: [count, delayMs] as [number, number] });

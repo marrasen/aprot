@@ -477,11 +477,11 @@ export class ApiClient {
 }
 {{range .Methods}}
 {{- if .IsStream}}
-export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
     return client.requestStream<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 {{else if .IsStream2}}
-export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
     return client.requestStream<[{{.ItemKeyType}}, {{.ResponseType}}]>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 {{else}}

@@ -358,18 +358,20 @@ func (h *Handlers) ListUsers(ctx context.Context) (iter.Seq[*User], error) {
 ```
 
 ```typescript
-import { streamListUsers } from './api/handlers';
+import { listUsers } from './api/handlers';
 
-for await (const user of streamListUsers(client)) {
+for await (const user of listUsers(client)) {
     appendUserToList(user); // renders each row as it arrives
 }
 ```
 
-React variant — the generated `useStreamListUsers()` hook accumulates items into local state and restarts the stream on parameter change:
+The generated function name and signature reflect the Go method's return type — `iter.Seq[T]` produces `AsyncIterable<T>` instead of `Promise<T>`. There's no naming prefix; consumers see `listUsers()` for both unary and streaming handlers, and TypeScript distinguishes them by return type.
+
+React variant — the generated `useListUsers()` hook accumulates items into local state and restarts the stream on parameter change:
 
 ```tsx
 function UserList() {
-    const { items, done, error, isLoading } = useStreamListUsers();
+    const { items, done, error, isLoading } = useListUsers();
     return (
         <ul>
             {items.map((u) => <li key={u.id}>{u.name}</li>)}
