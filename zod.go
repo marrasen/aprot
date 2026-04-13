@@ -53,6 +53,25 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 		optional = true
 	}
 
+	// Issue #176: registered enum fields emit z.enum([...]) (string) or
+	// z.union([z.literal(...), ...]) (int) so z.infer matches the branded
+	// enum type the TS interface generator emits. Validate constraints like
+	// min/max/email don't apply to enum literals, so we skip them and only
+	// honor nullability, optionality, and the omitempty empty-string wrap.
+	if f.Enum != nil {
+		body := "z." + zodEnumBase(f.Enum)
+		if isNullable {
+			body += ".nullable()"
+		}
+		if hasValidateOmitempty && f.Enum.IsString {
+			body = `z.union([z.literal(""), ` + body + `])`
+		}
+		if optional {
+			body += ".optional()"
+		}
+		return body
+	}
+
 	// Issue 2 (#163): if an explicit min rule is present on a string, skip
 	// the implicit required -> min(1) so we don't emit .min(1).min(N).
 	hasExplicitMin := false
@@ -64,7 +83,7 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 	}
 
 	var chain []string
-	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, knownSchemas))
+	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, f.ElemEnum, knownSchemas))
 
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -98,8 +117,10 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 // zodBaseType returns the base Zod type for a Go kind. For slice and map
 // kinds, elemGoKind/elemTypeName provide the element's type info so the array
 // or record can substitute the element schema (#169) instead of falling
-// through to z.any().
-func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, knownSchemas map[string]bool) string {
+// through to z.any(). elemEnum is non-nil when the slice/map element is a
+// registered enum; in that case zodElemExpr emits z.enum(...) / z.union(...)
+// for the element (#176).
+func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, elemEnum *EnumInfo, knownSchemas map[string]bool) string {
 	switch goKind {
 	case "string":
 		return "string()"
@@ -110,9 +131,9 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 	case "bool":
 		return "boolean()"
 	case "slice":
-		return "array(" + zodElemExpr(elemGoKind, elemTypeName, knownSchemas) + ")"
+		return "array(" + zodElemExpr(elemGoKind, elemTypeName, elemEnum, knownSchemas) + ")"
 	case "map":
-		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, knownSchemas) + ")"
+		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, elemEnum, knownSchemas) + ")"
 	default:
 		// Struct or unknown — use any()
 		return "any()"
@@ -122,7 +143,12 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 // zodElemExpr builds a Zod expression for a slice or map element. Returns
 // "z.any()" when the element type is unknown or unsupported (recursive types,
 // anonymous structs, slices of slices) so callers can wrap it directly.
-func zodElemExpr(elemGoKind string, elemTypeName string, knownSchemas map[string]bool) string {
+// When elemEnum is non-nil, the element is a registered enum and is emitted
+// as z.enum([...]) / z.union([...]) (#176).
+func zodElemExpr(elemGoKind string, elemTypeName string, elemEnum *EnumInfo, knownSchemas map[string]bool) string {
+	if elemEnum != nil {
+		return "z." + zodEnumBase(elemEnum)
+	}
 	switch elemGoKind {
 	case "string":
 		return "z.string()"
@@ -140,6 +166,27 @@ func zodElemExpr(elemGoKind string, elemTypeName string, knownSchemas map[string
 	default:
 		return "z.any()"
 	}
+}
+
+// zodEnumBase returns the Zod expression body (without the leading "z.") for
+// a registered enum. String enums become enum(["a", "b", ...]) so z.infer
+// produces the matching string literal union; int enums become
+// union([z.literal(0), z.literal(1), ...]) so z.infer produces the matching
+// number literal union. (#176)
+func zodEnumBase(info *EnumInfo) string {
+	if info.IsString {
+		parts := make([]string, 0, len(info.Values))
+		for _, v := range info.Values {
+			s, _ := v.Value.(string)
+			parts = append(parts, `"`+s+`"`)
+		}
+		return "enum([" + strings.Join(parts, ", ") + "])"
+	}
+	parts := make([]string, 0, len(info.Values))
+	for _, v := range info.Values {
+		parts = append(parts, fmt.Sprintf("z.literal(%d)", v.Value))
+	}
+	return "union([" + strings.Join(parts, ", ") + "])"
 }
 
 // zodConstraint maps a single validate rule to a Zod chain method.
