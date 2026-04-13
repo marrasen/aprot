@@ -152,10 +152,21 @@
 // deduplicated. [TriggerRefreshNow] flushes the queue immediately — use it in
 // long-running handlers that make observable state transitions over time.
 //
+// From background goroutines, cron jobs, webhook fan-in, or any other code
+// path that runs outside of a request handler, use the [Server.TriggerRefresh]
+// method instead — it flushes immediately and does not require a request
+// context:
+//
+//	go func() {
+//	    for range ticker.C {
+//	        server.TriggerRefresh("users")
+//	    }
+//	}()
+//
 // [RegisterRefreshTrigger] takes variadic strings that form a composite key.
-// It is a no-op when called from a non-subscribe request. [TriggerRefresh] is
-// a no-op outside a request context. Subscriptions are cleaned up
-// automatically on client disconnect.
+// It is a no-op when called from a non-subscribe request. The package-level
+// [TriggerRefresh] is a no-op outside a request context. Subscriptions are
+// cleaned up automatically on client disconnect.
 //
 // # Error Handling
 //
