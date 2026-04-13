@@ -3136,3 +3136,72 @@ func TestGenerateSharedFileCrossPackageImports(t *testing.T) {
 		t.Errorf("gentestpkg.ts must not import from itself, got:\n%s", gentestpkgShared)
 	}
 }
+
+// TrickyStatus exercises enum values whose capitalized forms are not valid
+// TypeScript identifiers: empty string, a hyphenated value, and a
+// leading-digit value. The codegen must still produce syntactically valid TS.
+type TrickyStatus string
+
+const (
+	TrickyStatusNone      TrickyStatus = ""
+	TrickyStatusActive    TrickyStatus = "active"
+	TrickyStatusKebabCase TrickyStatus = "kebab-case"
+	TrickyStatusLeadDigit TrickyStatus = "123abc"
+)
+
+func TrickyStatusValues() []TrickyStatus {
+	return []TrickyStatus{
+		TrickyStatusNone,
+		TrickyStatusActive,
+		TrickyStatusKebabCase,
+		TrickyStatusLeadDigit,
+	}
+}
+
+type TrickyEnumHandlers struct{}
+
+func (h *TrickyEnumHandlers) Ping(ctx context.Context) error { return nil }
+
+// TestGenerateEnum_NonIdentifierKeys is a regression for the codegen producing
+// invalid TypeScript when an enum value's derived name is not a valid JS
+// identifier. The empty-string case renders literally as `: "",` (missing key,
+// TS1005 syntax error); hyphens and leading digits share the same failure
+// mode. Fix: quoted-string keys for any derived name that is not a valid
+// identifier.
+func TestGenerateEnum_NonIdentifierKeys(t *testing.T) {
+	registry := NewRegistry()
+	handler := &TrickyEnumHandlers{}
+	registry.Register(handler)
+	registry.RegisterEnumFor(handler, TrickyStatusValues())
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	// The bare `\n    : "",` form (no key before the colon) is a TS syntax
+	// error. Match it on its own line so the check doesn't false-positive on
+	// the valid `    "": "",` form, which contains `: ""` as a substring.
+	if strings.Contains(output, "\n    : \"\",") {
+		t.Errorf("generated TS has bare-colon entry (missing key), output:\n%s", output)
+	}
+
+	// Valid identifiers still render unquoted.
+	if !strings.Contains(output, `Active: "active"`) {
+		t.Errorf("expected valid identifier to render bare, got:\n%s", output)
+	}
+
+	// Non-identifier names render as quoted string keys.
+	wantQuoted := []string{
+		`"": ""`,
+		`"Kebab-case": "kebab-case"`,
+		`"123abc": "123abc"`,
+	}
+	for _, want := range wantQuoted {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %s in generated TS, got:\n%s", want, output)
+		}
+	}
+}
