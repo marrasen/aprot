@@ -256,6 +256,22 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return false
 	},
+	"hasStreamMethods": func(methods []methodData) bool {
+		for _, m := range methods {
+			if m.IsStream || m.IsStream2 {
+				return true
+			}
+		}
+		return false
+	},
+	"hasNonStreamMethods": func(methods []methodData) bool {
+		for _, m := range methods {
+			if !m.IsStream && !m.IsStream2 {
+				return true
+			}
+		}
+		return false
+	},
 }).ParseFS(templateFS, "templates/*.tmpl"))
 
 // OutputMode specifies the type of client code to generate.
@@ -399,14 +415,19 @@ type paramData struct {
 }
 
 type methodData struct {
-	Name          string // short method name (e.g., "CreateUser")
-	WireMethod    string // qualified wire name (e.g., "PublicHandlers.CreateUser")
-	MethodName    string // camelCase function name (e.g., "createUser")
-	HookName      string // React hook name (e.g., "useCreateUser")
-	SubscribeName string // subscribe function name (e.g., "subscribeCreateUser")
-	ResponseType  string
-	IsVoid        bool
-	Params        []paramData
+	Name           string // short method name (e.g., "CreateUser")
+	WireMethod     string // qualified wire name (e.g., "PublicHandlers.CreateUser")
+	MethodName     string // camelCase function name (e.g., "createUser")
+	HookName       string // React hook name (e.g., "useCreateUser")
+	SubscribeName  string // subscribe function name (e.g., "subscribeCreateUser")
+	StreamName     string // stream function name (e.g., "streamUsers") — only for IsStream/IsStream2
+	StreamHookName string // React hook name for streams (e.g., "useStreamUsers")
+	ResponseType   string // TS type of the response (unary) or per-item type (streams)
+	ItemKeyType    string // TS type of the K in iter.Seq2 — only for IsStream2
+	IsVoid         bool
+	IsStream       bool // handler returns iter.Seq[T]
+	IsStream2      bool // handler returns iter.Seq2[K, V]
+	Params         []paramData
 }
 
 type pushEventData struct {
@@ -696,6 +717,9 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			} else {
 				g.collectNestedType(info.ResponseType)
 			}
+			if info.Kind == HandlerKindStream2 && info.StreamKeyType != nil {
+				g.collectNestedType(info.StreamKeyType)
+			}
 		}
 		for _, event := range group.PushEvents {
 			g.collectType(event.DataType)
@@ -733,22 +757,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 
 	for _, qualifiedName := range names {
 		info := handlers[qualifiedName]
-		shortName := info.Name
-		isVoid := info.ResponseType == voidResponseType
-		respType := "void"
-		if !isVoid {
-			respType = g.goTypeToTS(info.ResponseType)
-		}
-		data.Methods = append(data.Methods, methodData{
-			Name:          shortName,
-			WireMethod:    qualifiedName,
-			MethodName:    g.naming().MethodName(shortName),
-			HookName:      g.naming().HookName(shortName),
-			SubscribeName: "subscribe" + shortName,
-			ResponseType:  respType,
-			IsVoid:        isVoid,
-			Params:        g.buildParamData(info, meta),
-		})
+		data.Methods = append(data.Methods, g.buildMethodData(info, qualifiedName, info.Name, meta))
 	}
 
 	// Build push events from all groups
@@ -799,6 +808,46 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	return err
 }
 
+// buildMethodData constructs methodData for a single handler, handling unary
+// and streaming (iter.Seq / iter.Seq2) return shapes. For streaming handlers
+// ResponseType holds the per-item TS type (the template adds AsyncIterable).
+func (g *Generator) buildMethodData(info *HandlerInfo, wireMethod, shortName string, meta *sourceMeta) methodData {
+	isStream := info.Kind == HandlerKindStream
+	isStream2 := info.Kind == HandlerKindStream2
+	isVoid := !isStream && !isStream2 && info.ResponseType == voidResponseType
+
+	var respType string
+	switch {
+	case isVoid:
+		respType = "void"
+	case isStream, isStream2:
+		respType = g.goTypeToTS(info.ResponseType)
+	default:
+		respType = g.goTypeToTS(info.ResponseType)
+	}
+
+	var keyType string
+	if isStream2 && info.StreamKeyType != nil {
+		keyType = g.goTypeToTS(info.StreamKeyType)
+	}
+
+	return methodData{
+		Name:           shortName,
+		WireMethod:     wireMethod,
+		MethodName:     g.naming().MethodName(shortName),
+		HookName:       g.naming().HookName(shortName),
+		SubscribeName:  "subscribe" + shortName,
+		StreamName:     "stream" + shortName,
+		StreamHookName: "useStream" + shortName,
+		ResponseType:   respType,
+		ItemKeyType:    keyType,
+		IsVoid:         isVoid,
+		IsStream:       isStream,
+		IsStream2:      isStream2,
+		Params:         g.buildParamData(info, meta),
+	}
+}
+
 func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) templateData {
 	data := templateData{
 		StructName: group.Name,
@@ -829,21 +878,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 
 	for _, name := range names {
 		info := group.Handlers[name]
-		isVoid := info.ResponseType == voidResponseType
-		respType := "void"
-		if !isVoid {
-			respType = g.goTypeToTS(info.ResponseType)
-		}
-		data.Methods = append(data.Methods, methodData{
-			Name:          name,
-			WireMethod:    group.Name + "." + name,
-			MethodName:    g.naming().MethodName(name),
-			HookName:      g.naming().HookName(name),
-			SubscribeName: "subscribe" + name,
-			ResponseType:  respType,
-			IsVoid:        isVoid,
-			Params:        g.buildParamData(info, meta),
-		})
+		data.Methods = append(data.Methods, g.buildMethodData(info, group.Name+"."+name, name, meta))
 	}
 
 	// Build push events
@@ -1183,6 +1218,12 @@ func (g *Generator) collectGroupTypes(group *HandlerGroup) {
 			g.collectType(info.ResponseType)
 		} else {
 			g.collectNestedType(info.ResponseType)
+		}
+		// Streaming handlers using iter.Seq2[K, V] expose K as the tuple's
+		// first element in TS; collect it so shared types and enums referenced
+		// via K are emitted alongside the usual response types.
+		if info.Kind == HandlerKindStream2 && info.StreamKeyType != nil {
+			g.collectNestedType(info.StreamKeyType)
 		}
 	}
 	for _, event := range group.PushEvents {

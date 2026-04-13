@@ -288,5 +288,13 @@ func (m *mockTransport) Send(data []byte) error {
 	}
 	return nil
 }
+func (m *mockTransport) SendCtx(ctx context.Context, data []byte) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return m.Send(data)
+}
 func (m *mockTransport) Close() error           { return nil }
 func (m *mockTransport) CloseGracefully() error { return nil }

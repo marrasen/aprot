@@ -36,6 +36,7 @@ export interface UpdateTodoRequest {
     done?: boolean;
 }
 
+
 export function createTodo(client: ApiClient, req: CreateTodoRequest, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.CreateTodo', [req], options);
 }
@@ -43,6 +44,7 @@ export function createTodo(client: ApiClient, req: CreateTodoRequest, options?: 
 export function subscribeCreateTodo(client: ApiClient, req: CreateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<Todo>('Todos.CreateTodo', [req], callback, onError);
 }
+
 
 export function deleteTodo(client: ApiClient, id: string, options?: RequestOptions): Promise<void> {
     return client.request<void>('Todos.DeleteTodo', [id], options);
@@ -52,6 +54,7 @@ export function subscribeDeleteTodo(client: ApiClient, id: string, callback: (da
     return client.subscribe<void>('Todos.DeleteTodo', [id], callback, onError);
 }
 
+
 export function getTodo(client: ApiClient, id: string, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.GetTodo', [id], options);
 }
@@ -60,6 +63,7 @@ export function subscribeGetTodo(client: ApiClient, id: string, callback: (data:
     return client.subscribe<Todo>('Todos.GetTodo', [id], callback, onError);
 }
 
+
 export function listTodos(client: ApiClient, options?: RequestOptions): Promise<ListTodosResponse> {
     return client.request<ListTodosResponse>('Todos.ListTodos', [], options);
 }
@@ -67,6 +71,7 @@ export function listTodos(client: ApiClient, options?: RequestOptions): Promise<
 export function subscribeListTodos(client: ApiClient, callback: (data: ListTodosResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<ListTodosResponse>('Todos.ListTodos', [], callback, onError);
 }
+
 
 export function updateTodo(client: ApiClient, id: string, req: UpdateTodoRequest, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.UpdateTodo', [id, req], options);

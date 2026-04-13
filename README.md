@@ -136,6 +136,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 
 - **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
 - **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
+- **Streaming handlers** — return `iter.Seq[T]` / `iter.Seq2[K, V]` from Go and the generated client exposes `AsyncIterable<T>`, so UIs can populate lists item-by-item as results arrive
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
 - **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
 - **Middleware** — server-level and per-handler middleware chains
@@ -328,6 +329,60 @@ onUserCreatedEvent(client, (event) => {
     console.log('User created:', event);
 });
 ```
+
+## Streaming Handlers
+
+Handlers can return `iter.Seq[T]` (Go 1.23+) and each yielded value is delivered to the client as a separate websocket message. The generated TypeScript function returns an `AsyncIterable<T>`, so you can consume results with `for await` and render them as they arrive — ideal for progressive list population, large result sets, or any handler whose output is naturally lazy.
+
+```go
+import "iter"
+
+type User struct {
+    ID   string `json:"id"`
+    Name string `json:"name"`
+}
+
+func (h *Handlers) ListUsers(ctx context.Context) (iter.Seq[*User], error) {
+    return func(yield func(*User) bool) {
+        for rows.Next() {
+            var u User
+            if err := rows.Scan(&u.ID, &u.Name); err != nil {
+                return
+            }
+            if !yield(&u) {
+                return // client canceled
+            }
+        }
+    }, nil
+}
+```
+
+```typescript
+import { streamListUsers } from './api/handlers';
+
+for await (const user of streamListUsers(client)) {
+    appendUserToList(user); // renders each row as it arrives
+}
+```
+
+React variant — the generated `useStreamListUsers()` hook accumulates items into local state and restarts the stream on parameter change:
+
+```tsx
+function UserList() {
+    const { items, done, error, isLoading } = useStreamListUsers();
+    return (
+        <ul>
+            {items.map((u) => <li key={u.id}>{u.name}</li>)}
+            {isLoading && <li>Loading more…</li>}
+            {error && <li>Error: {error.message}</li>}
+        </ul>
+    );
+}
+```
+
+Cancellation works exactly like any other request: break out of the `for await` loop, pass an `AbortSignal`, or unmount the React component, and the handler's `ctx` is canceled — the next `yield` returns `false` and the iterator stops. Streaming handlers also support `iter.Seq2[K, V]`, which surfaces as `AsyncIterable<[K, V]>` on the TypeScript side.
+
+Streaming handlers are WebSocket/SSE only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
 
 ## Validation
 

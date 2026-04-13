@@ -168,9 +168,21 @@ func (s *Server) runDisconnectHooks(conn *Conn) {
 // buildHandler creates the middleware chain for a handler.
 // The chain is: server middleware -> handler middleware -> actual handler
 // Server middleware is outermost (executed first on request, last on response).
+//
+// For streaming handlers (HandlerKindStream / HandlerKindStream2) the final
+// closure returns the raw reflect.Value of the iter.Seq wrapped in `any`.
+// Middleware sees this return as soon as the handler hands back the iterator
+// — it does not wrap the iteration phase itself.
 func (s *Server) buildHandler(info *HandlerInfo) Handler {
 	// The final handler that calls the actual method
 	final := func(ctx context.Context, req *Request) (any, error) {
+		if info.Kind == HandlerKindStream || info.Kind == HandlerKindStream2 {
+			v, err := info.CallStream(ctx, req.Params)
+			if err != nil {
+				return nil, err
+			}
+			return v, nil
+		}
 		return info.Call(ctx, req.Params)
 	}
 

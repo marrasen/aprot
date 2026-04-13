@@ -20,6 +20,19 @@ type voidResponse struct{}
 
 var voidResponseType = reflect.TypeOf(voidResponse{})
 
+// HandlerKind categorizes a handler by its return shape so the dispatcher
+// knows how to invoke and marshal its output.
+type HandlerKind uint8
+
+const (
+	// HandlerKindUnary: func(ctx, ...) error | (*T, error) | (T, error)
+	HandlerKindUnary HandlerKind = iota
+	// HandlerKindStream: func(ctx, ...) (iter.Seq[T], error)
+	HandlerKindStream
+	// HandlerKindStream2: func(ctx, ...) (iter.Seq2[K, V], error)
+	HandlerKindStream2
+)
+
 // ParamInfo describes a single handler parameter (after context.Context).
 type ParamInfo struct {
 	Type     reflect.Type // the actual parameter type (e.g., string, *CreateUserRequest)
@@ -32,10 +45,66 @@ type HandlerInfo struct {
 	Params       []ParamInfo // handler parameters (after ctx), empty for no-params handlers
 	ResponseType reflect.Type
 	StructName   string
-	IsVoid       bool // true when handler returns only error
-	method       reflect.Value
-	handler      reflect.Value
-	registry     *Registry // back-reference for accessing validator
+	IsVoid       bool        // true when handler returns only error
+	Kind         HandlerKind // unary, stream, or stream2
+	// StreamKeyType is set only when Kind == HandlerKindStream2; it holds the
+	// key type K of iter.Seq2[K, V]. ResponseType holds the value type V.
+	StreamKeyType reflect.Type
+	method        reflect.Value
+	handler       reflect.Value
+	registry      *Registry // back-reference for accessing validator
+}
+
+// isIterSeq reports whether t has the shape of iter.Seq[T]:
+//
+//	func(yield func(T) bool)
+//
+// On success it returns the element type T. Detection is structural, so an
+// anonymous func type with the same signature is accepted alongside
+// iter.Seq[T] instantiations.
+func isIterSeq(t reflect.Type) (elem reflect.Type, ok bool) {
+	if t == nil || t.Kind() != reflect.Func {
+		return nil, false
+	}
+	if t.NumIn() != 1 || t.NumOut() != 0 || t.IsVariadic() {
+		return nil, false
+	}
+	y := t.In(0)
+	if y.Kind() != reflect.Func {
+		return nil, false
+	}
+	if y.NumIn() != 1 || y.NumOut() != 1 || y.IsVariadic() {
+		return nil, false
+	}
+	if y.Out(0).Kind() != reflect.Bool {
+		return nil, false
+	}
+	return y.In(0), true
+}
+
+// isIterSeq2 reports whether t has the shape of iter.Seq2[K, V]:
+//
+//	func(yield func(K, V) bool)
+//
+// On success it returns the key type K and value type V.
+func isIterSeq2(t reflect.Type) (key, val reflect.Type, ok bool) {
+	if t == nil || t.Kind() != reflect.Func {
+		return nil, nil, false
+	}
+	if t.NumIn() != 1 || t.NumOut() != 0 || t.IsVariadic() {
+		return nil, nil, false
+	}
+	y := t.In(0)
+	if y.Kind() != reflect.Func {
+		return nil, nil, false
+	}
+	if y.NumIn() != 2 || y.NumOut() != 1 || y.IsVariadic() {
+		return nil, nil, false
+	}
+	if y.Out(0).Kind() != reflect.Bool {
+		return nil, nil, false
+	}
+	return y.In(0), y.In(1), true
 }
 
 // PushEventInfo describes a push event for code generation.
@@ -146,6 +215,9 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 // The handler is NOT available via WebSocket — only through the REST adapter
 // and OpenAPI generator.
 //
+// Streaming handlers (iter.Seq / iter.Seq2 return shapes) cannot be exposed
+// via REST and will panic at registration time.
+//
 // To expose a handler via both WebSocket and REST, use Register + EnableREST:
 //
 //	registry.Register(&UserHandlers{})          // WebSocket only
@@ -158,11 +230,14 @@ func (r *Registry) RegisterREST(handler any, middleware ...Middleware) {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	r.restGroups[t.Name()] = true
+	name := t.Name()
+	r.assertNoStreamHandlers(name, "RegisterREST")
+	r.restGroups[name] = true
 }
 
 // EnableREST marks an already-registered handler for REST/HTTP exposure
-// in addition to WebSocket.
+// in addition to WebSocket. Streaming handlers cannot be exposed via REST
+// and will panic at registration time.
 func (r *Registry) EnableREST(handler any) {
 	t := reflect.TypeOf(handler)
 	if t.Kind() == reflect.Ptr {
@@ -172,7 +247,26 @@ func (r *Registry) EnableREST(handler any) {
 	if _, ok := r.groups[name]; !ok {
 		panic("aprot: EnableREST called with unregistered handler: " + name)
 	}
+	r.assertNoStreamHandlers(name, "EnableREST")
 	r.restGroups[name] = true
+}
+
+// assertNoStreamHandlers panics if the named handler group contains any
+// streaming handlers. Streaming is websocket/SSE only — the REST adapter
+// cannot deliver multi-message responses through a single HTTP request.
+func (r *Registry) assertNoStreamHandlers(groupName, call string) {
+	group, ok := r.groups[groupName]
+	if !ok {
+		return
+	}
+	for _, info := range group.Handlers {
+		if info.Kind != HandlerKindUnary {
+			panic(fmt.Sprintf(
+				"aprot: streaming handler %s.%s cannot be exposed via REST; use WebSocket or SSE (%s)",
+				groupName, info.Name, call,
+			))
+		}
+	}
 }
 
 func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Middleware) {
@@ -610,13 +704,50 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 			handler:      handlerValue,
 		}
 	case 2:
-		// func(...) (T, error) where T is any JSON-serializable type
-		respType := mt.Out(0)
+		// func(...) (T, error) where T is any JSON-serializable type,
+		// or func(...) (iter.Seq[T], error) / (iter.Seq2[K,V], error) for streams.
 		if !mt.Out(1).Implements(errorType) {
 			return nil
 		}
+		out0 := mt.Out(0)
+
+		// Detect iter.Seq[T] first.
+		if elem, ok := isIterSeq(out0); ok {
+			et := elem
+			if et.Kind() == reflect.Ptr {
+				et = et.Elem()
+			}
+			return &HandlerInfo{
+				Name:         method.Name,
+				Params:       params,
+				ResponseType: et,
+				StructName:   structName,
+				Kind:         HandlerKindStream,
+				method:       handlerValue.Method(method.Index),
+				handler:      handlerValue,
+			}
+		}
+
+		// Detect iter.Seq2[K, V].
+		if k, v, ok := isIterSeq2(out0); ok {
+			vt := v
+			if vt.Kind() == reflect.Ptr {
+				vt = vt.Elem()
+			}
+			return &HandlerInfo{
+				Name:          method.Name,
+				Params:        params,
+				ResponseType:  vt,
+				StreamKeyType: k,
+				StructName:    structName,
+				Kind:          HandlerKindStream2,
+				method:        handlerValue.Method(method.Index),
+				handler:       handlerValue,
+			}
+		}
+
 		// Unwrap pointer to store the element type
-		rt := respType
+		rt := out0
 		if rt.Kind() == reflect.Ptr {
 			rt = rt.Elem()
 		}
@@ -633,9 +764,9 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 	}
 }
 
-// Call invokes the handler with the given context and JSON params.
-// Params must be a JSON array (positional arguments) or empty/nil for no-params handlers.
-func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, error) {
+// buildArgs unmarshals params and validates struct arguments, returning the
+// full reflect.Value argument list (ctx first) ready for info.method.Call.
+func (info *HandlerInfo) buildArgs(ctx context.Context, params jsontext.Value) ([]reflect.Value, error) {
 	args := []reflect.Value{reflect.ValueOf(ctx)}
 
 	if len(info.Params) > 0 {
@@ -706,6 +837,18 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 		}
 	}
 
+	return args, nil
+}
+
+// Call invokes a unary handler with the given context and JSON params and
+// returns its (response, error) pair. Streaming handlers must use CallStream.
+// Params must be a JSON array (positional arguments) or empty/nil for no-params handlers.
+func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, error) {
+	args, err := info.buildArgs(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
 	results := info.method.Call(args)
 
 	// Extract response and error
@@ -724,6 +867,25 @@ func (info *HandlerInfo) Call(ctx context.Context, params jsontext.Value) (any, 
 	}
 
 	return resp, nil
+}
+
+// CallStream invokes a streaming handler and returns the raw reflect.Value
+// of the returned iter.Seq / iter.Seq2. The caller is responsible for
+// driving the iterator (typically via reflect.MakeFunc). If the handler
+// returns a preflight error it is returned without invoking the iterator.
+func (info *HandlerInfo) CallStream(ctx context.Context, params jsontext.Value) (reflect.Value, error) {
+	if info.Kind != HandlerKindStream && info.Kind != HandlerKindStream2 {
+		return reflect.Value{}, fmt.Errorf("aprot: CallStream on non-stream handler %s.%s", info.StructName, info.Name)
+	}
+	args, err := info.buildArgs(ctx, params)
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	results := info.method.Call(args)
+	if errVal := results[1].Interface(); errVal != nil {
+		return reflect.Value{}, errVal.(error)
+	}
+	return results[0], nil
 }
 
 // unmarshalParam unmarshals a JSON value into the appropriate reflect.Value for a parameter type.

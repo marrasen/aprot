@@ -72,6 +72,7 @@ export interface UserUpdatedEvent {
     email: string;
 }
 
+
 export function createUser(client: ApiClient, name: string, email: string, options?: RequestOptions): Promise<CreateUserResponse> {
     return client.request<CreateUserResponse>('PublicHandlers.CreateUser', [name, email], options);
 }
@@ -79,6 +80,7 @@ export function createUser(client: ApiClient, name: string, email: string, optio
 export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<CreateUserResponse>('PublicHandlers.CreateUser', [name, email], callback, onError);
 }
+
 
 export function getTask(client: ApiClient, id: string, options?: RequestOptions): Promise<GetTaskResponse> {
     return client.request<GetTaskResponse>('PublicHandlers.GetTask', [id], options);
@@ -88,6 +90,7 @@ export function subscribeGetTask(client: ApiClient, id: string, callback: (data:
     return client.subscribe<GetTaskResponse>('PublicHandlers.GetTask', [id], callback, onError);
 }
 
+
 export function getUser(client: ApiClient, id: string, options?: RequestOptions): Promise<GetUserResponse> {
     return client.request<GetUserResponse>('PublicHandlers.GetUser', [id], options);
 }
@@ -95,6 +98,7 @@ export function getUser(client: ApiClient, id: string, options?: RequestOptions)
 export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetUserResponse>('PublicHandlers.GetUser', [id], callback, onError);
 }
+
 
 export function listUsers(client: ApiClient, options?: RequestOptions): Promise<ListUsersResponse> {
     return client.request<ListUsersResponse>('PublicHandlers.ListUsers', [], options);
@@ -104,6 +108,7 @@ export function subscribeListUsers(client: ApiClient, callback: (data: ListUsers
     return client.subscribe<ListUsersResponse>('PublicHandlers.ListUsers', [], callback, onError);
 }
 
+
 export function login(client: ApiClient, username: string, password: string, options?: RequestOptions): Promise<LoginResponse> {
     return client.request<LoginResponse>('PublicHandlers.Login', [username, password], options);
 }
@@ -111,6 +116,7 @@ export function login(client: ApiClient, username: string, password: string, opt
 export function subscribeLogin(client: ApiClient, username: string, password: string, callback: (data: LoginResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<LoginResponse>('PublicHandlers.Login', [username, password], callback, onError);
 }
+
 
 export function processBatch(client: ApiClient, items: string[], delay: number, options?: RequestOptions): Promise<ProcessBatchResponse> {
     return client.request<ProcessBatchResponse>('PublicHandlers.ProcessBatch', [items, delay], options);
@@ -120,6 +126,7 @@ export function subscribeProcessBatch(client: ApiClient, items: string[], delay:
     return client.subscribe<ProcessBatchResponse>('PublicHandlers.ProcessBatch', [items, delay], callback, onError);
 }
 
+
 export function processWithSubTasks(client: ApiClient, steps: string[], delay: number, options?: RequestOptions): Promise<ProcessWithSubTasksResponse> {
     return client.request<ProcessWithSubTasksResponse>('PublicHandlers.ProcessWithSubTasks', [steps, delay], options);
 }
@@ -128,6 +135,7 @@ export function subscribeProcessWithSubTasks(client: ApiClient, steps: string[],
     return client.subscribe<ProcessWithSubTasksResponse>('PublicHandlers.ProcessWithSubTasks', [steps, delay], callback, onError);
 }
 
+
 export function sendNotification(client: ApiClient, message: string, level: string, options?: RequestOptions): Promise<SystemNotificationEvent> {
     return client.request<SystemNotificationEvent>('PublicHandlers.SendNotification', [message, level], options);
 }
@@ -135,6 +143,7 @@ export function sendNotification(client: ApiClient, message: string, level: stri
 export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<SystemNotificationEvent>('PublicHandlers.SendNotification', [message, level], callback, onError);
 }
+
 
 export function startSharedWork(client: ApiClient, title: string, steps: string[], delay: number, options?: RequestOptions): Promise<void> {
     return client.request<void>('PublicHandlers.StartSharedWork', [title, steps, delay], options);

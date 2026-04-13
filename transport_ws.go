@@ -1,6 +1,7 @@
 package aprot
 
 import (
+	"context"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -22,13 +23,27 @@ func newWSTransport(ws *websocket.Conn) *wsTransport {
 }
 
 func (t *wsTransport) Send(data []byte) error {
+	// Blocking send — waits for room in the 256-slot buffer. Unblocks
+	// immediately if the transport is closed. Previously this method dropped
+	// on a full buffer, which silently lost responses/progress for slow
+	// clients; streams need guaranteed delivery and all other message types
+	// benefit too.
 	select {
 	case <-t.done:
-		return nil // transport closed, discard
+		return ErrConnectionClosed
 	case t.send <- data:
 		return nil
-	default:
-		return nil // Drop message if buffer full
+	}
+}
+
+func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- data:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

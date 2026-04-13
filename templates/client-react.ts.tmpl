@@ -485,9 +485,19 @@ export class ApiClient {
 
 {{template "react-generic-hooks" .}}
 {{range .Methods}}
+{{- if .IsStream}}
+export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
+    return client.requestStream<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+{{else if .IsStream2}}
+export function {{.StreamName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    return client.requestStream<[{{.ItemKeyType}}, {{.ResponseType}}]>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+{{else}}
 export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
     return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
+{{end -}}
 {{end}}
 {{- range .PushEvents}}
 export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
@@ -495,7 +505,23 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
 }
 {{end}}
 {{range .Methods}}
-{{- if not (hasParams .Params)}}
+{{- if .IsStream}}
+export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<{{.ResponseType}}> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+    return useStream<{{.ResponseType}}>(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
+}
+{{- else if .IsStream2}}
+export function {{.StreamHookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.StreamName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+    return useStream<[{{.ItemKeyType}}, {{.ResponseType}}]>(wrappedFn, { ...options, params: [{{paramNames .Params}}] });
+}
+{{- else if not (hasParams .Params)}}
 export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),

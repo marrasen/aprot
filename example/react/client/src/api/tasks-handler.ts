@@ -73,6 +73,7 @@ export interface TaskUpdateEvent {
     total?: number;
 }
 
+
 export function cancelTask(client: ApiClient, taskId: string, options?: RequestOptions): Promise<void> {
     return client.request<void>('tasksHandler.CancelTask', [taskId], options);
 }
