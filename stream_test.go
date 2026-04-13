@@ -60,7 +60,7 @@ func TestStreamIterator_SeqHappyPath(t *testing.T) {
 		ResponseType: reflect.TypeOf(int(0)),
 	}
 
-	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info, nil)
 
 	msgs := drainMessages(t, rt)
 	if len(msgs) != 6 {
@@ -91,7 +91,7 @@ func TestStreamIterator_EmptySeq(t *testing.T) {
 	seq := iter.Seq[int](func(yield func(int) bool) {})
 	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
 
-	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info, nil)
 
 	msgs := drainMessages(t, rt)
 	if len(msgs) != 1 || msgs[0]["type"] != "stream_end" {
@@ -104,7 +104,7 @@ func TestStreamIterator_NilSeq(t *testing.T) {
 	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
 
 	var seq iter.Seq[int] // nil
-	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info, nil)
 
 	msgs := drainMessages(t, rt)
 	if len(msgs) != 1 || msgs[0]["type"] != "stream_end" {
@@ -122,7 +122,7 @@ func TestStreamIterator_PanicMidStream(t *testing.T) {
 		panic("boom")
 	})
 
-	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info, nil)
 
 	msgs := drainMessages(t, rt)
 	if len(msgs) != 3 {
@@ -161,7 +161,7 @@ func TestStreamIterator_ContextCancelStopsYield(t *testing.T) {
 		}
 	})
 
-	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info, nil)
 
 	if emitted >= 10 {
 		t.Fatalf("expected iteration to stop early after cancel, emitted = %d", emitted)
@@ -197,7 +197,7 @@ func TestStreamIterator_Seq2HappyPath(t *testing.T) {
 		}
 	})
 
-	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info, nil)
 
 	msgs := drainMessages(t, rt)
 	if len(msgs) != 4 {
@@ -330,7 +330,7 @@ func TestStreamIterator_TransportCloseDuringSend(t *testing.T) {
 		}
 	})
 
-	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info)
+	c.streamIterator(context.Background(), "r1", reflect.ValueOf(seq), info, nil)
 
 	// ErrConnectionClosed is a clean termination from the stream's point of
 	// view — we still send an end message, but it carries no code.
@@ -359,7 +359,7 @@ func TestStreamIterator_NoGoroutineLeakOnCancel(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			c.streamIterator(ctx, "r", reflect.ValueOf(seq), info)
+			c.streamIterator(ctx, "r", reflect.ValueOf(seq), info, nil)
 		}()
 		time.Sleep(5 * time.Millisecond)
 		cancel()
@@ -421,3 +421,222 @@ func TestErrConnectionClosedIsError(t *testing.T) {
 		t.Errorf("ErrConnectionClosed is not itself")
 	}
 }
+
+// Stream completion hook tests: verify that OnStreamComplete's callback
+// receives the correct err cause and item count across every termination
+// path the framework supports.
+
+func runStreamWithHook(t *testing.T, ctx context.Context, seq any, info *HandlerInfo) (hookErr error, hookItems int, hookCount int) {
+	t.Helper()
+	c, _ := streamTestServer(t)
+	ctx, hooks := withStreamCompleteHooks(ctx)
+	OnStreamComplete(ctx, func(err error, items int) {
+		hookErr, hookItems = err, items
+		hookCount++
+	})
+	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info, hooks)
+	return
+}
+
+func TestStreamCompleteHook_HappyPath(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	seq := iter.Seq[int](func(yield func(int) bool) {
+		for i := 1; i <= 4; i++ {
+			if !yield(i) {
+				return
+			}
+		}
+	})
+
+	err, items, count := runStreamWithHook(t, context.Background(), seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if items != 4 {
+		t.Errorf("expected 4 items, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_ClientCancel(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	ctx, cancel := context.WithCancelCause(context.Background())
+
+	seq := iter.Seq[int](func(yield func(int) bool) {
+		for i := 1; i <= 1000; i++ {
+			if i == 3 {
+				cancel(ErrClientCanceled)
+			}
+			if !yield(i) {
+				return
+			}
+		}
+	})
+
+	err, items, count := runStreamWithHook(t, ctx, seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if !errors.Is(err, ErrClientCanceled) {
+		t.Errorf("expected ErrClientCanceled, got %v", err)
+	}
+	if items < 1 || items > 5 {
+		t.Errorf("expected a small positive item count around 2, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_ServerShutdown(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	ctx, cancel := context.WithCancelCause(context.Background())
+
+	seq := iter.Seq[int](func(yield func(int) bool) {
+		yield(1)
+		cancel(ErrServerShutdown)
+		yield(2) // yield returns false because ctx is canceled
+	})
+
+	err, items, count := runStreamWithHook(t, ctx, seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if !errors.Is(err, ErrServerShutdown) {
+		t.Errorf("expected ErrServerShutdown, got %v", err)
+	}
+	if items != 1 {
+		t.Errorf("expected 1 item, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_Panic(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	seq := iter.Seq[int](func(yield func(int) bool) {
+		yield(1)
+		yield(2)
+		panic("boom")
+	})
+
+	err, items, count := runStreamWithHook(t, context.Background(), seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if err == nil {
+		t.Fatal("expected non-nil err on panic")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("expected panic text in err, got %q", err.Error())
+	}
+	if items != 2 {
+		t.Errorf("expected 2 items before panic, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_EmptySeq(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	seq := iter.Seq[int](func(yield func(int) bool) {})
+
+	err, items, count := runStreamWithHook(t, context.Background(), seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if items != 0 {
+		t.Errorf("expected 0 items, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_NilSeq(t *testing.T) {
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	var seq iter.Seq[int]
+
+	err, items, count := runStreamWithHook(t, context.Background(), seq, info)
+	if count != 1 {
+		t.Fatalf("expected hook to fire once, got %d", count)
+	}
+	if err != nil {
+		t.Errorf("expected nil err, got %v", err)
+	}
+	if items != 0 {
+		t.Errorf("expected 0 items, got %d", items)
+	}
+}
+
+func TestStreamCompleteHook_MultipleHooks(t *testing.T) {
+	c, _ := streamTestServer(t)
+	ctx, hooks := withStreamCompleteHooks(context.Background())
+
+	var order []string
+	OnStreamComplete(ctx, func(err error, items int) { order = append(order, "first") })
+	OnStreamComplete(ctx, func(err error, items int) { order = append(order, "second") })
+	OnStreamComplete(ctx, func(err error, items int) { order = append(order, "third") })
+
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	seq := iter.Seq[int](func(yield func(int) bool) { yield(1) })
+	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info, hooks)
+
+	if len(order) != 3 {
+		t.Fatalf("expected 3 hook invocations, got %d: %v", len(order), order)
+	}
+	if order[0] != "first" || order[1] != "second" || order[2] != "third" {
+		t.Errorf("expected registration-order invocation, got %v", order)
+	}
+}
+
+func TestStreamCompleteHook_PanicInHookDoesNotBreakOthers(t *testing.T) {
+	c, _ := streamTestServer(t)
+	ctx, hooks := withStreamCompleteHooks(context.Background())
+
+	var reached bool
+	OnStreamComplete(ctx, func(err error, items int) { panic("hook boom") })
+	OnStreamComplete(ctx, func(err error, items int) { reached = true })
+
+	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}
+	seq := iter.Seq[int](func(yield func(int) bool) {})
+	c.streamIterator(ctx, "r1", reflect.ValueOf(seq), info, hooks)
+
+	if !reached {
+		t.Error("second hook did not run after first hook panicked")
+	}
+}
+
+func TestOnStreamComplete_NoHooksSlotIsNoOp(t *testing.T) {
+	// Registering on a context without withStreamCompleteHooks attached
+	// (e.g. a unary handler's context) should silently do nothing rather
+	// than panic or mis-register against some other request.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("OnStreamComplete panicked on unary ctx: %v", r)
+		}
+	}()
+	OnStreamComplete(context.Background(), func(err error, items int) {
+		t.Error("hook should never fire when no hooks slot is attached")
+	})
+	// No assertion needed beyond the deferred panic check; the hook
+	// simply has nowhere to be stored.
+}
+
+func TestStreamCompleteHook_Seq2CountsPairs(t *testing.T) {
+	info := &HandlerInfo{
+		Kind:          HandlerKindStream2,
+		ResponseType:  reflect.TypeOf(int(0)),
+		StreamKeyType: reflect.TypeOf(""),
+	}
+	seq := iter.Seq2[string, int](func(yield func(string, int) bool) {
+		yield("a", 1)
+		yield("b", 2)
+		yield("c", 3)
+	})
+
+	err, items, count := runStreamWithHook(t, context.Background(), seq, info)
+	if count != 1 || err != nil || items != 3 {
+		t.Errorf("Seq2 hook: count=%d err=%v items=%d (want 1, nil, 3)", count, err, items)
+	}
+}
+
+// Suppress an unused-variable warning from time.Duration usage in unrelated
+// tests above — the hook tests don't need time, but the import was pulled
+// in by earlier cases. This comment exists to prevent go vet noise.
+var _ = time.Second
