@@ -4,15 +4,21 @@
 {{- if .Methods}}
 import { useCallback } from 'react';
 {{- end}}
-import { ApiClient{{if .Methods}}, useQuery, useMutation{{end}}{{if .PushEvents}}, usePushEvent{{end}} } from './client';
+import { ApiClient{{if hasNonStreamMethods .Methods}}, useQuery, useMutation{{end}}{{if hasStreamMethods .Methods}}, useStream{{end}}{{if .PushEvents}}, usePushEvent{{end}} } from './client';
 {{- if or .Methods .PushEvents .BaseTypeImports}}
 import type {
 {{- if .Methods}}
     RequestOptions,
+{{- end}}
+{{- if hasNonStreamMethods .Methods}}
     UseQueryOptions,
     UseQueryResult,
     UseMutationOptions,
     UseMutationResult,
+{{- end}}
+{{- if hasStreamMethods .Methods}}
+    UseStreamOptions,
+    UseStreamResult,
 {{- end}}
 {{- if .PushEvents}}
     PushHandler,
@@ -45,6 +51,17 @@ export interface {{.Name}} {
 
 {{end -}}
 {{range .Methods -}}
+{{- if .IsStream}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
+    return client.requestStream<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+
+{{else if .IsStream2}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    return client.requestStream<[{{.ItemKeyType}}, {{.ResponseType}}]>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+
+{{else}}
 export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
     return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
@@ -54,6 +71,7 @@ export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{
 }
 
 {{end -}}
+{{end -}}
 {{range .PushEvents -}}
 export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
     return client.onPush<{{.DataType}}>('{{.Name}}', handler);
@@ -62,7 +80,41 @@ export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.Data
 {{end -}}
 // React Hooks for {{.StructName}}
 {{range .Methods}}
-{{- if not (hasParams .Params)}}
+{{- if .IsStream}}
+/**
+ * Streams items from `{{.WireMethod}}` and accumulates them into `items`.
+ * The stream restarts when parameters change and cleans up on unmount.
+ * See {@link UseStreamResult} for return value details.
+ */
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<{{.ResponseType}}> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
+}
+{{- else if .IsStream2}}
+/**
+ * Streams [key, value] tuples from `{{.WireMethod}}` and accumulates them
+ * into `items`. The stream restarts when parameters change and cleans up
+ * on unmount. See {@link UseStreamResult} for return value details.
+ */
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
+}
+{{- else if not (hasParams .Params)}}
 /**
  * Subscribes to `{{.WireMethod}}` and re-renders automatically when the
  * server triggers a refresh. The subscription is cleaned up on unmount.

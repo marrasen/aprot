@@ -19,6 +19,7 @@ export interface SendMessageResponse {
     sent: boolean;
 }
 
+
 export function getProfile(client: ApiClient, options?: RequestOptions): Promise<GetProfileResponse> {
     return client.request<GetProfileResponse>('ProtectedHandlers.GetProfile', [], options);
 }
@@ -26,6 +27,7 @@ export function getProfile(client: ApiClient, options?: RequestOptions): Promise
 export function subscribeGetProfile(client: ApiClient, callback: (data: GetProfileResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetProfileResponse>('ProtectedHandlers.GetProfile', [], callback, onError);
 }
+
 
 export function sendMessage(client: ApiClient, toUserID: string, message: string, options?: RequestOptions): Promise<SendMessageResponse> {
     return client.request<SendMessageResponse>('ProtectedHandlers.SendMessage', [toUserID, message], options);

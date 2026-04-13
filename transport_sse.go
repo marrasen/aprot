@@ -1,6 +1,7 @@
 package aprot
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
@@ -25,11 +26,20 @@ func newSSETransport(w http.ResponseWriter, flusher http.Flusher) *sseTransport 
 	}
 }
 
+func (t *sseTransport) SendCtx(ctx context.Context, data []byte) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return t.Send(data)
+}
+
 func (t *sseTransport) Send(data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
-		return nil
+		return ErrConnectionClosed
 	}
 
 	// Extract message type for SSE event field

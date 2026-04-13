@@ -15,6 +15,9 @@ func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Reg
 	publicHandlers := NewPublicHandlers(state)
 	registry.Register(publicHandlers)
 
+	// Register streaming demo handlers (iter.Seq / iter.Seq2)
+	registry.Register(NewStreamingHandlers())
+
 	// Register enums
 	registry.RegisterEnumFor(publicHandlers, TaskStatusValues())
 

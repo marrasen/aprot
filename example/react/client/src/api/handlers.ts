@@ -96,6 +96,7 @@ export interface UserUpdatedEvent {
     email: string;
 }
 
+
 export function createUser(client: ApiClient, name: string, email: string, options?: RequestOptions): Promise<CreateUserResponse> {
     return client.request<CreateUserResponse>('Handlers.CreateUser', [name, email], options);
 }
@@ -103,6 +104,7 @@ export function createUser(client: ApiClient, name: string, email: string, optio
 export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<CreateUserResponse>('Handlers.CreateUser', [name, email], callback, onError);
 }
+
 
 export function getDashboard(client: ApiClient, options?: RequestOptions): Promise<GetDashboardResponse> {
     return client.request<GetDashboardResponse>('Handlers.GetDashboard', [], options);
@@ -112,6 +114,7 @@ export function subscribeGetDashboard(client: ApiClient, callback: (data: GetDas
     return client.subscribe<GetDashboardResponse>('Handlers.GetDashboard', [], callback, onError);
 }
 
+
 export function getTask(client: ApiClient, id: string, options?: RequestOptions): Promise<GetTaskResponse> {
     return client.request<GetTaskResponse>('Handlers.GetTask', [id], options);
 }
@@ -119,6 +122,7 @@ export function getTask(client: ApiClient, id: string, options?: RequestOptions)
 export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetTaskResponse>('Handlers.GetTask', [id], callback, onError);
 }
+
 
 export function getUser(client: ApiClient, id: string, options?: RequestOptions): Promise<GetUserResponse> {
     return client.request<GetUserResponse>('Handlers.GetUser', [id], options);
@@ -128,6 +132,7 @@ export function subscribeGetUser(client: ApiClient, id: string, callback: (data:
     return client.subscribe<GetUserResponse>('Handlers.GetUser', [id], callback, onError);
 }
 
+
 export function listUsers(client: ApiClient, options?: RequestOptions): Promise<ListUsersResponse> {
     return client.request<ListUsersResponse>('Handlers.ListUsers', [], options);
 }
@@ -135,6 +140,7 @@ export function listUsers(client: ApiClient, options?: RequestOptions): Promise<
 export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<ListUsersResponse>('Handlers.ListUsers', [], callback, onError);
 }
+
 
 export function processBatch(client: ApiClient, items: string[], delay: number, options?: RequestOptions): Promise<ProcessBatchResponse> {
     return client.request<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], options);
@@ -144,6 +150,7 @@ export function subscribeProcessBatch(client: ApiClient, items: string[], delay:
     return client.subscribe<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], callback, onError);
 }
 
+
 export function sendNotification(client: ApiClient, message: string, level: string, options?: RequestOptions): Promise<SystemNotificationEvent> {
     return client.request<SystemNotificationEvent>('Handlers.SendNotification', [message, level], options);
 }
@@ -151,6 +158,7 @@ export function sendNotification(client: ApiClient, message: string, level: stri
 export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<SystemNotificationEvent>('Handlers.SendNotification', [message, level], callback, onError);
 }
+
 
 export function startSharedWork(client: ApiClient, title: string, steps: string[], delay: number, options?: RequestOptions): Promise<StartSharedWorkResponse> {
     return client.request<StartSharedWorkResponse>('Handlers.StartSharedWork', [title, steps, delay], options);

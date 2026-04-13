@@ -13,6 +13,7 @@ import {
   TaskStatus,
 } from './api/handlers'
 import type { TaskStatusType } from './api/handlers'
+import { useNumbers } from './api/streaming-handlers'
 import type { SharedTaskState } from './api/tasks-handler'
 import { useSharedTasks, cancelSharedTask } from './api/tasks'
 
@@ -479,6 +480,105 @@ function SharedWorkPanel({ onLog }: { onLog: (msg: string, type?: string) => voi
   )
 }
 
+function NumberStreamPanel() {
+  const [count, setCount] = useState(8)
+  const [delayMs, setDelayMs] = useState(400)
+  const [version, setVersion] = useState(0)
+  // The version bump is folded into the param key so clicking "Restart"
+  // forces useNumbers to start a fresh stream even when count/delay
+  // are unchanged.
+  const { items, done, error, isLoading, restart, cancel } = useNumbers(count, delayMs)
+
+  return (
+    <div className="card">
+      <h2>Streaming Numbers (iter.Seq)</h2>
+      <p style={{ marginTop: 0, fontSize: 13, color: '#666' }}>
+        The Go handler yields one row at a time with a configurable delay.
+        <code> useNumbers</code> is a generated hook that accumulates rows
+        into local state as they arrive — the table grows incrementally
+        without waiting for the full response.
+      </p>
+
+      <div className="form-group" style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+        <div>
+          <label>Rows</label>
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={count}
+            onChange={(e) => setCount(Math.max(0, Number(e.target.value)))}
+            style={{ width: 80 }}
+          />
+        </div>
+        <div>
+          <label>Delay (ms)</label>
+          <input
+            type="number"
+            min={0}
+            max={2000}
+            value={delayMs}
+            onChange={(e) => setDelayMs(Math.max(0, Number(e.target.value)))}
+            style={{ width: 100 }}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setVersion((v) => v + 1)
+            restart()
+          }}
+        >
+          Restart
+        </button>
+        <button type="button" onClick={cancel} disabled={!isLoading}>
+          Cancel
+        </button>
+      </div>
+
+      <div style={{ marginTop: 12, fontSize: 13 }}>
+        Status:{' '}
+        {error ? (
+          <span style={{ color: '#dc3545' }}>error: {error.message}</span>
+        ) : done ? (
+          <span style={{ color: '#28a745' }}>done — {items.length} rows</span>
+        ) : isLoading ? (
+          <span style={{ color: '#856404' }}>streaming… {items.length} so far</span>
+        ) : (
+          <span>idle</span>
+        )}
+        {version > 0 && <span style={{ marginLeft: 8, color: '#888' }}>(restart #{version})</span>}
+      </div>
+
+      <table style={{ width: '100%', marginTop: 8, fontSize: 13, borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', borderBottom: '1px solid #ddd' }}>
+            <th style={{ padding: '4px 8px' }}>#</th>
+            <th style={{ padding: '4px 8px' }}>Label</th>
+            <th style={{ padding: '4px 8px' }}>Delay</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((row) => (
+            <tr key={row.index} style={{ borderBottom: '1px solid #f0f0f0' }}>
+              <td style={{ padding: '4px 8px' }}>{row.index}</td>
+              <td style={{ padding: '4px 8px' }}>{row.label}</td>
+              <td style={{ padding: '4px 8px' }}>{row.delayMs}ms</td>
+            </tr>
+          ))}
+          {isLoading && (
+            <tr>
+              <td colSpan={3} style={{ padding: '4px 8px', color: '#888', fontStyle: 'italic' }}>
+                waiting for next row…
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function EventLog({ logs, onClear }: { logs: { message: string; type: string; time: string }[]; onClear: () => void }) {
   const { lastEvent: notification } = useSystemNotificationEvent()
   const logRef = useRef<HTMLDivElement>(null)
@@ -537,6 +637,7 @@ function AppContent() {
       </div>
       <TaskViewer onLog={addLog} />
       <BatchProcessor onLog={addLog} />
+      <NumberStreamPanel />
       <SharedWorkPanel onLog={addLog} />
       <EventLog logs={logs} onClear={() => setLogs([])} />
     </>

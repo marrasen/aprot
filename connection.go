@@ -2,7 +2,9 @@ package aprot
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 
 	"github.com/go-json-experiment/json"
@@ -180,11 +182,29 @@ func (c *Conn) sendJSON(v any) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return nil
+		return ErrConnectionClosed
 	}
 	c.mu.Unlock()
 
 	return c.transport.Send(data)
+}
+
+// sendJSONCtx marshals and sends v, returning early if ctx is canceled while
+// the transport's outbound queue is full. Used for stream items where the
+// sending goroutine must unblock promptly on request cancellation.
+func (c *Conn) sendJSONCtx(ctx context.Context, v any) error {
+	data, err := marshalJSON(v)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrConnectionClosed
+	}
+	c.mu.Unlock()
+
+	return c.transport.SendCtx(ctx, data)
 }
 
 func (c *Conn) sendResponse(id string, result any) {
@@ -332,10 +352,92 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 		return
 	}
 
+	// Streaming handlers hand back a reflect.Value wrapping the returned
+	// iter.Seq / iter.Seq2. Drive iteration now that middleware has returned.
+	if info.Kind == HandlerKindStream || info.Kind == HandlerKindStream2 {
+		seqVal, _ := result.(reflect.Value)
+		c.streamIterator(ctx, msg.ID, seqVal, info)
+		c.server.processRefreshQueue(rq)
+		return
+	}
+
 	c.sendResponse(msg.ID, result)
 
 	// Process batched refresh triggers after response is sent
 	c.server.processRefreshQueue(rq)
+}
+
+// streamIterator drives an iter.Seq / iter.Seq2 returned from a streaming
+// handler. Each yielded element is sent as a StreamItemMessage; iteration
+// stops when the request context is canceled or the transport fails. A
+// StreamEndMessage always terminates the stream, carrying an error code
+// only on abnormal termination (handler panic, marshal/send error). Clean
+// client-side cancellation produces an empty StreamEndMessage.
+func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Value, info *HandlerInfo) {
+	if !seq.IsValid() || seq.Kind() == reflect.Func && seq.IsNil() {
+		c.sendStreamEnd(reqID, nil)
+		return
+	}
+
+	yieldType := seq.Type().In(0)
+	var streamErr error
+	yieldFn := reflect.MakeFunc(yieldType, func(args []reflect.Value) []reflect.Value {
+		if ctx.Err() != nil {
+			return []reflect.Value{reflect.ValueOf(false)}
+		}
+		var item any
+		if info.Kind == HandlerKindStream2 {
+			item = []any{args[0].Interface(), args[1].Interface()}
+		} else {
+			item = args[0].Interface()
+		}
+		if err := c.sendJSONCtx(ctx, StreamItemMessage{
+			Type: TypeStreamItem,
+			ID:   reqID,
+			Item: item,
+		}); err != nil {
+			streamErr = err
+			return []reflect.Value{reflect.ValueOf(false)}
+		}
+		return []reflect.Value{reflect.ValueOf(true)}
+	})
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				streamErr = fmt.Errorf("stream handler panicked: %v", r)
+			}
+		}()
+		seq.Call([]reflect.Value{yieldFn})
+	}()
+
+	// Context cancellation or transport close are clean terminations from
+	// the client's point of view — no error payload on the end message.
+	if streamErr != nil && ctx.Err() == nil && streamErr != ErrConnectionClosed {
+		c.sendStreamEnd(reqID, streamErr)
+	} else {
+		c.sendStreamEnd(reqID, nil)
+	}
+}
+
+// sendStreamEnd sends a terminal StreamEndMessage for the given request ID.
+// Non-nil err is mapped to a protocol code the same way as sendError.
+func (c *Conn) sendStreamEnd(reqID string, err error) {
+	msg := StreamEndMessage{Type: TypeStreamEnd, ID: reqID}
+	if err != nil {
+		if perr, ok := err.(*ProtocolError); ok {
+			msg.Code = perr.Code
+			msg.Message = perr.Message
+			msg.Data = perr.Data
+		} else if code, found := c.server.registry.LookupError(err); found {
+			msg.Code = code
+			msg.Message = err.Error()
+		} else {
+			msg.Code = CodeInternalError
+			msg.Message = err.Error()
+		}
+	}
+	_ = c.sendJSON(msg)
 }
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
@@ -344,6 +446,13 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
 		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
+		return
+	}
+
+	// Subscriptions require a reproducible unary result to re-send on refresh;
+	// streaming handlers can't satisfy that contract.
+	if info.Kind != HandlerKindUnary {
+		c.sendError(msg.ID, CodeInvalidRequest, "streaming handlers cannot be subscribed: "+msg.Method)
 		return
 	}
 

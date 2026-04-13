@@ -233,6 +233,14 @@ class SSETransport implements ClientTransport {
                 onMessage(e.data);
             });
 
+            this.eventSource.addEventListener('stream_item', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('stream_end', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
         });
     }
 
@@ -330,6 +338,10 @@ export class ApiClient {
         callback: (data: unknown) => void;
         onError?: (error: Error) => void;
     }>();
+    private streams = new Map<string, {
+        push: (item: unknown) => void;
+        end: (err: Error | null) => void;
+    }>();
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
@@ -384,6 +396,13 @@ export class ApiClient {
                 p.reject(new Error('Connection closed'));
             }
             this.pending.delete(id);
+        }
+        // End all in-flight streams with a connection-closed error. Streams
+        // are not auto-resumed on reconnect; consumers must restart them.
+        const streams = Array.from(this.streams.values());
+        this.streams.clear();
+        for (const s of streams) {
+            s.end(new Error('Connection closed'));
         }
         this.notifyLoadingChange();
 
@@ -462,7 +481,7 @@ export class ApiClient {
     }
 
     getLoadingCount(): number {
-        let count = this.buffer.length;
+        let count = this.buffer.length + this.streams.size;
         for (const id of this.pending.keys()) {
             if (!this.subscriptions.has(id)) count++;
         }
@@ -512,7 +531,7 @@ export class ApiClient {
     }
 
     private notifyLoadingChange(): void {
-        const count = this.pending.size + this.buffer.length;
+        const count = this.pending.size + this.buffer.length + this.streams.size;
         if (count !== this.lastLoadingCount) {
             this.lastLoadingCount = count;
             for (const listener of this.loadingListeners) {
@@ -550,7 +569,19 @@ export class ApiClient {
                     p.onSettle?.();
                     p.reject(new ApiError(msg.code, msg.message, msg.data));
                     this.notifyLoadingChange();
-                } else if (msg.code === ErrorCode.ConnectionRejected) {
+                    break;
+                }
+                // Preflight errors from a streaming handler arrive as a
+                // regular `error` envelope (not `stream_end`). Terminate the
+                // stream with the error so the for-await loop throws.
+                const stream = this.streams.get(msg.id);
+                if (stream) {
+                    this.streams.delete(msg.id);
+                    stream.end(new ApiError(msg.code, msg.message, msg.data));
+                    this.notifyLoadingChange();
+                    break;
+                }
+                if (msg.code === ErrorCode.ConnectionRejected) {
                     this.manualDisconnect = true;
                     this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message, msg.data));
                     this.transport.disconnect();
@@ -579,6 +610,24 @@ export class ApiClient {
                     for (const handler of handlers) {
                         handler(msg.data);
                     }
+                }
+                break;
+            }
+            case 'stream_item': {
+                const s = this.streams.get(msg.id);
+                if (s) s.push(msg.item);
+                break;
+            }
+            case 'stream_end': {
+                const s = this.streams.get(msg.id);
+                if (s) {
+                    this.streams.delete(msg.id);
+                    if (msg.code) {
+                        s.end(new ApiError(msg.code, msg.message, msg.data));
+                    } else {
+                        s.end(null);
+                    }
+                    this.notifyLoadingChange();
                 }
                 break;
             }
@@ -735,6 +784,120 @@ export class ApiClient {
             }
         };
     }
+
+    /**
+     * Opens a server-side streaming request and returns an AsyncIterable that
+     * yields items as they arrive. Each call to `[Symbol.asyncIterator]()`
+     * starts a fresh server request — the returned iterable is a factory,
+     * not a singleton.
+     *
+     * Use with `for await`:
+     * ```ts
+     * for await (const user of streamUsers(client)) { ... }
+     * ```
+     *
+     * Cancellation: breaking out of the `for await` loop, calling `.return()`
+     * on the iterator, or aborting via `options.signal` sends a `cancel`
+     * message to the server. Streams in flight at disconnect time are
+     * rejected with an error and are NOT auto-resumed on reconnect.
+     */
+    requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
+        const client = this;
+        return {
+            [Symbol.asyncIterator](): AsyncIterator<T> {
+                let id = '';
+                let started = false;
+                const buffer: T[] = [];
+                const waiters: Array<{
+                    resolve: (r: IteratorResult<T>) => void;
+                    reject: (e: Error) => void;
+                }> = [];
+                let ended = false;
+                let endError: Error | null = null;
+
+                const push = (item: unknown) => {
+                    if (ended) return;
+                    const w = waiters.shift();
+                    if (w) {
+                        w.resolve({ value: item as T, done: false });
+                    } else {
+                        buffer.push(item as T);
+                    }
+                };
+                const end = (err: Error | null) => {
+                    if (ended) return;
+                    ended = true;
+                    endError = err;
+                    const pending = waiters.splice(0);
+                    for (const w of pending) {
+                        if (err) {
+                            w.reject(err);
+                        } else {
+                            w.resolve({ value: undefined as unknown as T, done: true });
+                        }
+                    }
+                };
+
+                const cancelAtServer = () => {
+                    if (id && !ended) {
+                        client.streams.delete(id);
+                        if (client.transport.isConnected()) {
+                            client.transport.send({ type: 'cancel', id });
+                        }
+                    }
+                };
+
+                const ensureStarted = () => {
+                    if (started) return;
+                    started = true;
+                    if (!client.transport.isConnected()) {
+                        end(new Error('Not connected'));
+                        return;
+                    }
+                    id = String(++client.requestId);
+                    client.streams.set(id, { push, end });
+                    client.notifyLoadingChange();
+                    if (options?.signal) {
+                        if (options.signal.aborted) {
+                            cancelAtServer();
+                            end(new Error('Request aborted'));
+                            return;
+                        }
+                        options.signal.addEventListener('abort', () => {
+                            cancelAtServer();
+                            end(new Error('Request aborted'));
+                        }, { once: true });
+                    }
+                    client.transport.send({ type: 'request', id, method, params });
+                };
+
+                return {
+                    next(): Promise<IteratorResult<T>> {
+                        ensureStarted();
+                        if (buffer.length > 0) {
+                            return Promise.resolve({ value: buffer.shift()!, done: false });
+                        }
+                        if (ended) {
+                            return endError
+                                ? Promise.reject(endError)
+                                : Promise.resolve({ value: undefined as unknown as T, done: true });
+                        }
+                        return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+                    },
+                    return(): Promise<IteratorResult<T>> {
+                        cancelAtServer();
+                        end(null);
+                        return Promise.resolve({ value: undefined as unknown as T, done: true });
+                    },
+                    throw(err: unknown): Promise<IteratorResult<T>> {
+                        cancelAtServer();
+                        end(err instanceof Error ? err : new Error(String(err)));
+                        return Promise.reject(err);
+                    },
+                };
+            },
+        };
+    }
 }
 
 
@@ -809,6 +972,29 @@ export interface UseQueryOptions {
      * Override the global default with {@link setQueryCacheEnabled}.
      */
     cache?: boolean;
+    /**
+     * When `true` (default), the hook keeps rendering the previously fetched
+     * `data` while a parameter change is in flight, instead of flashing
+     * `data: null` between the old and new cache entries.
+     *
+     * Cached subscriptions are keyed by the JSON of their params, so changing
+     * params (e.g. clicking a date-picker arrow) switches the hook to a fresh
+     * cache entry whose initial snapshot has `data: null, isLoading: true`.
+     * Without this option, every param-driven component would flash an empty
+     * state for a few frames on every change.
+     *
+     * The kept-data is held in a per-hook-instance ref, not in the shared
+     * cache, so it never leaks across components. `isLoading` and `error`
+     * always reflect the CURRENT cache entry, so you can still tell whether
+     * a refresh is in flight or has failed.
+     *
+     * Set to `false` to opt back into the old "flash null while transitioning"
+     * behaviour — for instance if a consumer reads structural fields off
+     * `data` that would no longer match the current params.
+     *
+     * Only applies in subscription mode with caching enabled.
+     */
+    keepPreviousData?: boolean;
     /** @internal Subscription metadata for auto-refresh. */
     _subscribe?: { method: string; params: unknown[] };
 }
@@ -866,6 +1052,17 @@ export interface UseQueryResult<TRes> {
      * for triggering a side effect and refreshing the query in one call.
      */
     mutate: (action: Promise<unknown> | (() => Promise<unknown>)) => Promise<void>;
+    /**
+     * Cancel any in-flight fetch for this query. The Go handler's
+     * `context.Context` is canceled. `isLoading` flips to `false` and
+     * `data` is left untouched. Useful for long-running query handlers
+     * that stream progress via push events or tasks during execution.
+     *
+     * In cached subscription mode, this only cancels an in-flight
+     * `refetch()`; the underlying shared subscription is unaffected
+     * because other components may depend on it.
+     */
+    cancel: () => void;
 }
 
 /**
@@ -930,6 +1127,46 @@ export interface UsePushResult<T> {
     events: T[];
     /** Clear `lastEvent` and the `events` array. */
     clear: () => void;
+}
+
+/**
+ * Options for {@link useStream} hooks.
+ */
+export interface UseStreamOptions {
+    /**
+     * Parameters to pass to the stream factory. Changing this array restarts
+     * the stream from scratch — the previous items are cleared.
+     */
+    params?: unknown[];
+}
+
+/**
+ * Return value of {@link useStream} hooks (e.g., `useStreamUsers()`).
+ *
+ * The hook opens a server-side stream on mount and accumulates every
+ * yielded item into `items`. The stream is canceled and restarted when
+ * the parameters change, and canceled on unmount.
+ *
+ * @typeParam T - The per-item type.
+ */
+export interface UseStreamResult<T> {
+    /** Every item the stream has yielded so far, in order. */
+    items: T[];
+    /** `true` once the server has sent `stream_end` without error. */
+    done: boolean;
+    /** The error that ended the stream, or `null`. */
+    error: Error | null;
+    /** Whether items are still arriving. Mirrors `!done && !error`. */
+    isLoading: boolean;
+    /** Manually restart the stream from scratch. Clears `items`. */
+    restart: () => void;
+    /**
+     * Stop the stream now without unmounting or changing parameters.
+     * Already-received `items` are preserved, `isLoading` flips to `false`,
+     * and the Go handler's `context.Context` is canceled so it stops
+     * yielding. Call `restart()` afterwards to start a fresh stream.
+     */
+    cancel: () => void;
 }
 
 
@@ -1049,6 +1286,47 @@ function subscribeCached<T>(
 }
 
 /**
+ * Given the current cached snapshot and a ref holding the last snapshot this
+ * hook instance saw that had non-null data, return an "effective" snapshot
+ * that keeps the previous data visible while a new subscription loads. This
+ * is the core of {@link UseQueryOptions.keepPreviousData}.
+ *
+ * Subscriptions are keyed by method + JSON-encoded params in the shared
+ * cache. When a hook's params change, `useSyncExternalStore` switches to a
+ * fresh cache entry whose initial snapshot has `data: null, isLoading: true`.
+ * Without this selector, param-driven components flash an empty state for a
+ * few frames on every change — see issue #181 and the zeit "Logs by day"
+ * flash that triggered this fix.
+ *
+ * The selector is split out so it's unit-testable without React or a running
+ * aprot server. The only mutation is to the passed-in ref, which represents
+ * per-hook-instance state.
+ */
+function selectWithPreviousData<T>(
+    previousRef: { current: SubscriptionSnapshot<T> | null },
+    snapshot: SubscriptionSnapshot<T>,
+): SubscriptionSnapshot<T> {
+    if (snapshot.data !== null) {
+        // Fresh data landed — update the ref and return the snapshot as-is.
+        previousRef.current = snapshot;
+        return snapshot;
+    }
+    if (previousRef.current && previousRef.current.data !== null) {
+        // No current data yet, but we have a previous snapshot. Present the
+        // kept data with the CURRENT snapshot's isLoading and error so the
+        // consumer can still tell whether a refresh is in flight or has
+        // failed, and surface the error via QueryErrors / Alert.
+        return {
+            data: previousRef.current.data,
+            error: snapshot.error,
+            isLoading: snapshot.isLoading,
+        };
+    }
+    // First mount, no previous data to fall back on.
+    return snapshot;
+}
+
+/**
  * Push a new snapshot into a shared subscription cache entry and notify all
  * listeners. Used by `useQuery.refetch()` in cached mode to publish manually
  * fetched data so every subscriber across components sees the update --
@@ -1128,6 +1406,19 @@ export function useQuery<TArgs extends unknown[], TRes>(
         cacheStore ? cacheStore.subscribe : noopSubscribe,
         cacheStore ? cacheStore.getSnapshot : () => defaultSnapshot.current,
     );
+
+    // Stale-while-revalidate across cache-key transitions. Holds the most
+    // recent snapshot this hook instance has seen that had non-null data.
+    // When params change, the new cache entry starts empty (data: null,
+    // isLoading: true); without this fallback the consumer would see data
+    // flash to null for a few frames. Per-hook-instance (useRef), so it
+    // never leaks between components. Computed on every render so the
+    // returned snapshot always reflects the current cache state.
+    const previousSnapshotRef = useRef<SubscriptionSnapshot<TRes> | null>(null);
+    const keepPreviousData = options?.keepPreviousData ?? true;
+    const effectiveSnapshot = (shouldCache && keepPreviousData)
+        ? selectWithPreviousData<TRes>(previousSnapshotRef, cachedSnapshot)
+        : cachedSnapshot;
 
     // Local state for mutate/refetch — per-component, never shared via cache.
     const [localLoading, setLocalLoading] = useState(false);
@@ -1247,17 +1538,35 @@ export function useQuery<TArgs extends unknown[], TRes>(
         }
     }, [fetch, shouldCache]);
 
+    const cancel = useCallback(() => {
+        // Abort any in-flight fetch/refetch. In cached subscription mode the
+        // shared subscription itself is unaffected — only the most recent
+        // imperative refetch is canceled, since other components may share
+        // the cache entry.
+        const controller = abortRef.current;
+        if (controller) {
+            abortRef.current = null;
+            controller.abort();
+        }
+        // The fetch's finally clause skips its setIsLoading(false) when
+        // abortRef no longer points at its own controller, so do it here
+        // to give consumers a synchronous "no longer loading" signal.
+        setIsLoading(false);
+        setLocalLoading(false);
+    }, []);
+
     if (shouldCache) {
         return {
-            data: cachedSnapshot.data,
-            error: localError ?? cachedSnapshot.error,
-            isLoading: localLoading || cachedSnapshot.isLoading,
+            data: effectiveSnapshot.data,
+            error: localError ?? effectiveSnapshot.error,
+            isLoading: localLoading || effectiveSnapshot.isLoading,
             refetch,
             mutate,
+            cancel,
         };
     }
 
-    return { data, error, isLoading, refetch, mutate };
+    return { data, error, isLoading, refetch, mutate, cancel };
 }
 
 /**
@@ -1316,6 +1625,103 @@ export function useMutation<TArgs extends unknown[], TRes>(
     }, []);
 
     return { mutate, data, error, isLoading, reset, cancel };
+}
+
+/**
+ * Generic streaming query hook. Prefer the generated per-stream hooks
+ * (e.g., `useStreamUsers()`) which call this internally.
+ *
+ * Opens a server-streaming request and accumulates each yielded item into
+ * `items`. The stream restarts from scratch whenever `options.params`
+ * changes (keyed by JSON), and is canceled on unmount.
+ *
+ * Errors surfaced via `stream_end{code}` or thrown by the AsyncIterable
+ * are captured in `error` — consumers do not need try/catch.
+ */
+export function useStream<TRes>(
+    fn: (client: ApiClient, signal: AbortSignal) => AsyncIterable<TRes>,
+    options?: UseStreamOptions,
+): UseStreamResult<TRes>;
+export function useStream<TArgs extends unknown[], TRes>(
+    fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => AsyncIterable<TRes>,
+    options: UseStreamOptions & { params: TArgs },
+): UseStreamResult<TRes>;
+export function useStream<TRes>(
+    fn: (client: ApiClient, signal: AbortSignal, ...args: unknown[]) => AsyncIterable<TRes>,
+    options?: UseStreamOptions,
+): UseStreamResult<TRes> {
+    const client = useApiClient();
+    const params = options?.params;
+    const paramsKey = params ? JSON.stringify(params) : '';
+
+    const [items, setItems] = useState<TRes[]>([]);
+    const [done, setDone] = useState(false);
+    const [error, setError] = useState<Error | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const abortRef = useRef<AbortController | null>(null);
+    const tickRef = useRef(0);
+
+    const start = useCallback(() => {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+        const myTick = ++tickRef.current;
+
+        setItems([]);
+        setDone(false);
+        setError(null);
+        setIsLoading(true);
+
+        (async () => {
+            try {
+                const iterable = params
+                    ? fn(client, controller.signal, ...params)
+                    : (fn as unknown as (c: ApiClient, s: AbortSignal) => AsyncIterable<TRes>)(client, controller.signal);
+                for await (const item of iterable) {
+                    if (myTick !== tickRef.current) return;
+                    setItems((prev) => [...prev, item]);
+                }
+                if (myTick === tickRef.current) {
+                    setDone(true);
+                    setIsLoading(false);
+                }
+            } catch (err) {
+                if (myTick !== tickRef.current) return;
+                if (controller.signal.aborted) {
+                    // Cancellation is not an error; flip loading off and
+                    // leave items / error untouched.
+                    setIsLoading(false);
+                    return;
+                }
+                setError(err as Error);
+                setIsLoading(false);
+            }
+        })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [client, fn, paramsKey]);
+
+    useEffect(() => {
+        start();
+        return () => {
+            tickRef.current++;
+            abortRef.current?.abort();
+            abortRef.current = null;
+        };
+    }, [start]);
+
+    const cancel = useCallback(() => {
+        const controller = abortRef.current;
+        if (controller) {
+            abortRef.current = null;
+            controller.abort();
+        }
+        // Bump the tick so the in-flight async loop's stale-check returns
+        // before it can flip done/error/isLoading on us.
+        tickRef.current++;
+        setIsLoading(false);
+    }, []);
+
+    return { items, done, error, isLoading, restart: start, cancel };
 }
 
 /**

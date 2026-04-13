@@ -16,6 +16,9 @@ func NewRegistry() (*aprot.Registry, *Handlers, *Todos) {
 	handlers := NewHandlers()
 	registry.Register(handlers)
 
+	// Register streaming demo (iter.Seq)
+	registry.Register(NewStreamingHandlers())
+
 	// Register todo handlers (exposed via both WebSocket and REST)
 	todos := NewTodos()
 	registry.RegisterREST(todos)

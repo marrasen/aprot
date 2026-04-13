@@ -1,8 +1,10 @@
 import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
 import { TaskStatus, TaskStatusType, ListUsersResponse, createUser, getTask, processBatch, subscribeListUsers, onUserCreatedEvent, onUserUpdatedEvent, onSystemNotificationEvent } from './api/public-handlers';
+import { numbers } from './api/streaming-handlers';
 
 let client: ApiClient | null = null;
 let abortController: AbortController | null = null;
+let streamAbort: AbortController | null = null;
 
 function updateStatus(connected: boolean): void {
     const el = document.getElementById('status')!;
@@ -223,6 +225,67 @@ function createClient(transport: 'websocket' | 'sse'): ApiClient {
     return c;
 }
 
+// Drive the numbers() AsyncIterable progressively and append each row to
+// the table as it arrives. Cancellation routes through an AbortController
+// — the same mechanism the React useNumbers hook uses internally.
+async function startNumbersStream(): Promise<void> {
+    if (!client) return;
+    if (streamAbort) {
+        // A previous run is still in flight; abort it before starting a new one.
+        streamAbort.abort();
+    }
+    const count = Number((document.getElementById('streamCount') as HTMLInputElement).value);
+    const delayMs = Number((document.getElementById('streamDelay') as HTMLInputElement).value);
+
+    const tbody = document.getElementById('streamTbody')!;
+    while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+    const status = document.getElementById('streamStatus')!;
+    const startBtn = document.getElementById('streamStartBtn') as HTMLButtonElement;
+    const cancelBtn = document.getElementById('streamCancelBtn') as HTMLButtonElement;
+
+    streamAbort = new AbortController();
+    startBtn.disabled = true;
+    cancelBtn.disabled = false;
+    status.textContent = `streaming… 0 of ${count}`;
+
+    let received = 0;
+    try {
+        for await (const row of numbers(client, count, delayMs, { signal: streamAbort.signal })) {
+            received++;
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid #f0f0f0';
+            const td1 = document.createElement('td');
+            td1.style.padding = '4px 8px';
+            td1.textContent = String(row.index);
+            const td2 = document.createElement('td');
+            td2.style.padding = '4px 8px';
+            td2.textContent = row.label;
+            tr.appendChild(td1);
+            tr.appendChild(td2);
+            tbody.appendChild(tr);
+            status.textContent = `streaming… ${received} of ${count}`;
+        }
+        status.textContent = `done — ${received} rows`;
+    } catch (err) {
+        if (streamAbort?.signal.aborted) {
+            status.textContent = `canceled at ${received} rows`;
+        } else {
+            status.textContent = `error: ${(err as Error).message}`;
+            log(`Stream error: ${(err as Error).message}`, 'error');
+        }
+    } finally {
+        startBtn.disabled = false;
+        cancelBtn.disabled = true;
+        streamAbort = null;
+    }
+}
+
+function cancelNumbersStream(): void {
+    if (streamAbort) {
+        streamAbort.abort();
+    }
+}
+
 async function connectAndSubscribe(): Promise<void> {
     if (!client) return;
     const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
@@ -261,6 +324,8 @@ declare global {
         getTask: typeof doGetTask;
         processBatch: typeof doProcessBatch;
         cancelBatch: typeof cancelBatch;
+        startNumbersStream: typeof startNumbersStream;
+        cancelNumbersStream: typeof cancelNumbersStream;
         clearLog: typeof clearLog;
         reconnect: typeof reconnect;
     }
@@ -270,6 +335,8 @@ window.createUser = doCreateUser;
 window.getTask = doGetTask;
 window.processBatch = doProcessBatch;
 window.cancelBatch = cancelBatch;
+window.startNumbersStream = startNumbersStream;
+window.cancelNumbersStream = cancelNumbersStream;
 window.clearLog = clearLog;
 window.reconnect = reconnect;
 
