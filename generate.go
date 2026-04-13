@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -926,7 +927,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 				val = fmt.Sprintf("%d", v.Value)
 			}
 			ed.Values = append(ed.Values, enumValueTemplateData{
-				Name:  v.Name,
+				Name:  tsObjectKey(v.Name),
 				Value: val,
 			})
 		}
@@ -980,7 +981,7 @@ func (g *Generator) buildEnums() []enumTemplateData {
 				val = fmt.Sprintf("%d", v.Value)
 			}
 			ed.Values = append(ed.Values, enumValueTemplateData{
-				Name:  v.Name,
+				Name:  tsObjectKey(v.Name),
 				Value: val,
 			})
 		}
@@ -992,6 +993,38 @@ func (g *Generator) buildEnums() []enumTemplateData {
 // isIdentChar reports whether c is a valid Go/TypeScript identifier character.
 func isIdentChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+}
+
+// isValidJSIdent reports whether name is a valid (ASCII) JavaScript
+// identifier, safe to use as an unquoted object-literal key. Deliberately
+// ASCII-only: any name that falls outside this set is emitted as a quoted
+// string key instead, which is always syntactically valid.
+func isValidJSIdent(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$'
+		if i > 0 {
+			ok = ok || (c >= '0' && c <= '9')
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// tsObjectKey renders s as a TypeScript object-literal key. Valid JS
+// identifiers are returned bare; anything else — including the empty
+// string, hyphens, leading digits, spaces — is returned as a double-quoted
+// string literal.
+func tsObjectKey(s string) string {
+	if isValidJSIdent(s) {
+		return s
+	}
+	return strconv.Quote(s)
 }
 
 // containsTypeName checks whether name appears as a complete identifier in typeStr,
