@@ -135,9 +135,9 @@ type GetDashboardResponse struct {
 // CreateUserRequest is the payload accepted by the CreateUser endpoint.
 type CreateUserRequest struct {
 	// Name is the user's display name (2–100 characters).
-	Name string `json:"name"  validate:"required,min=2,max=100"`
+	Name string `json:"name"  transform:"trim"            validate:"required,min=2,max=100"`
 	// Email is the user's primary contact address; must be a valid email.
-	Email string `json:"email" validate:"required,email"`
+	Email string `json:"email" transform:"trim,lowercase" validate:"required,email"`
 }
 
 // UpdateUserRequest is the payload accepted by the UpdateUser endpoint.

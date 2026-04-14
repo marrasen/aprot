@@ -818,6 +818,31 @@ func (info *HandlerInfo) buildArgs(ctx context.Context, params jsontext.Value) (
 		}
 	}
 
+	// Apply struct-tag transformations (`transform:""`) before validation
+	// so rules like `required,min=1` see the normalized value.
+	for i, p := range info.Params {
+		pt := p.Type
+		if pt.Kind() == reflect.Ptr {
+			pt = pt.Elem()
+		}
+		if pt.Kind() != reflect.Struct {
+			continue
+		}
+		target := args[i+1] // +1 because args[0] is ctx
+		if target.Kind() == reflect.Ptr {
+			if target.IsNil() {
+				continue
+			}
+			target = target.Elem()
+		}
+		if !target.CanAddr() {
+			continue
+		}
+		if err := applyTransformsValue(target); err != nil {
+			return nil, err
+		}
+	}
+
 	// Validate struct parameters if a validator is set
 	if info.registry != nil && info.registry.validator != nil {
 		for i, p := range info.Params {
