@@ -34,6 +34,38 @@
 // parsing, so the names you choose in Go are the names your TypeScript client
 // uses.
 //
+// # Streaming Handlers
+//
+// Handlers may return [iter.Seq] or [iter.Seq2] instead of a single value to
+// stream results incrementally. Each yielded element is delivered to the
+// client as a separate wire message, so UIs can render rows as they arrive
+// instead of waiting for the full response:
+//
+//	func (h *Handlers) ListUsers(ctx context.Context) (iter.Seq[*User], error) {
+//	    return func(yield func(*User) bool) {
+//	        for cursor.Next(ctx) {
+//	            var u User
+//	            cursor.Scan(&u)
+//	            if !yield(&u) {
+//	                return // client canceled
+//	            }
+//	        }
+//	    }, nil
+//	}
+//
+//	func (h *Handlers) Prices(ctx context.Context) (iter.Seq2[string, float64], error) { ... }
+//
+// The generator emits an AsyncIterable on the TypeScript side, so clients
+// consume streams with a `for await` loop. Cancellation is bidirectional:
+// breaking out of the loop (or calling the hook's cancel function) cancels
+// the handler's context immediately, and the next `yield` returns false.
+//
+// Streaming is WebSocket/SSE only. [Registry.RegisterREST] and
+// [Registry.EnableREST] panic at registration time for streaming handlers
+// because REST cannot deliver multi-message responses over a single HTTP
+// request. See [OnStreamComplete] in the Middleware section for observing
+// the real end of a stream from logging / metrics middleware.
+//
 // # Input Transformation
 //
 // Request struct fields can be normalized before handler dispatch using
@@ -69,6 +101,32 @@
 // turning every request into a [CodeInvalidParams] response at runtime.
 // [ApplyTransforms] is also exposed so the same walker can be invoked
 // on ad-hoc values outside the handler flow.
+//
+// # Request Validation
+//
+// Request struct fields can declare validation rules via the "validate"
+// struct tag, using the vocabulary from github.com/go-playground/validator.
+// Validation is opt-in per registry: nothing happens until
+// [Registry.SetValidator] is called with a [StructValidator]. The supplied
+// [NewPlaygroundValidator] wraps the go-playground implementation and
+// produces a structured error payload that flows through to the generated
+// TypeScript client:
+//
+//	type CreateUserRequest struct {
+//	    Name  string `json:"name"  validate:"required,min=2,max=100"`
+//	    Email string `json:"email" validate:"required,email"`
+//	    Age   int    `json:"age"   validate:"gte=13,lte=120"`
+//	}
+//
+//	registry := aprot.NewRegistry()
+//	registry.Register(&Handlers{})
+//	registry.SetValidator(aprot.NewPlaygroundValidator())
+//
+// Validation runs after [ApplyTransforms] inside [HandlerInfo.Call], so
+// rules like "required,min=1" observe the already-normalized value. Failures
+// are returned as a [ProtocolError] with [CodeValidationFailed] and a
+// []FieldError payload describing every rule that failed, which the
+// generated TypeScript client exposes via its ApiError type.
 //
 // # Registry
 //
@@ -109,6 +167,31 @@
 //	server.Use(LoggingMiddleware())                                // all handlers
 //	registry.Register(&ProtectedHandlers{}, AuthMiddleware())     // this group only
 //
+// Middleware sees a streaming handler "return" as soon as its [iter.Seq]
+// value is constructed — before any items have been yielded — so a
+// naive `time.Since(start)` measurement logs 0ms for every stream. Call
+// [OnStreamComplete] from middleware to register a callback that fires
+// when the stream has actually terminated (via exhaustion, handler
+// panic, or client cancellation), with the terminal error and the
+// number of items delivered:
+//
+//	func LoggingMiddleware() aprot.Middleware {
+//	    return func(next aprot.Handler) aprot.Handler {
+//	        return func(ctx context.Context, req *aprot.Request) (any, error) {
+//	            start := time.Now()
+//	            aprot.OnStreamComplete(ctx, func(err error, items int) {
+//	                log.Printf("stream %s done in %s items=%d err=%v",
+//	                    req.Method, time.Since(start), items, err)
+//	            })
+//	            return next(ctx, req)
+//	        }
+//	    }
+//	}
+//
+// Calling [OnStreamComplete] on a unary-handler context is a no-op, so
+// the same middleware can log both streaming and unary handlers without
+// branching on handler kind.
+//
 // # Server
 //
 // A [Server] handles WebSocket upgrades, SSE streams, and HTTP POST dispatch.
@@ -122,6 +205,24 @@
 // Both transports can run simultaneously and share connection tracking —
 // [Server.Broadcast], [Server.PushToUser], and [Server.ConnectionCount] work
 // across all connections regardless of transport.
+//
+// Handlers can additionally be exposed over REST/HTTP alongside (or instead
+// of) WebSocket. Use [Registry.RegisterREST] for REST-only handlers, or
+// [Registry.EnableREST] to mark an existing WebSocket handler for REST as
+// well. [NewRESTAdapter] returns an [http.Handler] that serves every
+// REST-exposed handler in the registry:
+//
+//	registry.Register(&UserHandlers{})          // WebSocket only
+//	registry.RegisterREST(&TodoHandlers{})      // REST only
+//	registry.Register(&BothHandlers{})          // WebSocket...
+//	registry.EnableREST(&BothHandlers{})        // ...and also REST
+//	http.Handle("/api/", aprot.NewRESTAdapter(registry))
+//
+// HTTP method and path are derived from the handler method name by
+// convention (e.g. CreateUser → POST /users/create-user), and path
+// parameters are mapped from the Go parameter list. Streaming handlers
+// cannot be exposed via REST and will panic at registration — use
+// WebSocket or SSE for those.
 //
 // Use [ServerOptions] to configure client reconnection behavior. The server
 // sends this configuration to clients on connect; TypeScript clients apply it
@@ -254,6 +355,32 @@
 // The generator creates split files: client.ts (base client), one file per
 // handler group, and optional shared type files for types used across groups.
 // Use [NamingPlugin] to customize TypeScript name conventions.
+//
+// Setting [GeneratorOptions.Zod] emits a companion `.schema.ts` file for
+// every handler group whose request types carry "validate" tags. The
+// resulting Zod schemas mirror the server-side validation rules field
+// for field — so the TypeScript client can reject bad input before it
+// hits the wire, using the same constraints the server will enforce on
+// arrival:
+//
+//	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+//	    OutputDir: "./client/src/api",
+//	    Mode:      aprot.OutputReact,
+//	    Zod:       true,
+//	})
+//
+// For REST-exposed handlers, [NewOpenAPIGenerator] produces an OpenAPI
+// 3.0 document describing every REST endpoint in the registry. Go doc
+// comments on handler methods become `summary` / `description`, struct
+// and field doc comments flow into JSON Schema descriptions, and
+// "validate" tags become JSON Schema constraints:
+//
+//	oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0")
+//	spec, err := oag.Generate()
+//	// or: jsonBytes, err := oag.GenerateJSON()
+//
+// Use [OpenAPIGenerator.WithBasePath] when the API is mounted behind a
+// proxy or at a non-root path.
 //
 // # Context Helpers
 //
