@@ -32,3 +32,4 @@ cd example/react/client && npm run dev
 - **Never force push.** Always create new commits instead of amending.
 - **Always update PRs and issues** when pushing changes — keep descriptions current.
 - **Always update `README.md`** when adding or changing user-facing features.
+- **Always update `doc.go`** when adding or changing user-facing features. `doc.go` is the package-level overview that renders on pkg.go.dev as the aprot landing page — new public APIs, struct tags, and behavioral rules belong alongside the existing section headers (Handlers, Registry, Middleware, …). Public funcs and types also need their own doc comments, but a reader who lands on the overview should be able to discover the feature without browsing the function index.
