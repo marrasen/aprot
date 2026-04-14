@@ -292,6 +292,14 @@ func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Mid
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
 			wireMethod := structName + "." + info.Name
+			// Statically verify every `transform:""` tag on the handler's
+			// struct params — catches bad tags at registration time rather
+			// than turning each request into a CodeInvalidParams response.
+			for _, p := range info.Params {
+				if err := ValidateTransformTags(p.Type); err != nil {
+					panic(fmt.Sprintf("aprot: %s.%s: %s", structName, info.Name, err.Error()))
+				}
+			}
 			info.registry = r
 			if addToWSDispatch {
 				if existing, exists := r.handlers[wireMethod]; exists {
@@ -815,6 +823,31 @@ func (info *HandlerInfo) buildArgs(ctx context.Context, params jsontext.Value) (
 				}
 				args = append(args, val)
 			}
+		}
+	}
+
+	// Apply struct-tag transformations (`transform:""`) before validation
+	// so rules like `required,min=1` see the normalized value.
+	for i, p := range info.Params {
+		pt := p.Type
+		if pt.Kind() == reflect.Ptr {
+			pt = pt.Elem()
+		}
+		if pt.Kind() != reflect.Struct {
+			continue
+		}
+		target := args[i+1] // +1 because args[0] is ctx
+		if target.Kind() == reflect.Ptr {
+			if target.IsNil() {
+				continue
+			}
+			target = target.Elem()
+		}
+		if !target.CanAddr() {
+			continue
+		}
+		if err := applyTransformsValue(target); err != nil {
+			return nil, err
 		}
 	}
 

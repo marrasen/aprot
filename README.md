@@ -149,6 +149,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
+- **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
 - **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
 - **REST adapter** — serve handlers as REST/HTTP endpoints alongside WebSocket, with convention-based HTTP method detection and path parameter mapping
 - **OpenAPI generation** — opt-in OpenAPI 3.0 spec generation from handler metadata, including validation constraints from struct tags
@@ -473,6 +474,30 @@ try {
 ```
 
 `getValidationErrors` returns `null` for any error that isn't a `CodeValidationFailed` response, so the same form-submit catch block can handle both validation failures and other errors with a single check. The `FieldError` interface mirrors the Go `FieldError` struct in `validate.go`.
+
+### Input transformation
+
+Normalize incoming fields with `transform` struct tags. Transforms run **after** JSON decoding and **before** validation, so rules like `required,min=1` see the cleaned value. No registry setup required — a field is transformed iff it carries a `transform:""` tag.
+
+```go
+type SignupRequest struct {
+    Email    string   `json:"email"    transform:"trim,lowercase" validate:"required,email"`
+    Username string   `json:"username" transform:"trim"            validate:"required,min=3"`
+    Slug     string   `json:"slug"     transform:"trimleft=/,lowercase"`
+    Tags     []string `json:"tags"     transform:"trim,removeempty"`
+}
+```
+
+Supported ops, applied in the order listed:
+
+| Op                       | Type         | Behavior                                          |
+|--------------------------|--------------|---------------------------------------------------|
+| `trim`                   | string       | `strings.TrimSpace`                               |
+| `trimleft` / `trimright` | string       | `TrimLeft` / `TrimRight`; optional `=cutset` (defaults to whitespace) |
+| `uppercase` / `lowercase`| string       | `strings.ToUpper` / `strings.ToLower`             |
+| `removeempty`            | `[]string`   | drop empty elements (apply after `trim` to also drop whitespace-only) |
+
+Transforms recurse into nested structs and slices of structs, and they handle `*string` fields (nil pointers are left alone).
 
 ### Zod Schemas
 

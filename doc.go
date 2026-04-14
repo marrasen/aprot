@@ -34,6 +34,42 @@
 // parsing, so the names you choose in Go are the names your TypeScript client
 // uses.
 //
+// # Input Transformation
+//
+// Request struct fields can be normalized before handler dispatch using
+// "transform" struct tags. Transforms run after JSON decoding and before
+// struct validation, so validator rules see the cleaned value:
+//
+//	type SignupRequest struct {
+//	    Email    string   `json:"email"    transform:"trim,lowercase" validate:"required,email"`
+//	    Username string   `json:"username" transform:"trim"            validate:"required,min=3"`
+//	    Slug     string   `json:"slug"     transform:"trimleft=/,lowercase"`
+//	    Tags     []string `json:"tags"     transform:"trim,removeempty"`
+//	}
+//
+// Supported ops (applied in the order listed in the tag):
+//
+//   - trim                   strings.TrimSpace
+//   - trimleft[=cutset]      TrimLeft; optional cutset (defaults to whitespace)
+//   - trimright[=cutset]     TrimRight; optional cutset (defaults to whitespace)
+//   - uppercase              strings.ToUpper
+//   - lowercase              strings.ToLower
+//   - removeempty            []string only — drop empty elements
+//
+// Ops apply to string, *string (nil-safe), and []string fields, and the
+// walker recurses into nested structs, *struct, and []struct so nested
+// tags are picked up automatically. There is no registry opt-in — a
+// field is transformed if and only if it carries a "transform" tag.
+//
+// Every "transform" tag reachable from a handler's param types is
+// statically checked at registration time via [ValidateTransformTags].
+// Unknown ops, "removeempty" on a non-[]string field, or a "transform"
+// tag on an unsupported field type (int, bool, time.Time, …) cause
+// [Registry.Register] to panic when the server boots, rather than
+// turning every request into a [CodeInvalidParams] response at runtime.
+// [ApplyTransforms] is also exposed so the same walker can be invoked
+// on ad-hoc values outside the handler flow.
+//
 // # Registry
 //
 // A [Registry] collects handler groups, push events, enums, and custom errors
