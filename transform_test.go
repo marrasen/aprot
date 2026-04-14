@@ -207,6 +207,98 @@ func TestApplyTransforms_NonStructInput(t *testing.T) {
 	}
 }
 
+// --- Static tag validation: caught at registration time ---
+
+func TestValidateTransformTags_UnknownOp(t *testing.T) {
+	type req struct {
+		Name string `transform:"trim,frobnicate"`
+	}
+	err := ValidateTransformTags(reflect.TypeOf(req{}))
+	if err == nil {
+		t.Fatal("expected error for unknown op")
+	}
+	if !strings.Contains(err.Error(), "frobnicate") {
+		t.Errorf("error should mention op name: %v", err)
+	}
+}
+
+func TestValidateTransformTags_WrongFieldType(t *testing.T) {
+	type req struct {
+		Age int `transform:"trim"`
+	}
+	err := ValidateTransformTags(reflect.TypeOf(req{}))
+	if err == nil {
+		t.Fatal("expected error for transform on int")
+	}
+	if !strings.Contains(err.Error(), "Age") {
+		t.Errorf("error should mention field name: %v", err)
+	}
+}
+
+func TestValidateTransformTags_RemoveEmptyOnNonSlice(t *testing.T) {
+	type req struct {
+		Name string `transform:"removeempty"`
+	}
+	err := ValidateTransformTags(reflect.TypeOf(req{}))
+	if err == nil {
+		t.Fatal("expected error for removeempty on string")
+	}
+}
+
+func TestValidateTransformTags_NestedStruct(t *testing.T) {
+	type inner struct {
+		Age int `transform:"trim"`
+	}
+	type outer struct {
+		Inner inner
+	}
+	err := ValidateTransformTags(reflect.TypeOf(outer{}))
+	if err == nil {
+		t.Fatal("expected error from nested struct")
+	}
+}
+
+func TestValidateTransformTags_ValidTags(t *testing.T) {
+	type inner struct {
+		Label string `transform:"trim,uppercase"`
+	}
+	type req struct {
+		Email string   `transform:"trim,lowercase"`
+		Name  *string  `transform:"trim"`
+		Tags  []string `transform:"trim,removeempty"`
+		Items []inner
+	}
+	if err := ValidateTransformTags(reflect.TypeOf(req{})); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+type BadTransformHandlers struct{}
+
+type BadReq struct {
+	Age int `transform:"trim"`
+}
+
+func (h *BadTransformHandlers) Submit(ctx context.Context, req *BadReq) error { return nil }
+
+func TestRegister_PanicsOnBadTransformTag(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on registration with invalid transform tag")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("expected string panic, got %T: %v", r, r)
+		}
+		if !strings.Contains(msg, "transform") || !strings.Contains(msg, "Age") {
+			t.Errorf("panic message should mention transform and field name: %q", msg)
+		}
+	}()
+	registry := NewRegistry()
+	registry.Register(&BadTransformHandlers{})
+}
+
 // --- Integration test: transforms run before validation in buildArgs() ---
 
 type TransformValidated struct {

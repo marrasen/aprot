@@ -7,6 +7,99 @@ import (
 	"unicode"
 )
 
+// ValidateTransformTags statically checks every `transform:""` tag
+// reachable from t (a struct type or pointer to one). It catches
+// unknown op names, ops used on unsupported field kinds, and
+// `removeempty` on anything other than `[]string` — all at registration
+// time, so the problem surfaces when the server boots rather than on
+// the first request that happens to hit the handler.
+//
+// Non-struct types are a no-op; caller is responsible for passing the
+// param type. Recursion into nested structs, *struct, and slices/arrays
+// of struct (or *struct) elements mirrors the runtime walker. Cycles
+// are broken by tracking visited types.
+func ValidateTransformTags(t reflect.Type) error {
+	if t == nil {
+		return nil
+	}
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+	return validateTransformTagsType(t, map[reflect.Type]bool{})
+}
+
+func validateTransformTagsType(t reflect.Type, seen map[reflect.Type]bool) error {
+	if seen[t] {
+		return nil
+	}
+	seen[t] = true
+
+	for i := 0; i < t.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		tag := sf.Tag.Get("transform")
+		if tag != "" {
+			if err := validateTransformTagOnField(sf, ParseValidateTag(tag)); err != nil {
+				return err
+			}
+		}
+		if err := validateTransformTagsChildren(sf.Type, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTransformTagsChildren(ft reflect.Type, seen map[reflect.Type]bool) error {
+	switch ft.Kind() {
+	case reflect.Struct:
+		return validateTransformTagsType(ft, seen)
+	case reflect.Ptr:
+		if ft.Elem().Kind() == reflect.Struct {
+			return validateTransformTagsType(ft.Elem(), seen)
+		}
+	case reflect.Slice, reflect.Array:
+		et := ft.Elem()
+		if et.Kind() == reflect.Struct {
+			return validateTransformTagsType(et, seen)
+		}
+		if et.Kind() == reflect.Ptr && et.Elem().Kind() == reflect.Struct {
+			return validateTransformTagsType(et.Elem(), seen)
+		}
+	}
+	return nil
+}
+
+func validateTransformTagOnField(sf reflect.StructField, rules []ValidateRule) error {
+	ft := sf.Type
+	isStringField := ft.Kind() == reflect.String ||
+		(ft.Kind() == reflect.Ptr && ft.Elem().Kind() == reflect.String)
+	isStringSlice := ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.String
+
+	if !isStringField && !isStringSlice {
+		return fmt.Errorf("aprot: transform tag on field %q has unsupported type %s (only string, *string, and []string are supported)", sf.Name, ft)
+	}
+
+	for _, r := range rules {
+		switch r.Tag {
+		case "trim", "trimleft", "trimright", "uppercase", "lowercase":
+			// valid on string, *string, and []string (per-element)
+		case "removeempty":
+			if !isStringSlice {
+				return fmt.Errorf("aprot: transform tag on field %q uses removeempty on non-[]string type %s", sf.Name, ft)
+			}
+		default:
+			return fmt.Errorf("aprot: transform tag on field %q has unknown op %q", sf.Name, r.Tag)
+		}
+	}
+	return nil
+}
+
 // ApplyTransforms walks v (a struct or pointer to struct) and applies the
 // operations declared in `transform:""` tags on its exported fields. It
 // mutates the value in place.

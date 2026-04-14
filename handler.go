@@ -292,6 +292,14 @@ func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Mid
 		method := t.Method(i)
 		if info := validateMethod(method, v, structName); info != nil {
 			wireMethod := structName + "." + info.Name
+			// Statically verify every `transform:""` tag on the handler's
+			// struct params — catches bad tags at registration time rather
+			// than turning each request into a CodeInvalidParams response.
+			for _, p := range info.Params {
+				if err := ValidateTransformTags(p.Type); err != nil {
+					panic(fmt.Sprintf("aprot: %s.%s: %s", structName, info.Name, err.Error()))
+				}
+			}
 			info.registry = r
 			if addToWSDispatch {
 				if existing, exists := r.handlers[wireMethod]; exists {
