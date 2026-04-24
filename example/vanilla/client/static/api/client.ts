@@ -800,9 +800,12 @@ export class ApiClient {
      * rejected with an error and are NOT auto-resumed on reconnect.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
-        const client = this;
+        // Arrow factory captures `this` lexically — avoids aliasing `this` to a
+        // local variable (which trips @typescript-eslint/no-this-alias under
+        // strict presets). All inner closures are also arrows, so they inherit
+        // the same `this` (the ApiClient instance).
         return {
-            [Symbol.asyncIterator](): AsyncIterator<T> {
+            [Symbol.asyncIterator]: (): AsyncIterator<T> => {
                 let id = '';
                 let started = false;
                 const buffer: T[] = [];
@@ -838,9 +841,9 @@ export class ApiClient {
 
                 const cancelAtServer = () => {
                     if (id && !ended) {
-                        client.streams.delete(id);
-                        if (client.transport.isConnected()) {
-                            client.transport.send({ type: 'cancel', id });
+                        this.streams.delete(id);
+                        if (this.transport.isConnected()) {
+                            this.transport.send({ type: 'cancel', id });
                         }
                     }
                 };
@@ -848,13 +851,13 @@ export class ApiClient {
                 const ensureStarted = () => {
                     if (started) return;
                     started = true;
-                    if (!client.transport.isConnected()) {
+                    if (!this.transport.isConnected()) {
                         end(new Error('Not connected'));
                         return;
                     }
-                    id = String(++client.requestId);
-                    client.streams.set(id, { push, end });
-                    client.notifyLoadingChange();
+                    id = String(++this.requestId);
+                    this.streams.set(id, { push, end });
+                    this.notifyLoadingChange();
                     if (options?.signal) {
                         if (options.signal.aborted) {
                             cancelAtServer();
@@ -866,7 +869,7 @@ export class ApiClient {
                             end(new Error('Request aborted'));
                         }, { once: true });
                     }
-                    client.transport.send({ type: 'request', id, method, params });
+                    this.transport.send({ type: 'request', id, method, params });
                 };
 
                 return {
