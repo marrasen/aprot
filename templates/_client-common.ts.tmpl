@@ -806,9 +806,12 @@ export class ApiClient {
      * rejected with an error and are NOT auto-resumed on reconnect.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
-        const client = this;
+        // Arrow factory captures `this` lexically — avoids aliasing `this` to a
+        // local variable (which trips @typescript-eslint/no-this-alias under
+        // strict presets). All inner closures are also arrows, so they inherit
+        // the same `this` (the ApiClient instance).
         return {
-            [Symbol.asyncIterator](): AsyncIterator<T> {
+            [Symbol.asyncIterator]: (): AsyncIterator<T> => {
                 let id = '';
                 let started = false;
                 const buffer: T[] = [];
@@ -844,9 +847,9 @@ export class ApiClient {
 
                 const cancelAtServer = () => {
                     if (id && !ended) {
-                        client.streams.delete(id);
-                        if (client.transport.isConnected()) {
-                            client.transport.send({ type: 'cancel', id });
+                        this.streams.delete(id);
+                        if (this.transport.isConnected()) {
+                            this.transport.send({ type: 'cancel', id });
                         }
                     }
                 };
@@ -854,13 +857,13 @@ export class ApiClient {
                 const ensureStarted = () => {
                     if (started) return;
                     started = true;
-                    if (!client.transport.isConnected()) {
+                    if (!this.transport.isConnected()) {
                         end(new Error('Not connected'));
                         return;
                     }
-                    id = String(++client.requestId);
-                    client.streams.set(id, { push, end });
-                    client.notifyLoadingChange();
+                    id = String(++this.requestId);
+                    this.streams.set(id, { push, end });
+                    this.notifyLoadingChange();
                     if (options?.signal) {
                         if (options.signal.aborted) {
                             cancelAtServer();
@@ -872,7 +875,7 @@ export class ApiClient {
                             end(new Error('Request aborted'));
                         }, { once: true });
                     }
-                    client.transport.send({ type: 'request', id, method, params });
+                    this.transport.send({ type: 'request', id, method, params });
                 };
 
                 return {
@@ -1419,10 +1422,12 @@ export function useQuery<TArgs extends unknown[], TRes>(
     // These hooks are always called to satisfy Rules of Hooks.
     // When caching is off they receive no-op values and are inert.
 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     const cacheStore = useMemo(() => {
         if (!shouldCache) return null;
         return subscribeCached<TRes>(client, cacheKey, subscribeMethod!, subscribeOpts!.params);
+    // subscribeMethod / subscribeOpts.params are already encoded into cacheKey,
+    // so listing them again would force the memo to re-run on identity changes
+    // even when the resolved key is unchanged.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, cacheKey, shouldCache]);
 
@@ -1730,6 +1735,11 @@ export function useStream<TRes>(
     useEffect(() => {
         start();
         return () => {
+            // Intentionally mutates the LIVE ref instead of a captured local —
+            // that's how cleanup invalidates the in-flight async loop on
+            // unmount/restart. Copying `tickRef.current` to a local first (the
+            // rule's literal advice) would defeat the invalidation.
+            // eslint-disable-next-line react-hooks/exhaustive-deps
             tickRef.current++;
             abortRef.current?.abort();
             abortRef.current = null;
