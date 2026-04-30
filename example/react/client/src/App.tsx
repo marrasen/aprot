@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
-import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, useIsLoading } from './api/client'
+import { Component, Suspense, useEffect, useState, useRef } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
+import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, useIsLoading, useQuerySuspense } from './api/client'
 import { TaskNodeStatus } from './api/tasks-handler'
 import type { TaskNodeStatusType } from './api/tasks-handler'
 import {
@@ -10,6 +11,7 @@ import {
   useSystemNotificationEvent,
   useGetTaskMutation,
   useStartSharedWorkMutation,
+  listUsers,
   TaskStatus,
 } from './api/handlers'
 import type { TaskStatusType } from './api/handlers'
@@ -106,6 +108,73 @@ function UsersList() {
           ))
         )}
       </ul>
+    </div>
+  )
+}
+
+// Minimal class-based error boundary. React still requires a class for this —
+// hooks-only error boundaries don't exist. Demo-grade only; production apps
+// usually use react-error-boundary or similar.
+class QueryErrorBoundary extends Component<
+  { fallback: (err: Error) => ReactNode; children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  componentDidCatch(_err: Error, _info: ErrorInfo) {}
+  reset = () => this.setState({ error: null })
+  render() {
+    if (this.state.error) return this.props.fallback(this.state.error)
+    return this.props.children
+  }
+}
+
+// SuspenseUsersList demonstrates useQuerySuspense — the same listUsers data
+// the regular UsersList renders, but consumed via React 19's `use()` hook.
+// The component never sees `isLoading` or `error` props: the <Suspense>
+// boundary above shows the spinner until the first response lands, the
+// <QueryErrorBoundary> above catches handler failures, and re-renders on
+// TriggerRefresh happen via promise replacement (no fallback flash).
+function SuspenseUsersList() {
+  // useQuerySuspense reads listUsers.method (set by the generator) to key
+  // the shared promise cache and open a server subscription. Multiple
+  // components calling this with the same args share a single subscription,
+  // just like useQuery.
+  const data = useQuerySuspense(listUsers)
+  return (
+    <ul className="users-list">
+      {data.users.length === 0 ? (
+        <li>No users yet</li>
+      ) : (
+        data.users.map((user) => (
+          <li key={user.id}>
+            <strong>{user.name}</strong> - {user.email} ({user.id})
+          </li>
+        ))
+      )}
+    </ul>
+  )
+}
+
+function SuspenseUsersPanel() {
+  return (
+    <div className="card">
+      <h2>Users (Suspense)</h2>
+      <p style={{ color: '#666', fontSize: 13, marginBottom: 10 }}>
+        Same data as Users panel, but rendered through React 19's <code>use()</code> hook.
+        The suspense boundary handles the initial load; the error boundary catches handler failures.
+      </p>
+      <QueryErrorBoundary
+        fallback={(err) => (
+          <div style={{ padding: 8, background: '#f8d7da', borderRadius: 4 }}>
+            Error: {err.message}
+          </div>
+        )}
+      >
+        <Suspense fallback={<p>Loading users…</p>}>
+          <SuspenseUsersList />
+        </Suspense>
+      </QueryErrorBoundary>
     </div>
   )
 }
@@ -634,6 +703,7 @@ function AppContent() {
       <div className="grid">
         <CreateUserForm onLog={addLog} />
         <UsersList />
+        <SuspenseUsersPanel />
       </div>
       <TaskViewer onLog={addLog} />
       <BatchProcessor onLog={addLog} />

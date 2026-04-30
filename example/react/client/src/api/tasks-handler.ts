@@ -77,6 +77,10 @@ export interface TaskUpdateEvent {
 export function cancelTask(client: ApiClient, taskId: string, options?: RequestOptions): Promise<void> {
     return client.request<void>('tasksHandler.CancelTask', [taskId], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+cancelTask.method = 'tasksHandler.CancelTask' as const;
 
 export function subscribeCancelTask(client: ApiClient, taskId: string, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError);

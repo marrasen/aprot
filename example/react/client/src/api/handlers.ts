@@ -100,6 +100,10 @@ export interface UserUpdatedEvent {
 export function createUser(client: ApiClient, name: string, email: string, options?: RequestOptions): Promise<CreateUserResponse> {
     return client.request<CreateUserResponse>('Handlers.CreateUser', [name, email], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+createUser.method = 'Handlers.CreateUser' as const;
 
 export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<CreateUserResponse>('Handlers.CreateUser', [name, email], callback, onError);
@@ -109,6 +113,10 @@ export function subscribeCreateUser(client: ApiClient, name: string, email: stri
 export function getDashboard(client: ApiClient, options?: RequestOptions): Promise<GetDashboardResponse> {
     return client.request<GetDashboardResponse>('Handlers.GetDashboard', [], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+getDashboard.method = 'Handlers.GetDashboard' as const;
 
 export function subscribeGetDashboard(client: ApiClient, callback: (data: GetDashboardResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetDashboardResponse>('Handlers.GetDashboard', [], callback, onError);
@@ -118,6 +126,10 @@ export function subscribeGetDashboard(client: ApiClient, callback: (data: GetDas
 export function getTask(client: ApiClient, id: string, options?: RequestOptions): Promise<GetTaskResponse> {
     return client.request<GetTaskResponse>('Handlers.GetTask', [id], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+getTask.method = 'Handlers.GetTask' as const;
 
 export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetTaskResponse>('Handlers.GetTask', [id], callback, onError);
@@ -127,6 +139,10 @@ export function subscribeGetTask(client: ApiClient, id: string, callback: (data:
 export function getUser(client: ApiClient, id: string, options?: RequestOptions): Promise<GetUserResponse> {
     return client.request<GetUserResponse>('Handlers.GetUser', [id], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+getUser.method = 'Handlers.GetUser' as const;
 
 export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<GetUserResponse>('Handlers.GetUser', [id], callback, onError);
@@ -136,6 +152,10 @@ export function subscribeGetUser(client: ApiClient, id: string, callback: (data:
 export function listUsers(client: ApiClient, options?: RequestOptions): Promise<ListUsersResponse> {
     return client.request<ListUsersResponse>('Handlers.ListUsers', [], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+listUsers.method = 'Handlers.ListUsers' as const;
 
 export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<ListUsersResponse>('Handlers.ListUsers', [], callback, onError);
@@ -145,6 +165,10 @@ export function subscribeListUsers(client: ApiClient, callback: (data: ListUsers
 export function processBatch(client: ApiClient, items: string[], delay: number, options?: RequestOptions): Promise<ProcessBatchResponse> {
     return client.request<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+processBatch.method = 'Handlers.ProcessBatch' as const;
 
 export function subscribeProcessBatch(client: ApiClient, items: string[], delay: number, callback: (data: ProcessBatchResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], callback, onError);
@@ -154,6 +178,10 @@ export function subscribeProcessBatch(client: ApiClient, items: string[], delay:
 export function sendNotification(client: ApiClient, message: string, level: string, options?: RequestOptions): Promise<SystemNotificationEvent> {
     return client.request<SystemNotificationEvent>('Handlers.SendNotification', [message, level], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+sendNotification.method = 'Handlers.SendNotification' as const;
 
 export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<SystemNotificationEvent>('Handlers.SendNotification', [message, level], callback, onError);
@@ -163,6 +191,10 @@ export function subscribeSendNotification(client: ApiClient, message: string, le
 export function startSharedWork(client: ApiClient, title: string, steps: string[], delay: number, options?: RequestOptions): Promise<StartSharedWorkResponse> {
     return client.request<StartSharedWorkResponse>('Handlers.StartSharedWork', [title, steps, delay], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+startSharedWork.method = 'Handlers.StartSharedWork' as const;
 
 export function subscribeStartSharedWork(client: ApiClient, title: string, steps: string[], delay: number, callback: (data: StartSharedWorkResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<StartSharedWorkResponse>('Handlers.StartSharedWork', [title, steps, delay], callback, onError);

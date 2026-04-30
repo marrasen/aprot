@@ -382,6 +382,51 @@
 // Use [OpenAPIGenerator.WithBasePath] when the API is mounted behind a
 // proxy or at a non-root path.
 //
+// # React Suspense
+//
+// In addition to per-handler hooks like `useListUsers()` that return
+// `{data, isLoading, error}`, OutputReact also emits `useQuerySuspense` --
+// a single generic hook that pairs aprot's promise-returning query
+// functions with React 19's `use()` and `<Suspense>` boundaries:
+//
+//	import { Suspense } from 'react'
+//	import { useQuerySuspense } from './api/client'
+//	import { listUsers, getUser } from './api/handlers'
+//
+//	function UsersList() {
+//	    const data = useQuerySuspense(listUsers)        // no params
+//	    return data.users.map(u => <li key={u.id}>{u.name}</li>)
+//	}
+//
+//	function UserView({ id }: { id: string }) {
+//	    const user = useQuerySuspense(getUser, id)      // typed params
+//	    return <h1>{user.name}</h1>
+//	}
+//
+//	<Suspense fallback={<Spinner />}>
+//	    <ErrorBoundary fallback={<ErrorView />}>
+//	        <UsersList />
+//	    </ErrorBoundary>
+//	</Suspense>
+//
+// `useQuerySuspense` opens a server subscription on first read (using the
+// same TriggerRefresh machinery as `useQuery`), suspends the component
+// until the first response arrives, and replaces the cached promise with a
+// new resolved one on each subsequent server push -- so live updates flow
+// without re-suspending. Errors thrown by the handler are propagated to
+// the nearest error boundary.
+//
+// The hook works directly with the generated query functions because each
+// one carries a `.method` property identifying its wire method:
+//
+//	export function listUsers(client: ApiClient, options?: RequestOptions): Promise<ListUsersResponse> { ... }
+//	listUsers.method = 'PublicHandlers.ListUsers' as const;
+//
+// No per-handler Suspense hook is generated; the single generic hook plus
+// the metadata is enough. Requires React 19+. Mutations and streams
+// continue to use `useMutation` and `useStream` respectively -- only
+// queries fit the Suspense paradigm cleanly.
+//
 // # Context Helpers
 //
 // Several functions extract request-scoped values from context:

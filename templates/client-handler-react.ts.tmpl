@@ -65,6 +65,10 @@ export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{par
 export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
     return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+{{.MethodName}}.method = '{{.WireMethod}}' as const;
 
 export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError);
