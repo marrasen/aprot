@@ -305,6 +305,36 @@ function UsersList() {
 }
 ```
 
+**React Suspense (`useQuerySuspense`)** — pairs aprot's generated query functions with React 19's `use()` hook for components that prefer declarative loading boundaries:
+
+```tsx
+import { Suspense } from 'react';
+import { ApiClient, ApiClientProvider, getWebSocketUrl, useQuerySuspense } from './api/client';
+import { listUsers, getUser } from './api/handlers';
+
+function UsersList() {
+    const data = useQuerySuspense(listUsers);            // no params
+    return <ul>{data.users.map(u => <li key={u.id}>{u.name}</li>)}</ul>;
+}
+
+function UserView({ id }: { id: string }) {
+    const user = useQuerySuspense(getUser, id);          // typed params
+    return <h1>{user.name}</h1>;
+}
+
+function App() {
+    return (
+        <ApiClientProvider value={client}>
+            <Suspense fallback={<p>Loading…</p>}>
+                <UsersList />
+            </Suspense>
+        </ApiClientProvider>
+    );
+}
+```
+
+A single generic hook handles every handler — no per-method Suspense hook is generated. The hook opens a server subscription on first read (using the same `TriggerRefresh` machinery as `useQuery`), suspends until the first response arrives, then replaces the cached promise on each subsequent push so live updates flow without re-suspending. Errors propagate to the nearest error boundary. Requires React 19+.
+
 **With auth tokens** (dynamic URL for automatic token refresh on reconnect):
 
 ```typescript

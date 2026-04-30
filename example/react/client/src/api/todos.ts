@@ -40,6 +40,10 @@ export interface UpdateTodoRequest {
 export function createTodo(client: ApiClient, req: CreateTodoRequest, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.CreateTodo', [req], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+createTodo.method = 'Todos.CreateTodo' as const;
 
 export function subscribeCreateTodo(client: ApiClient, req: CreateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<Todo>('Todos.CreateTodo', [req], callback, onError);
@@ -49,6 +53,10 @@ export function subscribeCreateTodo(client: ApiClient, req: CreateTodoRequest, c
 export function deleteTodo(client: ApiClient, id: string, options?: RequestOptions): Promise<void> {
     return client.request<void>('Todos.DeleteTodo', [id], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+deleteTodo.method = 'Todos.DeleteTodo' as const;
 
 export function subscribeDeleteTodo(client: ApiClient, id: string, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<void>('Todos.DeleteTodo', [id], callback, onError);
@@ -58,6 +66,10 @@ export function subscribeDeleteTodo(client: ApiClient, id: string, callback: (da
 export function getTodo(client: ApiClient, id: string, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.GetTodo', [id], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+getTodo.method = 'Todos.GetTodo' as const;
 
 export function subscribeGetTodo(client: ApiClient, id: string, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<Todo>('Todos.GetTodo', [id], callback, onError);
@@ -67,6 +79,10 @@ export function subscribeGetTodo(client: ApiClient, id: string, callback: (data:
 export function listTodos(client: ApiClient, options?: RequestOptions): Promise<ListTodosResponse> {
     return client.request<ListTodosResponse>('Todos.ListTodos', [], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+listTodos.method = 'Todos.ListTodos' as const;
 
 export function subscribeListTodos(client: ApiClient, callback: (data: ListTodosResponse) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<ListTodosResponse>('Todos.ListTodos', [], callback, onError);
@@ -76,6 +92,10 @@ export function subscribeListTodos(client: ApiClient, callback: (data: ListTodos
 export function updateTodo(client: ApiClient, id: string, req: UpdateTodoRequest, options?: RequestOptions): Promise<Todo> {
     return client.request<Todo>('Todos.UpdateTodo', [id, req], options);
 }
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+updateTodo.method = 'Todos.UpdateTodo' as const;
 
 export function subscribeUpdateTodo(client: ApiClient, id: string, req: UpdateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
     return client.subscribe<Todo>('Todos.UpdateTodo', [id, req], callback, onError);
