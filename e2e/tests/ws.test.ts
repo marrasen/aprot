@@ -140,6 +140,75 @@ describe('WebSocket Transport', () => {
         expect(client.getLoadingCount()).toBe(0);
     });
 
+    test('onLoadingChange does not flag subscriptions as loading after reconnect', async () => {
+        // Use a dedicated client with auto-reconnect enabled. The default
+        // afterEach disconnects the suite-wide client; this one is cleaned
+        // up locally.
+        const reconnectClient = new ApiClient(wsUrl(), {
+            reconnect: true,
+            reconnectInterval: 50,
+        });
+        await reconnectClient.connect();
+
+        try {
+            // Subscribe and wait for initial data to land. The active
+            // subscription must survive the reconnect so resubscribeAll()
+            // re-registers it server-side.
+            await new Promise<void>((resolve) => {
+                subscribeListUsers(reconnectClient, (_result: ListUsersResponse) => {
+                    resolve();
+                });
+            });
+            expect(reconnectClient.getLoadingCount()).toBe(0);
+
+            // Capture every onLoadingChange notification fired from this
+            // point onward. With only an active subscription pending (no
+            // user-initiated requests), no notification should report
+            // count > 0 — including the one fired by resubscribeAll() after
+            // the reconnect lands.
+            const counts: number[] = [];
+            const offLoading = reconnectClient.onLoadingChange((count) => counts.push(count));
+
+            // Force a transport-level disconnect to simulate a network drop
+            // (Spotify-foreground pause, auth-token rotation, etc.). Going
+            // through transport.disconnect() — not client.disconnect() —
+            // keeps `manualDisconnect` false, so the auto-reconnect path
+            // engages and resubscribeAll() runs.
+            const transport = (reconnectClient as unknown as {
+                transport: { disconnect: () => void };
+            }).transport;
+            transport.disconnect();
+
+            // Wait for the client to fully re-enter the connected state.
+            await new Promise<void>((resolve) => {
+                const offState = reconnectClient.onStateChange((s) => {
+                    if (s === 'connected') {
+                        offState();
+                        resolve();
+                    }
+                });
+            });
+
+            // Give resubscribe responses time to land.
+            await new Promise((r) => setTimeout(r, 200));
+
+            offLoading();
+
+            // After reconnect, getLoadingCount() must still report 0 (it
+            // already excludes subscription pending entries).
+            expect(reconnectClient.getLoadingCount()).toBe(0);
+
+            // The notification stream must agree. With the regression in
+            // notifyLoadingChange(), resubscribeAll() puts subscription IDs
+            // back in `pending` and notifies listeners with `pending.size`,
+            // so useIsLoading() flips to true and stays stuck until each
+            // initial response arrives — exactly the symptom this guards.
+            expect(counts.every((c) => c === 0)).toBe(true);
+        } finally {
+            reconnectClient.disconnect();
+        }
+    });
+
     test('unknown method throws ApiError with isNotFound', async () => {
         try {
             await client.request('NonExistent', []);

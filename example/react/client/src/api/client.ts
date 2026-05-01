@@ -536,7 +536,13 @@ export class ApiClient {
     }
 
     private notifyLoadingChange(): void {
-        const count = this.pending.size + this.buffer.length + this.streams.size;
+        // Read through getLoadingCount() so the listener-facing count and the
+        // public getter cannot diverge. Subscription pending entries (added
+        // by subscribe() and re-added by resubscribeAll() on reconnect) must
+        // not flip useIsLoading() to true — otherwise reconnects after auth
+        // refresh or coming back from another app leave the global loading
+        // state stuck until every subscription's first response arrives.
+        const count = this.getLoadingCount();
         if (count !== this.lastLoadingCount) {
             this.lastLoadingCount = count;
             for (const listener of this.loadingListeners) {
