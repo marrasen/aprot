@@ -560,6 +560,52 @@ A few validate-tag semantics worth knowing when designing your request structs:
 - **`url` and `email` are absolute-only** because that's how `go-playground/validator` defines them upstream. `validate:"url"` rejects app-internal paths like `/images/123/mobile`, and `email` is strict about the formats it accepts. Not an aprot choice — just a footgun to know about so you don't fight it for half an hour. If you need relative URLs, fall back to `validate:"max=500"` or a custom validator.
 - **Slice and map element types are substituted into parent schemas.** A field of type `[]EventLink` whose element struct has its own `validate` tags becomes `Links: z.array(EventLinkSchema)` in the parent — not `z.array(z.any())`. Combined with `validate:"dive"` on the parent slice, this means the same `dive` tag drives both server-side element validation (via `go-playground/validator`) and client-side element validation (via the substituted Zod schema). Primitive elements (`[]string`, `[]int`, `map[string]bool`) get a typed `z.array(z.string())` / `z.record(z.string(), z.boolean())` etc. Slices of slices, slices of maps, and anonymous-struct elements still fall through to `z.any()`.
 
+## Connection Errors
+
+Connection-level failures surface as a structured `ConnectionError` (separate from `ApiError`, which represents a structured server-side error response). It extends `Error`, so existing `instanceof Error` catches keep working — switch on `err.reason` to render appropriate UI:
+
+```typescript
+import { ConnectionError } from './api/client';
+
+try {
+    await addTodo(client, { title: 'Buy milk' });
+} catch (err) {
+    if (err instanceof ConnectionError) {
+        switch (err.reason) {
+            case 'offline':         return showBanner('You appear to be offline.');
+            case 'server-rejected': return showError('Session expired. Please sign in.');
+            case 'server-closed':   return showError(`Server closed: ${err.closeReason ?? err.closeCode}`);
+            case 'network-error':   return showError('Connection failed. Retrying…');
+            case 'manual':          return; // we initiated the disconnect
+        }
+    }
+    throw err;
+}
+```
+
+Reasons:
+
+| Reason | When |
+|---|---|
+| `offline` | `navigator.onLine` was `false` at failure time. |
+| `server-rejected` | The server sent an `ApiError` with code `ConnectionRejected` (e.g. invalid session) before closing. The original `ApiError` is attached as `err.cause`. |
+| `server-closed` | Transport closed cleanly after the WebSocket upgrade completed. `err.closeCode` and `err.closeReason` carry the WebSocket `CloseEvent` fields. |
+| `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. |
+| `manual` | The caller invoked `client.disconnect()`. |
+
+The same `ConnectionError` instance is delivered to:
+
+- **In-flight `request` / `requestStream` calls** — pending promises reject with it when the connection drops.
+- **`request()` issued while disconnected** — rejects synchronously with the most recent `ConnectionError`, falling back to `'offline'` (when `navigator.onLine === false`) or `'manual'`.
+- **`onConnectionError(listener)`** — register a listener to drive UI like an "Offline" banner. Multiple listeners supported; returns an unsubscribe function. `getLastConnectionError()` returns the most recently observed error or `null`.
+
+```typescript
+const off = client.onConnectionError((err) => {
+    if (err.isOffline()) showOfflineBanner();
+    else hideOfflineBanner();
+});
+```
+
 ## REST Adapter
 
 Serve your handlers as REST/HTTP endpoints alongside WebSocket. Use `RegisterREST` for REST-only handlers, or `EnableREST` to expose a WebSocket handler via REST as well:

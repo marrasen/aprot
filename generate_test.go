@@ -3205,3 +3205,104 @@ func TestGenerateEnum_NonIdentifierKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateConnectionError verifies that the generated TS client exposes a
+// structured ConnectionError + ConnectionErrorReason API so applications can
+// distinguish "no network", "server closed", "rejected by server" and
+// "manual disconnect" outcomes from each other. Browsers collapse most
+// network-level failures into WebSocket close code 1006 with no diagnostic
+// info, so the four-bucket classification is the most useful split that's
+// actually achievable from JS.
+//
+// Both single-file (GenerateTo) and multi-file (Generate) clients must carry
+// the new API.
+func TestGenerateConnectionError(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+
+	// --- Multi-file output ------------------------------------------------
+	multi, err := NewGenerator(registry).Generate()
+	if err != nil {
+		t.Fatalf("Generate (multi-file) failed: %v", err)
+	}
+	baseContent, ok := multi["client.ts"]
+	if !ok {
+		t.Fatalf("client.ts not in multi-file output: %v", mapKeys(multi))
+	}
+
+	// --- Single-file output (GenerateTo) ----------------------------------
+	var singleBuf bytes.Buffer
+	if err := NewGenerator(registry).GenerateTo(&singleBuf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	singleContent := singleBuf.String()
+
+	// --- Single-file React output -----------------------------------------
+	var reactBuf bytes.Buffer
+	if err := NewGenerator(registry).WithOptions(GeneratorOptions{Mode: OutputReact}).GenerateTo(&reactBuf); err != nil {
+		t.Fatalf("GenerateTo (react) failed: %v", err)
+	}
+	reactContent := reactBuf.String()
+
+	wantSubstrings := []struct {
+		substr string
+		desc   string
+	}{
+		// Reason union — must list every bucket so apps can switch on it.
+		{`'offline'`, "offline reason literal"},
+		{`'server-rejected'`, "server-rejected reason literal"},
+		{`'server-closed'`, "server-closed reason literal"},
+		{`'network-error'`, "network-error reason literal"},
+		{`'manual'`, "manual reason literal"},
+		{"export type ConnectionErrorReason", "ConnectionErrorReason exported"},
+
+		// ConnectionError class — extends Error so `instanceof Error` keeps
+		// working, but adds reason + close diagnostics.
+		{"export class ConnectionError extends Error", "ConnectionError class exported and extends Error"},
+		{"readonly reason: ConnectionErrorReason", "ConnectionError.reason field"},
+		{"readonly closeCode?: number", "ConnectionError.closeCode field"},
+		{"readonly closeReason?: string", "ConnectionError.closeReason field"},
+
+		// Listener API — apps need a way to subscribe to classified errors.
+		{"onConnectionError(", "onConnectionError listener registration"},
+
+		// Classification source: navigator.onLine drives the offline bucket.
+		{"navigator", "uses navigator.onLine to classify offline failures"},
+
+		// WebSocket transport must surface the CloseEvent so the classifier
+		// can distinguish post-upgrade (clean) from pre-upgrade (1006).
+		{"event.code", "WebSocket close code captured"},
+	}
+
+	for _, c := range wantSubstrings {
+		if !strings.Contains(baseContent, c.substr) {
+			t.Errorf("multi-file client.ts: %s — expected substring %q", c.desc, c.substr)
+		}
+		if !strings.Contains(singleContent, c.substr) {
+			t.Errorf("GenerateTo client.ts: %s — expected substring %q", c.desc, c.substr)
+		}
+		if !strings.Contains(reactContent, c.substr) {
+			t.Errorf("GenerateTo react client.ts: %s — expected substring %q", c.desc, c.substr)
+		}
+	}
+
+	// The legacy bare `new Error('Connection closed')` rejections must be
+	// replaced with the structured ConnectionError so consumers can switch
+	// on .reason. Allow the old string to live on inside a ConnectionError
+	// message, but not as a bare `new Error(...)` call.
+	bannedPatterns := []string{
+		"new Error('Connection closed')",
+		`new Error("Connection closed")`,
+	}
+	for _, banned := range bannedPatterns {
+		if strings.Contains(baseContent, banned) {
+			t.Errorf("multi-file client.ts still uses bare %q — should be ConnectionError", banned)
+		}
+		if strings.Contains(singleContent, banned) {
+			t.Errorf("GenerateTo client.ts still uses bare %q — should be ConnectionError", banned)
+		}
+		if strings.Contains(reactContent, banned) {
+			t.Errorf("GenerateTo react client.ts still uses bare %q — should be ConnectionError", banned)
+		}
+	}
+}
