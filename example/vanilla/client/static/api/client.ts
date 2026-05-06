@@ -558,6 +558,14 @@ export class ApiClient {
     }
 
     private handleClose(info?: TransportCloseInfo): void {
+        // disconnect() rejects pending requests/streams synchronously and
+        // sets state to 'disconnected'. The transport's onclose still fires
+        // afterwards to confirm the close — short-circuit so we don't
+        // re-notify listeners or rebuild the error.
+        if (this.manualDisconnect && this.state === 'disconnected') {
+            this.pendingRejection = null;
+            return;
+        }
         const reason = this.classifyClose(info);
         const error = this.buildConnectionError(reason, info);
         // Consume the pending rejection: subsequent reconnect attempts
@@ -619,6 +627,7 @@ export class ApiClient {
     }
 
     disconnect(): void {
+        if (this.manualDisconnect) return;
         this.manualDisconnect = true;
         this.teardownPageListeners();
         if (this.reconnectTimer) {
@@ -626,6 +635,26 @@ export class ApiClient {
             this.reconnectTimer = null;
         }
         this.subscriptions.clear();
+
+        // Reject in-flight requests/streams synchronously: the server may
+        // still respond between transport.disconnect() and the close event
+        // landing, racing the rejection in handleClose() and resolving the
+        // promise instead. Doing it here means the caller's "I'm done"
+        // semantics win over a late server reply.
+        const error = this.buildConnectionError('manual', undefined);
+        for (const [, p] of this.pending) {
+            p.onSettle?.();
+            p.reject(error);
+        }
+        this.pending.clear();
+        const streams = Array.from(this.streams.values());
+        this.streams.clear();
+        for (const s of streams) {
+            s.end(error);
+        }
+        this.notifyLoadingChange();
+        this.notifyConnectionError(error);
+
         this.transport.disconnect();
         this.setState('disconnected');
     }
