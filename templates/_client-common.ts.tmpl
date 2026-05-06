@@ -71,6 +71,68 @@ export function getValidationErrors(err: unknown): FieldError[] | null {
     if (!Array.isArray(err.data)) return null;
     return err.data as FieldError[];
 }
+
+// ConnectionErrorReason classifies why a connection failed or could not be
+// used. Browsers deliberately collapse most pre-WebSocket-upgrade failures
+// (DNS, TCP refused, TLS handshake, HTTP 4xx during upgrade) into close
+// code 1006 with no diagnostic text, so finer-grained classification is
+// not achievable from JS — these all surface as 'network-error'.
+//
+//   - 'offline':         navigator.onLine was false at failure time.
+//   - 'server-rejected': server sent an ApiError with code ConnectionRejected
+//                        (e.g. invalid session) before closing. The original
+//                        ApiError is attached via ConnectionError.cause.
+//   - 'server-closed':   transport closed cleanly after the WebSocket upgrade
+//                        completed; closeCode and closeReason are populated.
+//   - 'network-error':   pre-upgrade failure or close code 1006 — refused,
+//                        unreachable, TLS or upgrade-time HTTP error.
+//   - 'manual':          the caller invoked client.disconnect().
+export type ConnectionErrorReason =
+    | 'offline'
+    | 'server-rejected'
+    | 'server-closed'
+    | 'network-error'
+    | 'manual';
+
+// ConnectionErrorInit carries the optional diagnostic fields attached to a
+// ConnectionError. closeCode/closeReason mirror the WebSocket CloseEvent
+// fields when available; cause carries the underlying ApiError for
+// 'server-rejected' so callers can read err.cause.code / err.cause.data.
+export interface ConnectionErrorInit {
+    closeCode?: number;
+    closeReason?: string;
+    cause?: unknown;
+}
+
+// ConnectionError is thrown (or attached to a rejected promise) whenever a
+// request fails because the connection itself is unhealthy — distinct from
+// ApiError, which represents a structured server-side error response. It
+// extends Error so existing `catch (err) { ... }` blocks keep working; new
+// code can switch on err.reason for user-facing messaging.
+export class ConnectionError extends Error {
+    readonly reason: ConnectionErrorReason;
+    readonly closeCode?: number;
+    readonly closeReason?: string;
+    // cause is the underlying ApiError for 'server-rejected', if any.
+    // For other reasons it is undefined. Typed `unknown` to align with the
+    // ES2022 Error.cause convention without forcing a specific shape.
+    readonly cause?: unknown;
+
+    constructor(reason: ConnectionErrorReason, message: string, init?: ConnectionErrorInit) {
+        super(message);
+        this.name = 'ConnectionError';
+        this.reason = reason;
+        this.closeCode = init?.closeCode;
+        this.closeReason = init?.closeReason;
+        this.cause = init?.cause;
+    }
+
+    isOffline(): boolean { return this.reason === 'offline'; }
+    isServerRejected(): boolean { return this.reason === 'server-rejected'; }
+    isServerClosed(): boolean { return this.reason === 'server-closed'; }
+    isNetworkError(): boolean { return this.reason === 'network-error'; }
+    isManual(): boolean { return this.reason === 'manual'; }
+}
 {{end}}
 
 {{define "types"}}
@@ -135,9 +197,26 @@ export function getSSEUrl(path: string = '/sse'): string {
 {{end}}
 
 {{define "api-client-class"}}
+// TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
+// transport up to the client's classification logic. SSE has no equivalent
+// (the EventSource error event exposes nothing structured), so the SSE
+// transport synthesizes an empty info object — it lands as 'network-error'
+// after offline/manual checks, which is the most accurate bucket browsers
+// will let us name.
+interface TransportCloseInfo {
+    /** WebSocket CloseEvent.code, when available. 1006 = abnormal (pre-upgrade) closure. */
+    code?: number;
+    /** WebSocket CloseEvent.reason, when non-empty. */
+    reason?: string;
+    /** WebSocket CloseEvent.wasClean — true only if a close handshake completed. */
+    wasClean?: boolean;
+    /** True when the close was already classified as a server-rejected protocol error. */
+    serverRejected?: boolean;
+}
+
 // Internal transport interface
 interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void>;
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
     send(message: object): void;
     disconnect(): void;
     isConnected(): boolean;
@@ -146,7 +225,7 @@ interface ClientTransport {
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         return new Promise((resolve, reject) => {
             // Detach and close previous socket so its deferred onclose
             // cannot interfere with the new connection (mobile wake race).
@@ -162,10 +241,21 @@ class WebSocketTransport implements ClientTransport {
             this.ws.onopen = () => { opened = true; resolve(); };
             this.ws.onerror = () => {}; // Error is followed by close
             this.ws.onmessage = (e) => onMessage(e.data);
-            this.ws.onclose = () => {
+            this.ws.onclose = (event) => {
                 this.ws = null;
+                // Surface the structured CloseEvent so the ApiClient can
+                // distinguish a clean post-upgrade close (codes 1000-1015,
+                // 4xxx) from a pre-upgrade abnormal closure (1006). The
+                // browser deliberately hides upgrade-time HTTP status for
+                // fingerprinting reasons, so 1006 is as fine-grained as
+                // we get for refused/DNS/TLS/4xx-during-upgrade failures.
+                const info: TransportCloseInfo = {
+                    code: event.code,
+                    reason: event.reason || undefined,
+                    wasClean: event.wasClean,
+                };
                 if (!opened) reject(new Error('WebSocket closed before open'));
-                onClose();
+                onClose(info);
             };
         });
     }
@@ -196,7 +286,7 @@ class SSETransport implements ClientTransport {
     private baseUrl: string = '';
     private onMessage: ((data: string) => void) | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         this.baseUrl = url;
         this.onMessage = onMessage;
 
@@ -221,11 +311,14 @@ class SSETransport implements ClientTransport {
                 if (e.data) {
                     onMessage(e.data);
                 } else {
-                    // EventSource connection error (no data = connectivity issue)
+                    // EventSource connection error (no data = connectivity issue).
+                    // EventSource exposes nothing structured here, so the
+                    // ApiClient classifier falls through to 'network-error'
+                    // after offline/manual checks.
                     this.eventSource?.close();
                     this.eventSource = null;
                     this.connectionId = null;
-                    onClose();
+                    onClose({ wasClean: false });
                 }
             });
 
@@ -349,11 +442,22 @@ export class ApiClient {
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
+    private connectionErrorListeners = new Set<(error: ConnectionError) => void>();
     private lastLoadingCount = 0;
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private manualDisconnect = false;
+    // pendingRejection is set when the server sends a ConnectionRejected
+    // ApiError just before tearing down the transport. handleClose() reads
+    // it so the resulting ConnectionError carries reason 'server-rejected'
+    // (with the original ApiError as cause) rather than the default
+    // 'manual' reading triggered by transport.disconnect().
+    private pendingRejection: ApiError | null = null;
+    // lastConnectionError is the most recently observed ConnectionError,
+    // exposed via getLastConnectionError() so a UI can render an offline
+    // banner / "server unreachable" message after the fact.
+    private lastConnectionError: ConnectionError | null = null;
     private visibilityHandler: (() => void) | null = null;
     private onlineHandler: (() => void) | null = null;
 
@@ -382,33 +486,117 @@ export class ApiClient {
         return this.transport.connect(
             url,
             (data) => this.handleMessage(data),
-            () => this.handleClose(),
+            (info) => this.handleClose(info),
         ).then(() => {
             this.reconnectAttempts = 0;
             this.setState('connected');
         }).catch(() => {
-            this.handleClose();
+            // The transport's promise rejected before opening — treat as a
+            // pre-upgrade close with no diagnostic info available.
+            this.handleClose({ wasClean: false });
         });
     }
 
-    private handleClose(): void {
+    // classifyClose decides why the transport closed. Order matters:
+    //   1. Server-rejected wins because the server explicitly told us why
+    //      (we keep the ApiError as `cause`).
+    //   2. Manual disconnect comes next — the caller initiated the close.
+    //   3. Offline overrides everything else; navigator.onLine being false
+    //      means even a clean close happened during a network outage and
+    //      "offline" is the more useful message.
+    //   4. A close code outside the abnormal range (1006) and 0 means the
+    //      WebSocket upgrade succeeded and the server closed cleanly.
+    //   5. Otherwise the failure happened before/at upgrade time and the
+    //      browser collapses every cause into an indistinguishable
+    //      'network-error'.
+    private classifyClose(info?: TransportCloseInfo): ConnectionErrorReason {
+        if (this.pendingRejection || info?.serverRejected) {
+            return 'server-rejected';
+        }
+        if (this.manualDisconnect) return 'manual';
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return 'offline';
+        }
+        if (info?.code !== undefined && info.code !== 1006 && info.code !== 0) {
+            return 'server-closed';
+        }
+        return 'network-error';
+    }
+
+    private buildConnectionError(reason: ConnectionErrorReason, info?: TransportCloseInfo): ConnectionError {
+        let message: string;
+        const init: ConnectionErrorInit = {
+            closeCode: info?.code,
+            closeReason: info?.reason,
+        };
+        switch (reason) {
+            case 'offline':
+                message = 'Offline: no network connection';
+                break;
+            case 'server-rejected': {
+                const cause = this.pendingRejection;
+                init.cause = cause ?? undefined;
+                message = cause?.message
+                    ? `Server rejected connection: ${cause.message}`
+                    : 'Server rejected connection';
+                break;
+            }
+            case 'server-closed':
+                message = info?.reason
+                    ? `Server closed connection (code ${info.code}): ${info.reason}`
+                    : `Server closed connection (code ${info?.code ?? 'unknown'})`;
+                break;
+            case 'network-error':
+                message = 'Network error: connection lost';
+                break;
+            case 'manual':
+                message = 'Disconnected';
+                break;
+        }
+        return new ConnectionError(reason, message, init);
+    }
+
+    private notifyConnectionError(error: ConnectionError): void {
+        this.lastConnectionError = error;
+        for (const listener of this.connectionErrorListeners) {
+            listener(error);
+        }
+    }
+
+    private handleClose(info?: TransportCloseInfo): void {
+        // disconnect() rejects pending requests/streams synchronously and
+        // sets state to 'disconnected'. The transport's onclose still fires
+        // afterwards to confirm the close — short-circuit so we don't
+        // re-notify listeners or rebuild the error.
+        if (this.manualDisconnect && this.state === 'disconnected') {
+            this.pendingRejection = null;
+            return;
+        }
+        const reason = this.classifyClose(info);
+        const error = this.buildConnectionError(reason, info);
+        // Consume the pending rejection: subsequent reconnect attempts
+        // (e.g. after the auth flow refreshes) must not be misclassified.
+        this.pendingRejection = null;
+
         // Reject all pending requests (but keep subscription entries for reconnect)
         const subIds = new Set(this.subscriptions.keys());
         for (const [id, p] of this.pending) {
             if (!subIds.has(id)) {
                 p.onSettle?.();
-                p.reject(new Error('Connection closed'));
+                p.reject(error);
             }
             this.pending.delete(id);
         }
-        // End all in-flight streams with a connection-closed error. Streams
-        // are not auto-resumed on reconnect; consumers must restart them.
+        // End all in-flight streams with the structured connection error.
+        // Streams are not auto-resumed on reconnect; consumers must restart
+        // them.
         const streams = Array.from(this.streams.values());
         this.streams.clear();
         for (const s of streams) {
-            s.end(new Error('Connection closed'));
+            s.end(error);
         }
         this.notifyLoadingChange();
+        this.notifyConnectionError(error);
 
         if (this.manualDisconnect) {
             this.setState('disconnected');
@@ -445,6 +633,7 @@ export class ApiClient {
     }
 
     disconnect(): void {
+        if (this.manualDisconnect) return;
         this.manualDisconnect = true;
         this.teardownPageListeners();
         if (this.reconnectTimer) {
@@ -452,6 +641,26 @@ export class ApiClient {
             this.reconnectTimer = null;
         }
         this.subscriptions.clear();
+
+        // Reject in-flight requests/streams synchronously: the server may
+        // still respond between transport.disconnect() and the close event
+        // landing, racing the rejection in handleClose() and resolving the
+        // promise instead. Doing it here means the caller's "I'm done"
+        // semantics win over a late server reply.
+        const error = this.buildConnectionError('manual', undefined);
+        for (const [, p] of this.pending) {
+            p.onSettle?.();
+            p.reject(error);
+        }
+        this.pending.clear();
+        const streams = Array.from(this.streams.values());
+        this.streams.clear();
+        for (const s of streams) {
+            s.end(error);
+        }
+        this.notifyLoadingChange();
+        this.notifyConnectionError(error);
+
         this.transport.disconnect();
         this.setState('disconnected');
     }
@@ -467,7 +676,14 @@ export class ApiClient {
             this.flushBuffer();
             this.resubscribeAll();
         } else if (state === 'disconnected') {
-            this.rejectBuffer(new Error('Not connected'));
+            // Reuse the most recent classified error if handleClose() just
+            // ran, so a request buffered during a reconnect attempt that
+            // ultimately fails is rejected with the same reason as the
+            // close itself (e.g. 'offline'). Falls back to 'manual' when
+            // there's no prior error — that branch is hit by an idle
+            // disconnect() with no in-flight close.
+            const err = this.lastConnectionError ?? new ConnectionError('manual', 'Not connected');
+            this.rejectBuffer(err);
         }
         for (const listener of this.stateListeners) {
             listener(state);
@@ -482,6 +698,30 @@ export class ApiClient {
     onLoadingChange(listener: (count: number) => void): () => void {
         this.loadingListeners.add(listener);
         return () => this.loadingListeners.delete(listener);
+    }
+
+    /**
+     * onConnectionError registers a listener that fires every time a
+     * connection-level failure is classified (transport close, server
+     * rejection, etc.). The listener receives a structured ConnectionError
+     * carrying the reason and any close-event diagnostics the browser
+     * exposed. Use this to drive UI like an "Offline" banner.
+     *
+     * Returns an unsubscribe function. Multiple listeners are supported.
+     */
+    onConnectionError(listener: (error: ConnectionError) => void): () => void {
+        this.connectionErrorListeners.add(listener);
+        return () => this.connectionErrorListeners.delete(listener);
+    }
+
+    /**
+     * getLastConnectionError returns the most recent ConnectionError, or
+     * null if no failure has been observed (or the connection has never
+     * dropped). Useful right after `getState() === 'disconnected'` or
+     * 'reconnecting' to decide what message to show the user.
+     */
+    getLastConnectionError(): ConnectionError | null {
+        return this.lastConnectionError;
     }
 
     getLoadingCount(): number {
@@ -592,8 +832,14 @@ export class ApiClient {
                     break;
                 }
                 if (msg.code === ErrorCode.ConnectionRejected) {
+                    const apiError = new ApiError(msg.code, msg.message, msg.data);
                     this.manualDisconnect = true;
-                    this.options.onConnectionRejected?.(new ApiError(msg.code, msg.message, msg.data));
+                    // Stash the rejection so the imminent transport close
+                    // is classified as 'server-rejected' rather than the
+                    // default 'manual' that manualDisconnect=true would
+                    // otherwise produce. handleClose() consumes it.
+                    this.pendingRejection = apiError;
+                    this.options.onConnectionRejected?.(apiError);
                     this.transport.disconnect();
                 } else {
                     // Server-driven subscription refresh error
@@ -689,7 +935,21 @@ export class ApiClient {
                 }
                 return;
             }
-            reject(new Error('Not connected'));
+            // Disconnected and not reconnecting. Prefer the most recent
+            // ConnectionError (set by handleClose) so callers see the same
+            // reason that classified the transport drop. If we got here
+            // without a prior failure (e.g. caller never connected, or
+            // navigator.onLine flipped between connect and request), still
+            // surface a ConnectionError with the best reason we can name.
+            let err = this.lastConnectionError;
+            if (!err) {
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    err = new ConnectionError('offline', 'Offline: no network connection');
+                } else {
+                    err = new ConnectionError('manual', 'Not connected');
+                }
+            }
+            reject(err);
         });
     }
 
@@ -864,7 +1124,12 @@ export class ApiClient {
                     if (started) return;
                     started = true;
                     if (!this.transport.isConnected()) {
-                        end(new Error('Not connected'));
+                        const err = this.lastConnectionError ?? (
+                            typeof navigator !== 'undefined' && navigator.onLine === false
+                                ? new ConnectionError('offline', 'Offline: no network connection')
+                                : new ConnectionError('manual', 'Not connected')
+                        );
+                        end(err);
                         return;
                     }
                     id = String(++this.requestId);

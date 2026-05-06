@@ -10,9 +10,18 @@
 
 {{template "get-websocket-url" .}}
 
+// TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
+// transport up to the client's classification logic.
+interface TransportCloseInfo {
+    code?: number;
+    reason?: string;
+    wasClean?: boolean;
+    serverRejected?: boolean;
+}
+
 // Internal transport interface
 interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void>;
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
     send(message: object): void;
     disconnect(): void;
     isConnected(): boolean;
@@ -21,15 +30,19 @@ interface ClientTransport {
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         return new Promise((resolve) => {
             this.ws = new WebSocket(url);
             this.ws.onopen = () => resolve();
             this.ws.onerror = () => {}; // Error is followed by close
             this.ws.onmessage = (e) => onMessage(e.data);
-            this.ws.onclose = () => {
+            this.ws.onclose = (event) => {
                 this.ws = null;
-                onClose();
+                onClose({
+                    code: event.code,
+                    reason: event.reason || undefined,
+                    wasClean: event.wasClean,
+                });
             };
         });
     }
@@ -57,7 +70,7 @@ class SSETransport implements ClientTransport {
     private connectionId: string | null = null;
     private baseUrl: string = '';
 
-    connect(url: string, onMessage: (data: string) => void, onClose: () => void): Promise<void> {
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         this.baseUrl = url;
 
         return new Promise((resolve) => {
@@ -84,7 +97,7 @@ class SSETransport implements ClientTransport {
                     this.eventSource?.close();
                     this.eventSource = null;
                     this.connectionId = null;
-                    onClose();
+                    onClose({ wasClean: false });
                 }
             });
 
@@ -158,11 +171,14 @@ export class ApiClient {
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
+    private connectionErrorListeners = new Set<(error: ConnectionError) => void>();
     private lastLoadingCount = 0;
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private manualDisconnect = false;
+    private pendingRejection: ApiError | null = null;
+    private lastConnectionError: ConnectionError | null = null;
     private visibilityHandler: (() => void) | null = null;
     private onlineHandler: (() => void) | null = null;
 
@@ -189,22 +205,91 @@ export class ApiClient {
         return this.transport.connect(
             this.url,
             (data) => this.handleMessage(data),
-            () => this.handleClose(),
+            (info) => this.handleClose(info),
         ).then(() => {
             this.reconnectAttempts = 0;
             this.setState('connected');
         }).catch(() => {
-            this.handleClose();
+            this.handleClose({ wasClean: false });
         });
     }
 
-    private handleClose(): void {
+    // classifyClose decides why the transport closed. See _client-common.ts.tmpl
+    // for the rationale; this is the same logic.
+    private classifyClose(info?: TransportCloseInfo): ConnectionErrorReason {
+        if (this.pendingRejection || info?.serverRejected) {
+            return 'server-rejected';
+        }
+        if (this.manualDisconnect) return 'manual';
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            return 'offline';
+        }
+        if (info?.code !== undefined && info.code !== 1006 && info.code !== 0) {
+            return 'server-closed';
+        }
+        return 'network-error';
+    }
+
+    private buildConnectionError(reason: ConnectionErrorReason, info?: TransportCloseInfo): ConnectionError {
+        let message: string;
+        const init: ConnectionErrorInit = {
+            closeCode: info?.code,
+            closeReason: info?.reason,
+        };
+        switch (reason) {
+            case 'offline':
+                message = 'Offline: no network connection';
+                break;
+            case 'server-rejected': {
+                const cause = this.pendingRejection;
+                init.cause = cause ?? undefined;
+                message = cause?.message
+                    ? `Server rejected connection: ${cause.message}`
+                    : 'Server rejected connection';
+                break;
+            }
+            case 'server-closed':
+                message = info?.reason
+                    ? `Server closed connection (code ${info.code}): ${info.reason}`
+                    : `Server closed connection (code ${info?.code ?? 'unknown'})`;
+                break;
+            case 'network-error':
+                message = 'Network error: connection lost';
+                break;
+            case 'manual':
+                message = 'Disconnected';
+                break;
+        }
+        return new ConnectionError(reason, message, init);
+    }
+
+    private notifyConnectionError(error: ConnectionError): void {
+        this.lastConnectionError = error;
+        for (const listener of this.connectionErrorListeners) {
+            listener(error);
+        }
+    }
+
+    private handleClose(info?: TransportCloseInfo): void {
+        // disconnect() rejects pending requests synchronously and sets
+        // state to 'disconnected'. The transport's onclose still fires
+        // afterwards to confirm the close — short-circuit so we don't
+        // re-notify listeners or rebuild the error.
+        if (this.manualDisconnect && this.state === 'disconnected') {
+            this.pendingRejection = null;
+            return;
+        }
+        const reason = this.classifyClose(info);
+        const error = this.buildConnectionError(reason, info);
+        this.pendingRejection = null;
+
         for (const [, p] of this.pending) {
             p.onSettle?.();
-            p.reject(new Error('Connection closed'));
+            p.reject(error);
         }
         this.pending.clear();
         this.notifyLoadingChange();
+        this.notifyConnectionError(error);
 
         if (this.manualDisconnect) {
             this.setState('disconnected');
@@ -238,12 +323,28 @@ export class ApiClient {
     }
 
     disconnect(): void {
+        if (this.manualDisconnect) return;
         this.manualDisconnect = true;
         this.teardownPageListeners();
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
         }
+
+        // Reject in-flight requests synchronously: the server may still
+        // respond between transport.disconnect() and the close event
+        // landing, racing the rejection in handleClose() and resolving
+        // the promise instead. Doing it here means the caller's "I'm
+        // done" semantics win over a late server reply.
+        const error = this.buildConnectionError('manual', undefined);
+        for (const [, p] of this.pending) {
+            p.onSettle?.();
+            p.reject(error);
+        }
+        this.pending.clear();
+        this.notifyLoadingChange();
+        this.notifyConnectionError(error);
+
         this.transport.disconnect();
         this.setState('disconnected');
     }
@@ -258,7 +359,8 @@ export class ApiClient {
         if (state === 'connected') {
             this.flushBuffer();
         } else if (state === 'disconnected') {
-            this.rejectBuffer(new Error('Not connected'));
+            const err = this.lastConnectionError ?? new ConnectionError('manual', 'Not connected');
+            this.rejectBuffer(err);
         }
         for (const listener of this.stateListeners) {
             listener(state);
@@ -273,6 +375,25 @@ export class ApiClient {
     onLoadingChange(listener: (count: number) => void): () => void {
         this.loadingListeners.add(listener);
         return () => this.loadingListeners.delete(listener);
+    }
+
+    /**
+     * onConnectionError registers a listener that fires every time a
+     * connection-level failure is classified. See ConnectionError /
+     * ConnectionErrorReason for the available reasons. Returns an
+     * unsubscribe function.
+     */
+    onConnectionError(listener: (error: ConnectionError) => void): () => void {
+        this.connectionErrorListeners.add(listener);
+        return () => this.connectionErrorListeners.delete(listener);
+    }
+
+    /**
+     * getLastConnectionError returns the most recent ConnectionError, or
+     * null if no failure has been observed.
+     */
+    getLastConnectionError(): ConnectionError | null {
+        return this.lastConnectionError;
     }
 
     getLoadingCount(): number {
@@ -405,7 +526,17 @@ export class ApiClient {
                 }
                 return;
             }
-            reject(new Error('Not connected'));
+            // Disconnected and not reconnecting. Surface the structured
+            // ConnectionError so callers can switch on err.reason.
+            let err = this.lastConnectionError;
+            if (!err) {
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                    err = new ConnectionError('offline', 'Offline: no network connection');
+                } else {
+                    err = new ConnectionError('manual', 'Not connected');
+                }
+            }
+            reject(err);
         });
     }
 

@@ -321,6 +321,36 @@
 //	registry.RegisterError(sql.ErrNoRows, "NotFound")
 //	// In TypeScript: err.isNotFound(), ErrorCode.NotFound
 //
+// # Connection Errors (TypeScript Client)
+//
+// Connection-level failures surface as a structured ConnectionError on the
+// generated TypeScript client — separate from ApiError, which represents a
+// structured server-side error response. ConnectionError extends Error and
+// exposes a typed `reason` field so apps can render appropriate UI:
+//
+//	'offline'         — navigator.onLine was false at failure time.
+//	'server-rejected' — server sent ApiError with code ConnectionRejected
+//	                    before closing; the original ApiError is attached as
+//	                    err.cause.
+//	'server-closed'   — transport closed cleanly after the WebSocket upgrade
+//	                    completed; err.closeCode and err.closeReason carry
+//	                    the WebSocket CloseEvent fields.
+//	'network-error'   — pre-upgrade failure or close code 1006 (refused,
+//	                    unreachable, TLS, HTTP error during upgrade).
+//	                    Browsers deliberately collapse these into one bucket.
+//	'manual'          — caller invoked client.disconnect().
+//
+// In-flight request and requestStream calls reject with a ConnectionError
+// when the connection drops. Calls issued while disconnected reject with the
+// most recent ConnectionError, falling back to 'offline' or 'manual' when
+// none is available. Use client.onConnectionError(listener) to drive UI like
+// an "Offline" banner; client.getLastConnectionError() returns the most
+// recently observed error or null.
+//
+// The 'server-rejected' bucket is also surfaced via the existing
+// onConnectionRejected ApiClientOption callback — both fire for the same
+// underlying event, kept for backward compatibility.
+//
 // # Enum Support
 //
 // Register Go enum types with [Registry.RegisterEnumFor] or
