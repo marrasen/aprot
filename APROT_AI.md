@@ -1,99 +1,321 @@
 # aprot AI Guide
 
-A high-performance Go library for type-safe real-time APIs with automatic TypeScript/React client generation.
+A high-performance Go library for type-safe real-time APIs with automatic TypeScript/React client generation. WebSocket and SSE+HTTP transports; optional REST/OpenAPI on top.
+
+This guide is a fast-reference for agents. The authoritative overview is `doc.go` (pkg.go.dev landing page).
 
 ## Core Concepts
 
-- **Registry**: Central place to register handlers, enums, and push events.
-- **Handlers**: Go struct methods that become TypeScript functions.
-- **Transports**: Supports both WebSocket (`/ws`) and SSE+HTTP (`/sse`).
-- **Middleware**: Interceptors for auth, logging, etc. (Server-level or Handler-level).
-- **Tasks**: Hierarchical progress reporting and output streaming (Request-scoped or Shared).
-- **Cancel Causes**: Inspect why a request was canceled (`ErrClientCanceled`, `ErrConnectionClosed`, `ErrServerShutdown`).
-- **Naming Plugins**: Customize generated TypeScript naming conventions.
+- **Registry** — collects handler groups, push events, enums, custom errors, and a validator.
+- **Handlers** — methods on a struct; one TypeScript file per group.
+- **Transports** — WebSocket (`/ws`), SSE+HTTP (`/sse`), and optional REST (`NewRESTAdapter`).
+- **Middleware** — `func(next) Handler` wrappers; server-level or per-handler-group.
+- **Tasks** — hierarchical progress and output streaming (request-scoped or shared).
+- **Subscription Refresh** — query handlers register trigger keys; mutations fire them to push fresh results.
+- **Streaming** — handlers can return `iter.Seq[T]` / `iter.Seq2[K,V]`; clients consume as `AsyncIterable`.
+- **Validation & Transforms** — `validate:"…"` and `transform:"…"` struct tags applied before dispatch.
+- **REST + OpenAPI + Zod** — same handlers, additional surfaces opted in per registry/handler.
 
 ## Implementation Checklist
 
 ### 1. Define API (Go)
-- Handlers MUST be methods on a struct.
-- Signature: `func (h *T) Method(ctx context.Context, [params]) ([res], error)`.
-- Use `context.Context` as the first parameter.
+- Handler methods on a struct: `func (h *T) Method(ctx context.Context, [params]) ([res], error)`.
+- Parameters are positional — each Go param becomes a separate TS argument; names come from AST.
+- Return shapes supported: `error` (void), `(T, error)`, `(iter.Seq[T], error)`, `(iter.Seq2[K,V], error)`.
 - Register with `registry.Register(handlers, [middleware...])`.
 
-### 2. TypeScript Generation
-- Create a generator script using `aprot.NewGenerator(registry)`.
-- Set `OutputDir` and `Mode` (`aprot.OutputReact` or `aprot.OutputVanilla`).
-- Run via `go run` or `go generate`.
+### 2. Server Setup
+```go
+server := aprot.NewServer(registry)
+http.Handle("/ws", server)                   // WebSocket
+http.Handle("/sse", server.HTTPTransport())  // SSE+HTTP
+http.Handle("/sse/", server.HTTPTransport())
+http.Handle("/api/", aprot.NewRESTAdapter(registry)) // optional REST
+```
 
-### 3. Server Setup
-- `server := aprot.NewServer(registry)`.
-- Mount WebSocket: `http.Handle("/ws", server)`.
-- Mount SSE: `http.Handle("/sse", server.HTTPTransport())`.
+### 3. TypeScript Generation
+```go
+gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
+    OutputDir: "./client/src/api",
+    Mode:      aprot.OutputReact,   // or aprot.OutputVanilla
+    Naming:    aprot.DefaultNaming{FixAcronyms: true},
+    Zod:       true,                // emit *.schema.ts mirrors of validate tags
+})
+gen.Generate()
+```
 
 ### 4. Progress & Tasks
-- **Simple**: `aprot.Progress(ctx).Update(current, total, message)`.
-- **Advanced**: Use `tasks.SubTask(ctx, title, fn)` for nested progress.
-- **Shared**: `tasks.StartSharedTask[Meta](ctx, title)` for server-wide jobs.
-- **Enable**: Call `tasks.Enable(registry)` to use the task system.
+- Simple: `aprot.Progress(ctx).Update(current, total, message)`.
+- Hierarchical: `tasks.SubTask(ctx, title, fn)`.
+- Server-wide: `tasks.StartSharedTask[Meta](ctx, title)`.
+- Enable: `tasks.Enable(registry)` before generation/serving.
 
-## Common Snippets
+## Handlers
 
-### Middleware
+### Signatures
+```go
+func (h *H) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error)
+func (h *H) DeleteUser(ctx context.Context, id string) error                      // void
+func (h *H) ListUsers(ctx context.Context) ([]User, error)                        // no params
+func (h *H) Add(ctx context.Context, a int, b int) (*SumResult, error)            // arbitrary params
+```
+
+### Streaming (`iter.Seq` → `AsyncIterable`)
+```go
+func (h *H) ListUsers(ctx context.Context) (iter.Seq[*User], error) {
+    return func(yield func(*User) bool) {
+        for cursor.Next(ctx) {
+            var u User
+            cursor.Scan(&u)
+            if !yield(&u) { return } // client canceled
+        }
+    }, nil
+}
+```
+Streaming handlers cannot be exposed via REST (panics at registration). For SSE/WS only. To observe real stream end from middleware, use `aprot.OnStreamComplete(ctx, fn)` — it fires once with `(err, items)`.
+
+## Input Transformation
+
+`transform:"…"` ops run after JSON decoding, before validation. Statically checked at `Register` time.
+
+```go
+type SignupRequest struct {
+    Email    string   `json:"email"    transform:"trim,lowercase" validate:"required,email"`
+    Username string   `json:"username" transform:"trim"            validate:"required,min=3"`
+    Slug     string   `json:"slug"     transform:"trimleft=/,lowercase"`
+    Tags     []string `json:"tags"     transform:"trim,removeempty"`
+}
+```
+
+Ops: `trim`, `trimleft[=cutset]`, `trimright[=cutset]`, `uppercase`, `lowercase`, `removeempty` (`[]string` only). Applies to `string`, `*string`, `[]string`, and recurses into nested structs/slices.
+
+## Request Validation
+
+Opt in per registry. Failures surface as `CodeValidationFailed` with structured `[]FieldError` payload — TS client exposes via `ApiError`.
+
+```go
+type CreateUserRequest struct {
+    Name  string `json:"name"  validate:"required,min=2,max=100"`
+    Email string `json:"email" validate:"required,email"`
+    Age   int    `json:"age"   validate:"gte=13,lte=120"`
+}
+
+registry.Register(&Handlers{})
+registry.SetValidator(aprot.NewPlaygroundValidator())
+```
+
+`Zod: true` in `GeneratorOptions` mirrors these rules into a `*.schema.ts` file per group.
+
+## Middleware
+
 ```go
 func MyMiddleware() aprot.Middleware {
     return func(next aprot.Handler) aprot.Handler {
         return func(ctx context.Context, req *aprot.Request) (any, error) {
-            // Pre-process (e.g., auth check)
             res, err := next(ctx, req)
-            // Post-process
             return res, err
         }
     }
 }
+
+server.Use(MyMiddleware())                          // all handlers
+registry.Register(&AdminHandlers{}, AuthMiddleware()) // group-only
 ```
 
-### Accessing Connection/User
+For streaming handlers, `next()` returns as soon as the iterator is constructed — register a completion callback for real end-of-stream observability:
+
 ```go
-conn := aprot.Connection(ctx)
-userID := conn.UserID() // Set via conn.SetUserID("id") in auth middleware
+aprot.OnStreamComplete(ctx, func(err error, items int) {
+    log.Printf("stream done: items=%d err=%v", items, err)
+})
 ```
 
-### TypeScript Usage (React)
-Per-handler hooks are generated wrapping the generic `useQuery`/`useMutation`/`usePushEvent` hooks:
+`OnStreamComplete` is a no-op on unary contexts, so the same middleware works for both kinds.
+
+## Connection Lifecycle
+
+```go
+server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+    session, err := validateSession(conn.Info().Cookies)
+    if err != nil {
+        return aprot.ErrConnectionRejected("invalid session")
+    }
+    conn.SetUserID(session.UserID)
+    conn.Set(principalKey{}, session.User)
+    return nil
+})
+```
+
+`Conn` exposes:
+- `Info()` — HTTP request snapshot at connection time.
+- `Set(key, val)` / `Get(key)` / `Load(key)` — per-connection state.
+- `SetUserID(id)` / `UserID()` — push routing identity (not a security boundary; use stored principal for authz).
+
+Inside handlers: `conn := aprot.Connection(ctx)`.
+
+## Push Events
+
+```go
+registry.RegisterPushEventFor(&PublicHandlers{}, UserCreatedEvent{})
+server.Broadcast(&UserCreatedEvent{ID: "1"})
+server.PushToUser("user_123", &NotificationEvent{Message: "hello"})
+```
+
+Event name on the wire is the Go type name. Subscribed via the generated per-event hook (React) or `subscribe`/`onUserCreated` standalone (vanilla).
+
+## Subscription Refresh
+
+Push fresh query results to subscribed clients when related data changes.
+
+```go
+// Query handler — declare the trigger keys this query depends on.
+func (h *H) ListUsers(ctx context.Context) ([]User, error) {
+    aprot.RegisterRefreshTrigger(ctx, "users")
+    return h.db.ListUsers(ctx)
+}
+
+// Mutation handler — fire keys to refresh subscribed clients.
+func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
+    user, err := h.db.CreateUser(ctx, req)
+    if err != nil { return nil, err }
+    aprot.TriggerRefresh(ctx, "users")
+    return user, nil
+}
+```
+
+- `TriggerRefresh` batches and dedupes within a request.
+- `TriggerRefreshNow` flushes immediately (use in long-running handlers between observable state transitions).
+- `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
+- `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
+
+## REST + OpenAPI
+
+```go
+registry.Register(&UserHandlers{})       // WebSocket only
+registry.RegisterREST(&TodoHandlers{})   // REST only
+registry.Register(&BothHandlers{})       // WebSocket...
+registry.EnableREST(&BothHandlers{})     //   ...and also REST
+
+http.Handle("/api/", aprot.NewRESTAdapter(registry))
+
+oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0")
+spec, _ := oag.Generate()                // or oag.GenerateJSON()
+```
+
+HTTP method/path derive from method name (e.g. `CreateUser` → `POST /users/create-user`). Streaming handlers cannot be REST-exposed (panic at registration). Doc comments on handlers/structs/fields flow into OpenAPI `summary`/`description`/JSON Schema.
+
+## Error Handling
+
+### Server-side
+```go
+return aprot.ErrUnauthorized("invalid token")     // -32001
+return aprot.ErrForbidden("access denied")        // -32003
+return aprot.ErrInvalidParams("name required")    // -32602
+return aprot.ErrInternal(err)                     // -32603
+
+registry.RegisterError(sql.ErrNoRows, "NotFound") // → ApiError.isNotFound() in TS
+```
+
+### Client-side: `ApiError` vs `ConnectionError`
+Two distinct error types on the generated TS client:
+
+- **`ApiError`** — structured server-side error response. Has `.code`, `.message`, optional `.data`. Helpers: `err.isNotFound()`, `err.isUnauthorized()`, etc. Validation failures arrive here with `CodeValidationFailed` and `data: FieldError[]`.
+- **`ConnectionError extends Error`** — connection-level failure. Has `.reason` for switching on user-facing UI:
+
+  | reason            | meaning                                                                      |
+  | ----------------- | ---------------------------------------------------------------------------- |
+  | `offline`         | `navigator.onLine` was false at failure time                                 |
+  | `server-rejected` | server sent `ApiError` with code `ConnectionRejected`; original on `.cause`  |
+  | `server-closed`   | clean post-upgrade close; `.closeCode` and `.closeReason` carry CloseEvent   |
+  | `network-error`   | pre-upgrade failure or close code 1006 (refused/unreachable/TLS/HTTP error)  |
+  | `manual`          | caller invoked `client.disconnect()`                                         |
+
+In-flight requests reject with a `ConnectionError` when the connection drops; calls issued while disconnected reject with the most recent one. Use:
+```ts
+client.onConnectionError(err => showBanner(err.reason));
+const last = client.getLastConnectionError(); // or null
+```
+The `'server-rejected'` bucket is also surfaced via the older `onConnectionRejected` `ApiClientOption` callback (kept for backward compatibility).
+
+## TypeScript Hooks (React Output)
+
+Per-handler hooks wrap the generic primitives:
+
 ```tsx
-import { useListUsers, useCreateUserMutation, useUserCreatedEvent } from './api/handlers';
+import {
+  useListUsers, useGetUser, useCreateUserMutation,
+  useUserCreatedEvent, useStreamNumbers,
+} from './api/handlers';
 
-// Auto-fetching query hook (no params)
-const { data, isLoading, refetch } = useListUsers();
-
-// Auto-fetching query hook (with params — re-fetches when params change)
-const { data: user } = useGetUser(userId);
-
-// Imperative mutation hook
-const { mutate, isLoading } = useCreateUserMutation();
+const { data, isLoading, error, refetch, cancel } = useListUsers();
+const { data: user } = useGetUser(userId);                          // re-fetches when userId changes
+const { mutate, isLoading, cancel } = useCreateUserMutation();
 mutate('Alice', 'alice@example.com');
 
-// Server push event hook
+const { items, done, error, isLoading, restart, cancel } = useStreamNumbers(10, 100);
+
 const { lastEvent, events, clear } = useUserCreatedEvent();
 ```
 
-The generic hooks can also be used directly:
+### React 19 Suspense — `useQuerySuspense`
+Single generic hook; works with any generated query function. Opens a subscription, suspends until first response, swaps the promise on each push (no re-suspending).
 ```tsx
-import { useQuery, useMutation, usePushEvent } from './api/client';
-import { listUsers, createUser, onUserCreated } from './api/handlers';
+import { Suspense } from 'react';
+import { useQuerySuspense } from './api/client';
+import { listUsers, getUser } from './api/handlers';
+
+function UsersList() {
+  const data = useQuerySuspense(listUsers);   // no params
+  return data.users.map(u => <li key={u.id}>{u.name}</li>);
+}
+
+function UserView({ id }: { id: string }) {
+  const user = useQuerySuspense(getUser, id); // typed params
+  return <h1>{user.name}</h1>;
+}
+```
+Errors propagate to the nearest error boundary. Mutations and streams stay on `useMutation` / `useStream`.
+
+### Connection / loading hooks
+```tsx
+import { useConnection, useIsLoading } from './api/client';
+
+const { isConnected, state } = useConnection(); // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+const isLoading = useIsLoading();               // any in-flight request anywhere
 ```
 
-## Cancel Cause Reporting
-Handlers can inspect why a request was canceled:
+### Generic primitives
+```tsx
+import { useQuery, useMutation, useStream, usePushEvent } from './api/client';
+```
+
+## Vanilla Output
+
+Per-handler standalone functions plus `subscribe`/`unsubscribe` helpers for live data:
+
+```ts
+import { listUsers, subscribeListUsers, onUserCreated } from './api/handlers';
+
+const users = await listUsers(client);
+const unsub = subscribeListUsers(client, (next) => render(next));
+const off = onUserCreated(client, (evt) => append(evt));
+```
+
+## Cancel Causes
+
+Inside a handler:
 ```go
 cause := aprot.CancelCause(ctx)
-if errors.Is(cause, aprot.ErrClientCanceled) { /* client called AbortController.abort() */ }
-if errors.Is(cause, aprot.ErrConnectionClosed) { /* client disconnected */ }
-if errors.Is(cause, aprot.ErrServerShutdown) { /* server is shutting down */ }
+switch {
+case errors.Is(cause, aprot.ErrClientCanceled):    // AbortController.abort() / unmount
+case errors.Is(cause, aprot.ErrConnectionClosed):  // client disconnected
+case errors.Is(cause, aprot.ErrServerShutdown):    // server.Stop in progress
+}
 ```
 
 ## SQL Nullable Types
-`database/sql` nullable types are automatically mapped in TypeScript generation:
+
+Auto-mapped in TS generation and unwrapped at runtime:
 - `sql.NullString` → `string | null`
 - `sql.NullInt64`, `NullInt32`, `NullInt16` → `number | null`
 - `sql.NullBool` → `boolean | null`
@@ -101,8 +323,11 @@ if errors.Is(cause, aprot.ErrServerShutdown) { /* server is shutting down */ }
 - `sql.NullTime` → `string | null`
 - `sql.Null[T]` (generic) → `T | null`
 
-## Naming Convention Plugins
-Configure how generated TypeScript names are formatted via `NamingPlugin`:
+Zod schemas mirror these as `T.nullable()`.
+
+## Naming Plugins
+
+Configure how generated TS names are formatted:
 ```go
 gen.WithOptions(aprot.GeneratorOptions{
     OutputDir: "./client/api",
@@ -110,11 +335,12 @@ gen.WithOptions(aprot.GeneratorOptions{
     Naming:    aprot.DefaultNaming{FixAcronyms: true},
 })
 ```
-Built-in plugins:
-- **`DefaultNaming`** — kebab-case files, camelCase methods (default). `FixAcronyms: true` keeps acronyms together (e.g., `BulkXML` → `bulk-xml`).
-- **`PreserveNaming`** — keeps Go PascalCase names in TypeScript.
 
-Implement `NamingPlugin` for custom conventions:
+Built-in:
+- `DefaultNaming{FixAcronyms: bool}` — kebab-case files, camelCase methods. `FixAcronyms` keeps acronym runs together (`BulkXML` → `bulk-xml`).
+- `PreserveNaming` — keeps Go PascalCase names in TS.
+
+Custom:
 ```go
 type NamingPlugin interface {
     FileName(groupName string) string
@@ -125,7 +351,28 @@ type NamingPlugin interface {
 }
 ```
 
-## Error Handling
-- Register Go errors: `registry.RegisterError(sql.ErrNoRows, "NotFound")`.
-- Built-in: `aprot.ErrUnauthorized("msg")`, `aprot.ErrInvalidParams("msg")`.
-- Client: `err instanceof ApiError`, `err.isNotFound()`.
+## Graceful Shutdown
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+server.Stop(ctx) // rejects new connections, waits for in-flight, runs OnDisconnect
+```
+
+Safe to call multiple times. In-flight handler contexts are canceled with `ErrServerShutdown`.
+
+## Enums
+
+```go
+type Status string
+const (
+    StatusActive  Status = "active"
+    StatusExpired Status = "expired"
+)
+func StatusValues() []Status { return []Status{StatusActive, StatusExpired} }
+
+registry.RegisterEnumFor(&Handlers{}, StatusValues())
+// or: registry.RegisterEnum(StatusValues()) for a shared enum
+```
+
+Struct fields with enum types generate as the TS union (not raw `string`/`number`).
