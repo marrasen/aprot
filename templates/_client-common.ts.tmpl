@@ -1208,12 +1208,132 @@ const ApiClientContext = createContext<ApiClient | null>(null);
 
 export const ApiClientProvider = ApiClientContext.Provider;
 
+// ApiErrorReporter is the internal callback an <ApiClientErrorProvider> installs
+// so the wrapped client can report errors up. It is intentionally not exported:
+// callers read the captured error via useApiClientError().
+type ApiErrorReporter = (err: Error) => void;
+const ApiErrorReporterContext = createContext<ApiErrorReporter | null>(null);
+
+// ApiClientErrorState is what useApiClientError() returns: the latest captured
+// error and a clear() to reset it. Only one error is held at a time — newer
+// errors replace older ones.
+export interface ApiClientErrorState {
+    error: Error | null;
+    clear: () => void;
+}
+const ApiClientErrorContext = createContext<ApiClientErrorState | null>(null);
+
+// wrapClientWithErrorReporter returns a Proxy over the ApiClient that reports
+// errors from the three transport entry points (request, subscribe,
+// requestStream) to the provider, then re-throws / re-surfaces them so
+// existing per-hook error handling and try/catch sites keep working. All
+// other methods are returned bound to the original client so `this` stays
+// correct.
+function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter): ApiClient {
+    return new Proxy(client, {
+        get(target, prop) {
+            const value = Reflect.get(target, prop);
+            if (typeof value !== 'function') return value;
+
+            if (prop === 'request') {
+                return function (...args: unknown[]) {
+                    const result = (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
+                    return result.catch((err: unknown) => {
+                        if (err instanceof Error) report(err);
+                        throw err;
+                    });
+                };
+            }
+            if (prop === 'subscribe') {
+                return function (
+                    method: string,
+                    params: unknown[],
+                    callback: (data: unknown) => void,
+                    onError?: (err: Error) => void,
+                ) {
+                    const wrappedOnError = (err: Error) => {
+                        report(err);
+                        onError?.(err);
+                    };
+                    return (value as (...a: unknown[]) => () => void).apply(
+                        target,
+                        [method, params, callback, wrappedOnError],
+                    );
+                };
+            }
+            if (prop === 'requestStream') {
+                return function (method: string, params: unknown[], options?: unknown) {
+                    const iterable = (value as (...a: unknown[]) => AsyncIterable<unknown>).apply(
+                        target,
+                        [method, params, options],
+                    );
+                    return {
+                        [Symbol.asyncIterator](): AsyncIterator<unknown> {
+                            const inner = iterable[Symbol.asyncIterator]();
+                            return {
+                                async next() {
+                                    try {
+                                        return await inner.next();
+                                    } catch (err) {
+                                        if (err instanceof Error) report(err);
+                                        throw err;
+                                    }
+                                },
+                                return: inner.return ? inner.return.bind(inner) : undefined,
+                                throw: inner.throw ? inner.throw.bind(inner) : undefined,
+                            };
+                        },
+                    };
+                };
+            }
+            return (value as (...a: unknown[]) => unknown).bind(target);
+        },
+    });
+}
+
 export function useApiClient(): ApiClient {
     const client = useContext(ApiClientContext);
     if (!client) {
         throw new Error('useApiClient must be used within an ApiClientProvider');
     }
-    return client;
+    const reporter = useContext(ApiErrorReporterContext);
+    return useMemo(
+        () => (reporter ? wrapClientWithErrorReporter(client, reporter) : client),
+        [client, reporter],
+    );
+}
+
+// ApiClientErrorProvider catches errors from API client calls made anywhere
+// below it — both imperative client.request() / requestStream() / subscribe()
+// calls and errors that flow through generated hooks (useQuery, useStream,
+// mutate), since those go through useApiClient() which returns the wrapped
+// client when this provider is installed. The wrapped client still throws /
+// re-surfaces errors normally, so per-hook error fields and try/catch keep
+// working — the provider just observes a copy.
+//
+// Read the latest captured error with useApiClientError(); call clear() to
+// dismiss. Only one error is held at a time (newest wins).
+export function ApiClientErrorProvider({ children }: { children: React.ReactNode }) {
+    const [error, setError] = useState<Error | null>(null);
+    const clear = useCallback(() => setError(null), []);
+    const report = useCallback<ApiErrorReporter>((err) => setError(err), []);
+    const state = useMemo<ApiClientErrorState>(() => ({ error, clear }), [error, clear]);
+    return React.createElement(
+        ApiErrorReporterContext.Provider,
+        { value: report },
+        React.createElement(ApiClientErrorContext.Provider, { value: state }, children),
+    );
+}
+
+// useApiClientError returns the latest error captured by the nearest
+// <ApiClientErrorProvider> ancestor and a clear() to reset it. Throws if
+// no provider is mounted above.
+export function useApiClientError(): ApiClientErrorState {
+    const ctx = useContext(ApiClientErrorContext);
+    if (!ctx) {
+        throw new Error('useApiClientError must be used within an ApiClientErrorProvider');
+    }
+    return ctx;
 }
 
 // Connection state hook

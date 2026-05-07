@@ -318,6 +318,33 @@ function AddTodoButton() {
 
 You manage `isLoading` / `error` / `AbortController` yourself. The trade-off is honest: the generated function is a typed `Promise<TRes>` that resolves with the actual value or throws — no hidden state machine.
 
+**Pattern 3 — global error capture with `<ApiClientErrorProvider>`.** Drop in a provider, read errors from `useApiClientError()`. Inside the provider, `useApiClient()` returns a `Proxy`-wrapped client that reports errors from `request` / `subscribe` / `requestStream` to the provider in addition to throwing as before. Generated hooks (`useQuery`, `mutate`, `useStream`) all flow through `useApiClient()` internally, so their errors surface here too without per-hook wiring.
+
+```tsx
+import {
+  ApiClient, ApiClientProvider, ApiClientErrorProvider, useApiClientError,
+} from './api/client';
+
+function App() {
+  return (
+    <ApiClientProvider value={client}>
+      <ApiClientErrorProvider>
+        <ErrorBanner />
+        <Page />
+      </ApiClientErrorProvider>
+    </ApiClientProvider>
+  );
+}
+
+function ErrorBanner() {
+  const { error, clear } = useApiClientError();
+  if (!error) return null;
+  return <div role="alert">{error.message} <button onClick={clear}>Dismiss</button></div>;
+}
+```
+
+Latest error wins (newer replaces older); `clear()` resets to `null`. The provider does **not** swallow — calls still throw, so `try/catch` and per-hook `error` fields keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client and `useApiClientError()` throws — adoption is fully opt-in.
+
 ### Migrating from `useXxxMutation()` (removed)
 
 If your codebase still calls `useXxxMutation()`, see `MIGRATION_MUTATION_HOOKS.md` for an agent-runnable rewrite prompt. Quick summary: `useCreateUserMutation()` → either `useApiClient() + createUser(client, …)` (raw, throws) or `useListUsers().mutate((c) => createUser(c, …))` (refetch-after-mutation).

@@ -437,6 +437,44 @@ You manage `isLoading` / `error` / `AbortController` yourself. The trade-off is 
 
 A previous version of aprot generated `useXxxMutation()` hooks whose `mutate()` swallowed errors and returned `undefined as TRes` on failure. The `Promise<TRes>` type lied at runtime; `void` mutations couldn't distinguish success from "not yet called"; and the only correct after-success pattern (`useEffect([data])`) was non-obvious. The two patterns above cover the same ground without the foot-guns. See [`MIGRATION_MUTATION_HOOKS.md`](MIGRATION_MUTATION_HOOKS.md) for a rewrite prompt that AI agents can run against an existing codebase.
 
+### Catching errors globally with `<ApiClientErrorProvider>`
+
+Patterns 1 and 2 wire errors per call site. When a component (or app) fans out to many hooks and ad-hoc client calls and just wants a single place to surface failures, drop in `<ApiClientErrorProvider>` and read from `useApiClientError()`:
+
+```tsx
+import {
+  ApiClient, ApiClientProvider, ApiClientErrorProvider,
+  useApiClient, useApiClientError,
+} from './api/client';
+
+const client = new ApiClient(`ws://${location.host}/ws`);
+
+function App() {
+    return (
+        <ApiClientProvider value={client}>
+            <ApiClientErrorProvider>
+                <ErrorBanner />
+                <UsersPanel />
+            </ApiClientErrorProvider>
+        </ApiClientProvider>
+    );
+}
+
+function ErrorBanner() {
+    const { error, clear } = useApiClientError();
+    if (!error) return null;
+    return (
+        <div role="alert">
+            {error.message} <button onClick={clear}>Dismiss</button>
+        </div>
+    );
+}
+```
+
+Inside the provider, `useApiClient()` returns a `Proxy`-wrapped client whose `request`, `subscribe`, and `requestStream` calls report errors to the provider — in addition to throwing / re-surfacing them as before. Generated hooks (`useListUsers`, `useQuery`, `mutate`, `useStream`) all retrieve their client through `useApiClient()` internally, so their errors flow up too without any per-hook wiring.
+
+Only the latest error is held; `clear()` resets it. The provider observes errors but does **not** swallow them — wrapped client calls still throw, so per-hook `error` fields and explicit `try/catch` keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client unchanged and `useApiClientError()` throws — adoption is fully opt-in.
+
 ## Streaming Handlers
 
 Handlers can return `iter.Seq[T]` (Go 1.23+) and each yielded value is delivered to the client as a separate websocket message. The generated TypeScript function returns an `AsyncIterable<T>`, so you can consume results with `for await` and render them as they arrive — ideal for progressive list population, large result sets, or any handler whose output is naturally lazy.
