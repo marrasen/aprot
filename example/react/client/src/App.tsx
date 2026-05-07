@@ -5,16 +5,16 @@ import { TaskNodeStatus } from './api/tasks-handler'
 import type { TaskNodeStatusType } from './api/tasks-handler'
 import {
   useListUsers,
-  useCreateUserMutation,
-  useProcessBatchMutation,
+  createUser,
+  processBatch,
   useUserCreatedEvent,
   useSystemNotificationEvent,
-  useGetTaskMutation,
-  useStartSharedWorkMutation,
+  getTask,
+  startSharedWork,
   listUsers,
   TaskStatus,
 } from './api/handlers'
-import type { TaskStatusType } from './api/handlers'
+import type { GetTaskResponse, ProcessBatchResponse, StartSharedWorkResponse, TaskStatusType } from './api/handlers'
 import { useNumbers } from './api/streaming-handlers'
 import type { SharedTaskState } from './api/tasks-handler'
 import { useSharedTasks, cancelSharedTask } from './api/tasks'
@@ -32,9 +32,14 @@ function ConnectionStatus() {
 }
 
 function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  // Imperative mutations call the generated function directly; the function
+  // throws ApiError / ConnectionError on failure. UsersList re-renders on its
+  // own once the handler fires aprot.TriggerRefresh(ctx, "users") server-side.
+  const client = useApiClient()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
-  const { mutate, isLoading, error } = useCreateUserMutation()
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -42,13 +47,19 @@ function CreateUserForm({ onLog }: { onLog: (msg: string, type?: string) => void
       onLog('Please enter name and email', 'error')
       return
     }
+    setIsLoading(true)
+    setError(null)
     try {
-      const result = await mutate(name, email)
+      const result = await createUser(client, name, email)
       onLog(`Created user: ${JSON.stringify(result)}`, 'response')
       setName('')
       setEmail('')
     } catch (err) {
-      onLog(`Error: ${(err as Error).message}`, 'error')
+      const e = err as Error
+      setError(e)
+      onLog(`Error: ${e.message}`, 'error')
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -233,16 +244,22 @@ function getStatusClass(status: TaskStatusType): string {
 }
 
 function TaskViewer({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  const client = useApiClient()
   const [taskId, setTaskId] = useState('task_1')
-  const { mutate, data: task, isLoading, error } = useGetTaskMutation()
+  const [task, setTask] = useState<GetTaskResponse | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
 
   const handleGetTask = async () => {
     if (!taskId) {
       onLog('Please enter a task ID', 'error')
       return
     }
+    setIsLoading(true)
+    setError(null)
     try {
-      const result = await mutate(taskId)
+      const result = await getTask(client, taskId)
+      setTask(result)
       onLog(`Got task: ${JSON.stringify(result)}`, 'response')
 
       // Demonstrate type-safe enum comparison
@@ -254,7 +271,11 @@ function TaskViewer({ onLog }: { onLog: (msg: string, type?: string) => void }) 
         onLog(`Task ${result.id} has failed`, 'error')
       }
     } catch (err) {
-      onLog(`Error: ${(err as Error).message}`, 'error')
+      const e = err as Error
+      setError(e)
+      onLog(`Error: ${e.message}`, 'error')
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -294,16 +315,12 @@ function TaskViewer({ onLog }: { onLog: (msg: string, type?: string) => void }) 
 }
 
 function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  const client = useApiClient()
   const [items, setItems] = useState('apple, banana, cherry, date, elderberry')
   const [delay, setDelay] = useState(500)
   const [progress, setProgress] = useState({ current: 0, total: 0, message: 'Ready' })
-
-  const { mutate, isLoading, cancel, reset } = useProcessBatchMutation({
-    onProgress: (current, total, message) => {
-      setProgress({ current, total, message })
-      onLog(`Progress: ${current}/${total} - ${message}`, 'progress')
-    },
-  })
+  const [isLoading, setIsLoading] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
 
   const handleProcess = async () => {
     const itemList = items.split(',').map((s) => s.trim()).filter(Boolean)
@@ -313,21 +330,33 @@ function BatchProcessor({ onLog }: { onLog: (msg: string, type?: string) => void
     }
 
     setProgress({ current: 0, total: itemList.length, message: 'Starting...' })
-
+    const controller = new AbortController()
+    abortRef.current = controller
+    setIsLoading(true)
     try {
-      const result = await mutate(itemList, delay)
+      const result: ProcessBatchResponse = await processBatch(client, itemList, delay, {
+        signal: controller.signal,
+        onProgress: (current, total, message) => {
+          setProgress({ current, total, message })
+          onLog(`Progress: ${current}/${total} - ${message}`, 'progress')
+        },
+      })
       setProgress({ current: result.processed, total: result.processed, message: 'Done!' })
       onLog(`Batch complete: ${JSON.stringify(result)}`, 'response')
     } catch (err) {
-      onLog(`Batch error: ${(err as Error).message}`, 'error')
-      setProgress((p) => ({ ...p, message: `Error: ${(err as Error).message}` }))
+      const e = err as Error
+      onLog(`Batch error: ${e.message}`, 'error')
+      setProgress((p) => ({ ...p, message: `Error: ${e.message}` }))
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null
+      setIsLoading(false)
     }
   }
 
   const handleCancel = () => {
-    cancel()
+    abortRef.current?.abort()
+    abortRef.current = null
     onLog('Cancellation requested', 'error')
-    reset()
   }
 
   const pct = progress.total > 0 ? (progress.current / progress.total) * 100 : 0
@@ -438,12 +467,15 @@ function TaskNodeTree({ task }: { task: SharedTaskState }) {
 }
 
 function SharedWorkPanel({ onLog }: { onLog: (msg: string, type?: string) => void }) {
+  const client = useApiClient()
   const [title, setTitle] = useState('Deploy Pipeline')
   const [steps, setSteps] = useState('Build, Test, Lint, Package, Deploy')
   const [delay, setDelay] = useState(800)
+  const [result, setResult] = useState<StartSharedWorkResponse | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
   const sharedTasks = useSharedTasks()
-
-  const { mutate, data: result, error, isLoading, cancel, reset } = useStartSharedWorkMutation()
 
   const handleStart = async () => {
     const stepList = steps.split(',').map((s) => s.trim()).filter(Boolean)
@@ -451,19 +483,31 @@ function SharedWorkPanel({ onLog }: { onLog: (msg: string, type?: string) => voi
       onLog('Please enter a title and steps', 'error')
       return
     }
-    reset()
+    const submittedTitle = title // closure-captured; safe across awaits
+    setResult(null)
+    setError(null)
+    setIsLoading(true)
+    const controller = new AbortController()
+    abortRef.current = controller
     try {
-      const res = await mutate(title, stepList, delay)
-      onLog(`Shared task "${title}" completed: ${res.completed}/${res.totalSteps} steps in ${res.totalDuration}ms`, 'response')
+      const res = await startSharedWork(client, submittedTitle, stepList, delay, { signal: controller.signal })
+      setResult(res)
+      onLog(`Shared task "${submittedTitle}" completed: ${res.completed}/${res.totalSteps} steps in ${res.totalDuration}ms`, 'response')
     } catch (err) {
-      if ((err as Error).message !== 'Request aborted') {
-        onLog(`Shared task error: ${(err as Error).message}`, 'error')
+      const e = err as Error
+      setError(e)
+      if (!(e instanceof ApiError) || !e.isCanceled()) {
+        onLog(`Shared task error: ${e.message}`, 'error')
       }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null
+      setIsLoading(false)
     }
   }
 
   const handleCancel = () => {
-    cancel()
+    abortRef.current?.abort()
+    abortRef.current = null
     onLog('Shared task cancelled', 'error')
   }
 

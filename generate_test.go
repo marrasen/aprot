@@ -377,9 +377,9 @@ func TestGenerateReact(t *testing.T) {
 		t.Error("Missing useGetUser hook")
 	}
 
-	// Check for mutation hooks
-	if !strings.Contains(output, "export function useCreateUserMutation") {
-		t.Error("Missing useCreateUserMutation hook")
+	// *Mutation hooks were removed; verify they no longer appear.
+	if strings.Contains(output, "useCreateUserMutation") {
+		t.Error("useCreateUserMutation should not be generated (removed)")
 	}
 
 	// Check for push event hooks
@@ -399,11 +399,17 @@ func TestGenerateReact(t *testing.T) {
 	if !strings.Contains(output, "export function useQuery") {
 		t.Error("Missing generic useQuery hook")
 	}
-	if !strings.Contains(output, "export function useMutation") {
-		t.Error("Missing generic useMutation hook")
-	}
 	if !strings.Contains(output, "export function usePushEvent") {
 		t.Error("Missing generic usePushEvent hook")
+	}
+
+	// Mutation hooks were removed in favor of useQuery's mutate(action) helper
+	// and raw async functions; they should no longer be generated.
+	if strings.Contains(output, "useMutation") {
+		t.Error("useMutation should not be generated (removed in favor of useQuery.mutate + raw fns)")
+	}
+	if strings.Contains(output, "Mutation(options") || strings.Contains(output, "UseMutationResult") {
+		t.Error("Per-handler *Mutation hooks should not be generated")
 	}
 
 	// Per-handler hooks should delegate to generic hooks (no useState in wrappers)
@@ -418,30 +424,14 @@ func TestGenerateReact(t *testing.T) {
 		}
 	}
 
-	// Mutation hooks should forward AbortSignal for cancellation
+	// Per-handler query hooks should forward AbortSignal so useQuery can cancel.
 	if !strings.Contains(output, "signal: AbortSignal") {
-		t.Error("Mutation hooks should forward AbortSignal for cancellation")
+		t.Error("Query hooks should forward AbortSignal for cancellation")
 	}
 
-	// useQuery should use AbortController to cancel in-flight requests
-	useQuerySection := strings.SplitN(output, "export function useQuery", 2)
-	if len(useQuerySection) == 2 {
-		useQueryEnd := strings.SplitN(useQuerySection[1], "export function useMutation", 2)
-		if len(useQueryEnd) == 2 && !strings.Contains(useQueryEnd[0], "AbortController") {
-			t.Error("useQuery should use AbortController for request cancellation")
-		}
-	}
-
-	// Per-handler query hooks should also forward signal (not just mutation hooks)
-	if len(parts) == 2 {
-		handlerHooksSection := parts[1]
-		// Count occurrences of signal: AbortSignal — should appear in both query and mutation hooks
-		signalCount := strings.Count(handlerHooksSection, "signal: AbortSignal")
-		// We expect at least 2 per method (one for query hook, one for mutation hook)
-		// With 2 methods (GetUser, CreateUser), that's at least 4
-		if signalCount < 4 {
-			t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
-		}
+	// useQuery should use AbortController to cancel in-flight requests.
+	if !strings.Contains(output, "abortRef") || !strings.Contains(output, "AbortController") {
+		t.Error("useQuery should use AbortController for request cancellation")
 	}
 
 	// Check for loading state hook
@@ -477,11 +467,13 @@ func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	if !strings.Contains(clientContent, "export function useQuery") {
 		t.Error("client.ts missing generic useQuery hook")
 	}
-	if !strings.Contains(clientContent, "export function useMutation") {
-		t.Error("client.ts missing generic useMutation hook")
-	}
 	if !strings.Contains(clientContent, "export function usePushEvent") {
 		t.Error("client.ts missing generic usePushEvent hook")
+	}
+
+	// Mutation hooks were removed; ensure they are absent across files.
+	if strings.Contains(clientContent, "useMutation") {
+		t.Error("client.ts should not export useMutation (removed)")
 	}
 
 	// Handler file should NOT contain useState (proves delegation)
@@ -501,32 +493,24 @@ func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	if !strings.Contains(handlerContent, "useQuery(") {
 		t.Error("Handler file should delegate to useQuery")
 	}
-	if !strings.Contains(handlerContent, "useMutation(") {
-		t.Error("Handler file should delegate to useMutation")
-	}
 	if !strings.Contains(handlerContent, "usePushEvent(") {
 		t.Error("Handler file should delegate to usePushEvent")
 	}
+	if strings.Contains(handlerContent, "useMutation") || strings.Contains(handlerContent, "UseMutationResult") {
+		t.Error("Handler file should not import or use the removed useMutation hook")
+	}
+	if strings.Contains(handlerContent, "Mutation(options") {
+		t.Error("Handler file should not generate per-method *Mutation hooks")
+	}
 
-	// Mutation hooks should forward AbortSignal for cancellation
+	// Per-handler query hooks should forward AbortSignal so useQuery can cancel.
 	if !strings.Contains(handlerContent, "signal: AbortSignal") {
-		t.Error("Mutation hooks should forward AbortSignal for cancellation")
+		t.Error("Query hooks should forward AbortSignal for cancellation")
 	}
 
-	// useQuery in client.ts should use AbortController to cancel in-flight requests
-	useQuerySection := strings.SplitN(clientContent, "export function useQuery", 2)
-	if len(useQuerySection) == 2 {
-		useQueryEnd := strings.SplitN(useQuerySection[1], "export function useMutation", 2)
-		if len(useQueryEnd) == 2 && !strings.Contains(useQueryEnd[0], "AbortController") {
-			t.Error("useQuery should use AbortController for request cancellation")
-		}
-	}
-
-	// Per-handler query hooks should also forward signal (not just mutation hooks)
-	signalCount := strings.Count(handlerContent, "signal: AbortSignal")
-	// Each method should have signal in both query and mutation hooks
-	if signalCount < 4 {
-		t.Errorf("Expected signal: AbortSignal in both query and mutation per-handler hooks, got %d occurrences", signalCount)
+	// useQuery in client.ts should use AbortController to cancel in-flight requests.
+	if !strings.Contains(clientContent, "abortRef") || !strings.Contains(clientContent, "AbortController") {
+		t.Error("useQuery should use AbortController for request cancellation")
 	}
 
 	// Check loading state hook in multi-file React client.ts
@@ -842,8 +826,8 @@ func TestGenerateVoidResponseReact(t *testing.T) {
 	if !strings.Contains(output, "useDeleteItem") {
 		t.Error("Missing useDeleteItem hook")
 	}
-	if !strings.Contains(output, "useDeleteItemMutation") {
-		t.Error("Missing useDeleteItemMutation hook")
+	if strings.Contains(output, "useDeleteItemMutation") {
+		t.Error("useDeleteItemMutation should not be generated (removed)")
 	}
 
 	t.Logf("Generated TypeScript (void, React):\n%s", output)
@@ -1236,9 +1220,9 @@ func TestGenerateNoRequestReact(t *testing.T) {
 		t.Error("No-request query hook should not use UseQueryOptions with request type")
 	}
 
-	// Mutation hook should use void for request type
-	if !strings.Contains(output, "UseMutationResult<[], ListItemsResponse>") {
-		t.Error("Missing UseMutationResult<[], ListItemsResponse>")
+	// Mutation hooks were removed — should not appear regardless of param shape.
+	if strings.Contains(output, "UseMutationResult") || strings.Contains(output, "useMutation") {
+		t.Error("Mutation hooks should not be generated; use useQuery.mutate or call the raw fn")
 	}
 
 	t.Logf("Generated TypeScript (no-request, React):\n%s", output)

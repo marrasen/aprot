@@ -4,7 +4,7 @@
 {{- if .Methods}}
 import { useCallback } from 'react';
 {{- end}}
-import { ApiClient{{if hasNonStreamMethods .Methods}}, useQuery, useMutation{{end}}{{if hasStreamMethods .Methods}}, useStream{{end}}{{if .PushEvents}}, usePushEvent{{end}} } from './client';
+import { ApiClient{{if hasNonStreamMethods .Methods}}, useQuery{{end}}{{if hasStreamMethods .Methods}}, useStream{{end}}{{if .PushEvents}}, usePushEvent{{end}} } from './client';
 {{- if or .Methods .PushEvents .BaseTypeImports}}
 import type {
 {{- if .Methods}}
@@ -13,8 +13,6 @@ import type {
 {{- if hasNonStreamMethods .Methods}}
     UseQueryOptions,
     UseQueryResult,
-    UseMutationOptions,
-    UseMutationResult,
 {{- end}}
 {{- if hasStreamMethods .Methods}}
     UseStreamOptions,
@@ -122,7 +120,8 @@ export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{e
 /**
  * Subscribes to `{{.WireMethod}}` and re-renders automatically when the
  * server triggers a refresh. The subscription is cleaned up on unmount.
- * See {@link UseQueryResult} for return value details.
+ * See {@link UseQueryResult} for return value details — including the
+ * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
 export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
@@ -131,24 +130,13 @@ export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.Resp
     );
     return useQuery(wrappedFn, { ...options, _subscribe: { method: '{{.WireMethod}}', params: [] } });
 }
-
-/**
- * Imperative mutation hook for `{{.WireMethod}}`. Nothing happens until
- * you call `mutate()`. See {@link UseMutationResult} for return value details.
- */
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[], {{.ResponseType}}> {
-    const wrappedFn = useCallback(
-        (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal, onProgress: options?.onProgress }),
-        [options?.onProgress],
-    );
-    return useMutation(wrappedFn);
-}
 {{- else}}
 /**
  * Subscribes to `{{.WireMethod}}` with the given parameters and re-renders
  * automatically when the server triggers a refresh. When the parameters
  * change, the previous subscription is canceled and a new one starts.
- * See {@link UseQueryResult} for return value details.
+ * See {@link UseQueryResult} for return value details — including the
+ * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
 export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
@@ -156,18 +144,6 @@ export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions):
         [],
     );
     return useQuery(wrappedFn, { ...options, params: [{{paramNames .Params}}], _subscribe: { method: '{{.WireMethod}}', params: [{{paramNames .Params}}] } });
-}
-
-/**
- * Imperative mutation hook for `{{.WireMethod}}`. Nothing happens until
- * you call `mutate()`. See {@link UseMutationResult} for return value details.
- */
-export function {{.HookName}}Mutation(options?: UseMutationOptions): UseMutationResult<[{{paramDecl .Params}}], {{.ResponseType}}> {
-    const wrappedFn = useCallback(
-        (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal, onProgress: options?.onProgress }),
-        [options?.onProgress],
-    );
-    return useMutation(wrappedFn);
 }
 {{- end}}
 {{end}}
