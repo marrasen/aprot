@@ -1,6 +1,6 @@
 import { Component, Suspense, useEffect, useState, useRef } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
-import { ApiClient, ApiClientProvider, ApiError, useApiClient, useConnection, useIsLoading, useQuerySuspense } from './api/client'
+import { ApiClient, ApiClientProvider, ApiClientErrorProvider, ApiError, useApiClient, useApiClientError, useConnection, useIsLoading, useQuerySuspense } from './api/client'
 import { TaskNodeStatus } from './api/tasks-handler'
 import type { TaskNodeStatusType } from './api/tasks-handler'
 import {
@@ -720,6 +720,35 @@ function EventLog({ logs, onClear }: { logs: { message: string; type: string; ti
   )
 }
 
+// GlobalErrorBanner reads the latest error captured by <ApiClientErrorProvider>
+// and surfaces it as a dismissible banner. Every API call below the provider
+// — imperative client.request() calls AND errors thrown inside generated hooks
+// (useListUsers, useNumbers, etc.) — flows through here, so apps that don't
+// want per-call try/catch can rely on this single surface.
+function GlobalErrorBanner() {
+  const { error, clear } = useApiClientError()
+  if (!error) return null
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        background: '#f8d7da',
+        border: '1px solid #f5c6cb',
+        borderRadius: 4,
+        color: '#721c24',
+        marginBottom: 12,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+      }}
+    >
+      <span><strong>API error:</strong> {error.message}</span>
+      <button onClick={clear} style={{ padding: '2px 10px' }}>Dismiss</button>
+    </div>
+  )
+}
+
 function AppContent() {
   const [logs, setLogs] = useState<{ message: string; type: string; time: string }[]>([])
   const { isConnected } = useConnection()
@@ -744,6 +773,7 @@ function AppContent() {
         <GlobalLoadingIndicator />
       </h1>
       <ConnectionStatus />
+      <GlobalErrorBanner />
       <div className="grid">
         <CreateUserForm onLog={addLog} />
         <UsersList />
@@ -780,7 +810,9 @@ export default function App() {
 
   return (
     <ApiClientProvider value={client}>
-      <AppContent />
+      <ApiClientErrorProvider>
+        <AppContent />
+      </ApiClientErrorProvider>
     </ApiClientProvider>
   )
 }

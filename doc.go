@@ -456,6 +456,34 @@
 // after-success pattern (useEffect([data])) was non-obvious. See the
 // repository's MIGRATION_MUTATION_HOOKS.md for a rewrite prompt.
 //
+// # Global Error Capture (TypeScript Client)
+//
+// Wrap a region of the React tree in <ApiClientErrorProvider> to surface every
+// API error inside a single hook, instead of wiring per-call try/catch. Errors
+// from imperative client.request() / requestStream() / subscribe() calls AND
+// from generated query / stream / mutate hooks all flow through the provider,
+// because every hook retrieves its client via useApiClient() and useApiClient()
+// returns a Proxy-wrapped client when the provider is mounted above it:
+//
+//	import { ApiClientProvider, ApiClientErrorProvider, useApiClient,
+//	         useApiClientError } from './api/client';
+//
+//	<ApiClientProvider value={client}>
+//	  <ApiClientErrorProvider>
+//	    <App />
+//	  </ApiClientErrorProvider>
+//	</ApiClientProvider>
+//
+// Read with useApiClientError():
+//
+//	const { error, clear } = useApiClientError();
+//
+// Only the latest error is held (newer overrides older); clear() resets it.
+// The provider observes errors but does not swallow them — wrapped client
+// calls still throw, so per-hook `error` fields and explicit try/catch keep
+// working. Without <ApiClientErrorProvider> above, useApiClient() returns the
+// raw client unchanged and useApiClientError() throws — adoption is opt-in.
+//
 // # React Suspense
 //
 // In addition to per-handler hooks like `useListUsers()` that return
