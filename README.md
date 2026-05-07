@@ -81,29 +81,24 @@ func (h *Handlers) RunJob(ctx context.Context, id string) error {
 import {
     useListJobs,
     createJob,
-    useRunJobMutation,
+    runJob,
     JobStatus,
     type JobStatusType,
 } from './api/handlers'
-import { useApiClient } from './api/client'
 
 export function Jobs() {
-    const client = useApiClient()
-
     // Subscribed query. Re-renders automatically whenever the server calls
     // TriggerRefresh(ctx, "jobs") — no useEffect, no event listener, no refetch.
-    const { data: jobs, isLoading } = useListJobs()
-
-    const runJob = useRunJobMutation({
-        onProgress: (current, total, message) =>
-            console.log(`${message} (${current}/${total})`),
-    })
+    // The hook also exposes `mutate(action)`: a helper that runs an async
+    // action and refetches this query on completion, so we can wire the
+    // "Add job" button without juggling a separate mutation hook.
+    const { data: jobs, isLoading, mutate } = useListJobs()
 
     if (isLoading) return <p>Loading…</p>
 
     return (
         <div>
-            <button onClick={() => createJob(client, 'Write the README')}>
+            <button onClick={() => mutate((client) => createJob(client, 'Write the README'))}>
                 Add job
             </button>
 
@@ -112,7 +107,11 @@ export function Jobs() {
                     <li key={job.id}>
                         <strong>{job.title}</strong> — {labelFor(job.status)}
                         {job.status === JobStatus.Pending && (
-                            <button onClick={() => runJob.mutate(job.id)}>Run</button>
+                            <button onClick={() => mutate((client) => runJob(client, job.id, {
+                                onProgress: (cur, total, msg) => console.log(`${msg} (${cur}/${total})`),
+                            }))}>
+                                Run
+                            </button>
                         )}
                     </li>
                 ))}
@@ -169,7 +168,7 @@ go get github.com/marrasen/aprot
 
 **Generated TypeScript** — the examples include committed generated code you can browse directly:
 
-- **[React client](example/react/client/src/api/)** — hooks, mutation helpers, push event subscriptions ([`client.ts`](example/react/client/src/api/client.ts), [`handlers.ts`](example/react/client/src/api/handlers.ts))
+- **[React client](example/react/client/src/api/)** — query / stream / push hooks plus standalone async functions ([`client.ts`](example/react/client/src/api/client.ts), [`handlers.ts`](example/react/client/src/api/handlers.ts))
 - **[Vanilla client](example/vanilla/client/static/api/)** — standalone functions, subscribe helpers ([`client.ts`](example/vanilla/client/static/api/client.ts), [`public-handlers.ts`](example/vanilla/client/static/api/public-handlers.ts))
 
 ## Quick Start
@@ -274,8 +273,8 @@ func main() {
 **React:**
 
 ```tsx
-import { ApiClient, ApiClientProvider, getWebSocketUrl, useApiClient } from './api/client';
-import { createUser, useListUsers } from './api/handlers';
+import { ApiClient, ApiClientProvider, getWebSocketUrl } from './api/client';
+import { useListUsers, createUser } from './api/handlers';
 
 const client = new ApiClient(getWebSocketUrl());
 
@@ -288,7 +287,9 @@ function App() {
 }
 
 function UsersList() {
-    const api = useApiClient();
+    // useListUsers() returns the live query plus a `mutate(action)` helper.
+    // mutate runs an async action and refetches this query on completion;
+    // its error/loading state is shared with the query itself.
     const { data, isLoading, error, mutate } = useListUsers();
 
     if (error) return <div>Error: {error.message}</div>;
@@ -296,7 +297,7 @@ function UsersList() {
 
     return (
         <>
-            <button onClick={() => mutate(createUser(api, { name: 'New User' }))}>
+            <button onClick={() => mutate((c) => createUser(c, { name: 'New User' }))}>
                 Add User
             </button>
             <ul>{data?.users.map(u => <li key={u.id}>{u.name}</li>)}</ul>
@@ -304,6 +305,8 @@ function UsersList() {
     );
 }
 ```
+
+> aprot does **not** generate per-handler mutation hooks. Either compose mutations through a query hook's `mutate(action)` helper (above), or call the generated function directly with `useApiClient()` (see [TypeScript Mutation Patterns](#typescript-mutation-patterns)). If you're upgrading from a version that generated `useXxxMutation()`, see [`MIGRATION_MUTATION_HOOKS.md`](MIGRATION_MUTATION_HOOKS.md) for an agent-runnable rewrite prompt.
 
 **React Suspense (`useQuerySuspense`)** — pairs aprot's generated query functions with React 19's `use()` hook for components that prefer declarative loading boundaries:
 
@@ -360,6 +363,79 @@ onUserCreatedEvent(client, (event) => {
     console.log('User created:', event);
 });
 ```
+
+## TypeScript Mutation Patterns
+
+aprot deliberately generates **only query / stream / push hooks** — there is no `useXxxMutation()` hook. Two patterns cover every mutation:
+
+### Pattern 1 — query-scoped `mutate(action)` (refetch on completion)
+
+Every `useXxx()` query hook returns a `mutate` helper alongside `data` / `isLoading` / `error`. It accepts either a `Promise` or a `(client: ApiClient) => Promise<unknown>` thunk, runs the action, and refetches the query on success. The action's errors are captured in the hook's `error` field, and `isLoading` covers both the action and the subsequent refetch.
+
+```tsx
+import { useListTodos } from './api/todos';
+import { addTodo } from './api/todos';
+
+function TodoList() {
+    const { data, mutate, isLoading, error } = useListTodos();
+
+    return (
+        <>
+            <button
+                disabled={isLoading}
+                onClick={() => mutate((client) => addTodo(client, { title: 'Buy milk' }))}
+            >
+                Add
+            </button>
+            {error && <p>{error.message}</p>}
+            <ul>{data?.todos.map(t => <li key={t.id}>{t.title}</li>)}</ul>
+        </>
+    );
+}
+```
+
+The thunk receives the `ApiClient` instance the hook is already bound to, so you don't need to call `useApiClient()` separately. A bare `Promise` is also accepted — useful when composing multiple operations: `mutate(Promise.all([addTodo(c, a), addTodo(c, b)]))`.
+
+Server-side `aprot.TriggerRefresh(...)` already pushes refreshed data to subscribed queries, so for many flows you don't need the explicit refetch. Reach for Pattern 1 when you want the same component's loading indicator to cover both the action and the refresh.
+
+### Pattern 2 — raw async function via `useApiClient()`
+
+When there's no surrounding query (no list to refetch), call the generated function directly. Generated standalone functions are typed `Promise<TRes>` that throw `ApiError` (protocol error) or `ConnectionError` (transport error) on failure — no hidden state machine, no ambiguous return values.
+
+```tsx
+import { useApiClient, ApiError } from './api/client';
+import { addTodo } from './api/todos';
+
+function AddTodoButton() {
+    const client = useApiClient();
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState<Error | null>(null);
+
+    const onClick = async () => {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const todo = await addTodo(client, { title: 'Buy milk' });
+            toast(`Created ${todo.id}`);
+        } catch (err) {
+            setError(err as Error);
+            if (err instanceof ApiError && err.isValidationFailed()) {
+                // field-level error UI
+            }
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    return <button onClick={onClick} disabled={isLoading}>Add</button>;
+}
+```
+
+You manage `isLoading` / `error` / `AbortController` yourself. The trade-off is honest: the function does what its type says.
+
+### Why no mutation hooks?
+
+A previous version of aprot generated `useXxxMutation()` hooks whose `mutate()` swallowed errors and returned `undefined as TRes` on failure. The `Promise<TRes>` type lied at runtime; `void` mutations couldn't distinguish success from "not yet called"; and the only correct after-success pattern (`useEffect([data])`) was non-obvious. The two patterns above cover the same ground without the foot-guns. See [`MIGRATION_MUTATION_HOOKS.md`](MIGRATION_MUTATION_HOOKS.md) for a rewrite prompt that AI agents can run against an existing codebase.
 
 ## Streaming Handlers
 

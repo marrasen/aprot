@@ -1315,22 +1315,28 @@ export interface UseQueryResult<TRes> {
     refetch: () => void;
     /**
      * Run an async action (e.g., a mutation), then automatically re-fetch
-     * this query's data. Useful for fire-and-forget mutations that should
-     * refresh the query on completion:
+     * this query's data. The action receives the current `ApiClient` and
+     * returns a `Promise`, so you can call generated handler functions
+     * directly without wiring `useApiClient()` separately:
      *
      * ```ts
-     * const { mutate } = useListUsers();
-     * // Run createUser, then refetch the user list:
-     * mutate(createUser(client, { name: 'Alice' }));
+     * import { addTodo } from './api/todos';
+     *
+     * const { mutate } = useListTodos();
+     * mutate((client) => addTodo(client, { title: 'Buy milk' }));
+     * ```
+     *
+     * A bare `Promise` (already started) is also accepted, which is useful
+     * when the caller wants to compose multiple operations:
+     *
+     * ```ts
+     * mutate(Promise.all([addTodo(client, a), addTodo(client, b)]));
      * ```
      *
      * Sets `isLoading` to `true` for the duration. If the action rejects,
      * the error is captured in the `error` field and the refetch is skipped.
-     *
-     * **Note:** This is different from `useMutation` — it is a convenience
-     * for triggering a side effect and refreshing the query in one call.
      */
-    mutate: (action: Promise<unknown> | (() => Promise<unknown>)) => Promise<void>;
+    mutate: (action: Promise<unknown> | ((client: ApiClient) => Promise<unknown>)) => Promise<void>;
     /**
      * Cancel any in-flight fetch for this query. The Go handler's
      * `context.Context` is canceled. `isLoading` flips to `false` and
@@ -1341,52 +1347,6 @@ export interface UseQueryResult<TRes> {
      * `refetch()`; the underlying shared subscription is unaffected
      * because other components may depend on it.
      */
-    cancel: () => void;
-}
-
-/**
- * Options for mutation hooks (e.g., `useCreateUserMutation()`).
- */
-export interface UseMutationOptions {
-    /**
-     * Called when the server sends progress updates during a long-running
-     * handler. The handler reports progress via `aprot.Progress(ctx).Update(...)`.
-     */
-    onProgress?: (current: number, total: number, message: string) => void;
-}
-
-/**
- * Return value of mutation hooks (e.g., `useCreateUserMutation()`).
- *
- * Mutations are imperative — nothing happens until you call `mutate()`.
- * Each call creates a new `AbortController`; calling `mutate()` again
- * while a previous call is in-flight aborts the previous request (and
- * cancels the Go handler's `context.Context`).
- *
- * Errors are captured in the `error` field and are **not** re-thrown.
- * You do not need try/catch around `mutate()` calls.
- *
- * @typeParam TParams - Tuple of the mutation's parameter types.
- * @typeParam TRes - The response type returned by the mutation.
- */
-export interface UseMutationResult<TParams extends unknown[], TRes> {
-    /**
-     * Call the mutation. Returns a `Promise` that resolves with the server
-     * response on success, or `undefined` on error (check the `error` field).
-     *
-     * Calling `mutate()` again while a previous call is in-flight aborts
-     * the previous request.
-     */
-    mutate: (...params: TParams) => Promise<TRes>;
-    /** The last successful response, or `null` if the mutation has not been called yet. */
-    data: TRes | null;
-    /** The error from the last `mutate()` call, or `null`. Cleared at the start of each new call. */
-    error: Error | null;
-    /** `true` while a `mutate()` call is in-flight. */
-    isLoading: boolean;
-    /** Reset `data`, `error`, and `isLoading` to their initial values. */
-    reset: () => void;
-    /** Abort the in-flight mutation request. Cancels the Go handler's context. */
     cancel: () => void;
 }
 
@@ -1806,18 +1766,18 @@ export function useQuery<TArgs extends unknown[], TRes>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client, fn, paramsKey, shouldCache, cacheKey, fetch]);
 
-    const mutate = useCallback(async (action: Promise<unknown> | (() => Promise<unknown>)) => {
+    const mutate = useCallback(async (action: Promise<unknown> | ((client: ApiClient) => Promise<unknown>)) => {
         setLocalLoading(true);
         setLocalError(null);
         try {
-            await (typeof action === 'function' ? action() : action);
+            await (typeof action === 'function' ? action(client) : action);
             if (!shouldCache) await fetch();
         } catch (err) {
             setLocalError(err as Error);
         } finally {
             setLocalLoading(false);
         }
-    }, [fetch, shouldCache]);
+    }, [client, fetch, shouldCache]);
 
     const cancel = useCallback(() => {
         // Abort any in-flight fetch/refetch. In cached subscription mode the
@@ -2055,64 +2015,6 @@ export function useQuerySuspense<TArgs extends unknown[], TRes>(
 
     const promise = useSyncExternalStore(subscribeFn, getSnapshot);
     return reactUse(promise);
-}
-
-/**
- * Generic mutation hook. Prefer the generated per-handler hooks (e.g.,
- * `useCreateUserMutation()`) which call this internally.
- *
- * Mutations are idle until `mutate()` is called. Each call gets its own
- * `AbortController`; calling `mutate()` again while in-flight aborts the
- * previous request (canceling the Go handler's `context.Context`).
- *
- * Errors are captured in the `error` field and are **not** re-thrown —
- * you do not need try/catch around `mutate()` calls.
- */
-export function useMutation<TArgs extends unknown[], TRes>(
-    fn: (client: ApiClient, signal: AbortSignal, ...args: TArgs) => Promise<TRes>,
-): UseMutationResult<TArgs, TRes> {
-    const client = useApiClient();
-    const [data, setData] = useState<TRes | null>(null);
-    const [error, setError] = useState<Error | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const abortRef = useRef<AbortController | null>(null);
-
-    const fnRef = useRef(fn);
-    fnRef.current = fn;
-
-    const mutate = useCallback(async (...args: TArgs): Promise<TRes> => {
-        abortRef.current?.abort();
-        const controller = new AbortController();
-        abortRef.current = controller;
-        setIsLoading(true);
-        setError(null);
-        try {
-            const result = await fnRef.current(client, controller.signal, ...args);
-            setData(result);
-            return result;
-        } catch (err) {
-            setError(err as Error);
-            return undefined as TRes;
-        } finally {
-            setIsLoading(false);
-            if (abortRef.current === controller) {
-                abortRef.current = null;
-            }
-        }
-    }, [client]);
-
-    const reset = useCallback(() => {
-        setData(null);
-        setError(null);
-        setIsLoading(false);
-    }, []);
-
-    const cancel = useCallback(() => {
-        abortRef.current?.abort();
-        abortRef.current = null;
-    }, []);
-
-    return { mutate, data, error, isLoading, reset, cancel };
 }
 
 /**

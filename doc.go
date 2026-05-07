@@ -412,6 +412,50 @@
 // Use [OpenAPIGenerator.WithBasePath] when the API is mounted behind a
 // proxy or at a non-root path.
 //
+// # TypeScript Mutation Patterns (React)
+//
+// aprot does not generate per-handler mutation hooks (no useXxxMutation()).
+// Mutations use one of two patterns:
+//
+// Pattern 1 — query-scoped mutate(action) (refetch on completion). Every
+// useXxx() query hook returns a `mutate` helper alongside data / isLoading /
+// error. It accepts either a Promise or a (client: ApiClient) => Promise<unknown>
+// thunk; it runs the action, captures any thrown error in `error`, and
+// refetches the query on success. Loading / error state is shared with the
+// query so a single indicator covers both the action and the refresh:
+//
+//	const { data, mutate, isLoading, error } = useListTodos();
+//	<button onClick={() => mutate((client) => addTodo(client, { title: 'Buy milk' }))} />
+//
+// The thunk receives the same ApiClient the hook is bound to, so callers
+// don't need a separate useApiClient() at the call site. A bare Promise is
+// also accepted, useful when composing operations:
+//
+//	mutate(Promise.all([addTodo(c, a), addTodo(c, b)]));
+//
+// Pattern 2 — raw async function via useApiClient(). Generated standalone
+// functions (addTodo, createUser, etc.) are typed Promise<TRes> that throw
+// ApiError / ConnectionError on failure. Use them when there's no surrounding
+// query (no list to refetch) or when you need conditional try/catch:
+//
+//	const client = useApiClient();
+//	try {
+//	    const todo = await addTodo(client, { title: 'Buy milk' });
+//	} catch (err) {
+//	    if (err instanceof ApiError && err.isValidationFailed()) { ... }
+//	    else { throw err; }
+//	}
+//
+// You manage isLoading / error / AbortController yourself. The trade-off is
+// honest: the function does what its type says — no hidden state machine.
+//
+// Earlier versions of aprot generated useXxxMutation() hooks whose mutate()
+// swallowed errors and returned `undefined as TRes` on failure. They were
+// removed because the Promise<TRes> type lied at runtime, void mutations
+// could not distinguish success from "not yet called", and the only correct
+// after-success pattern (useEffect([data])) was non-obvious. See the
+// repository's MIGRATION_MUTATION_HOOKS.md for a rewrite prompt.
+//
 // # React Suspense
 //
 // In addition to per-handler hooks like `useListUsers()` that return
@@ -453,9 +497,10 @@
 //	listUsers.method = 'PublicHandlers.ListUsers' as const;
 //
 // No per-handler Suspense hook is generated; the single generic hook plus
-// the metadata is enough. Requires React 19+. Mutations and streams
-// continue to use `useMutation` and `useStream` respectively -- only
-// queries fit the Suspense paradigm cleanly.
+// the metadata is enough. Requires React 19+. Streams continue to use
+// `useStream`, and mutations use the patterns described above (query.mutate
+// or the raw async function) — only queries fit the Suspense paradigm
+// cleanly.
 //
 // # Context Helpers
 //

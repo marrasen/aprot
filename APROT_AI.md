@@ -239,23 +239,88 @@ The `'server-rejected'` bucket is also surfaced via the older `onConnectionRejec
 
 ## TypeScript Hooks (React Output)
 
-Per-handler hooks wrap the generic primitives:
+aprot generates **only two hook flavors per handler**: `useXxx()` for query/subscription, and `useStreamXxx()` / `usePushXxx()` for streams and push events. There is **no per-handler mutation hook** — call the generated async function directly, or use the query hook's `mutate(action)` helper to compose a mutation with a refetch.
 
 ```tsx
 import {
-  useListUsers, useGetUser, useCreateUserMutation,
+  useListUsers, useGetUser, createUser, deleteUser,
   useUserCreatedEvent, useStreamNumbers,
 } from './api/handlers';
+import { useApiClient } from './api/client';
 
-const { data, isLoading, error, refetch, cancel } = useListUsers();
+const { data, isLoading, error, refetch, mutate, cancel } = useListUsers();
 const { data: user } = useGetUser(userId);                          // re-fetches when userId changes
-const { mutate, isLoading, cancel } = useCreateUserMutation();
-mutate('Alice', 'alice@example.com');
 
 const { items, done, error, isLoading, restart, cancel } = useStreamNumbers(10, 100);
-
 const { lastEvent, events, clear } = useUserCreatedEvent();
 ```
+
+### How to perform a mutation
+
+Two patterns. Pick by intent.
+
+**Pattern 1 — query-scoped `mutate(action)` (refetch on completion).** Every `useXxx()` query hook returns a `mutate` helper that accepts either a `Promise` or a `(client: ApiClient) => Promise<unknown>` thunk. It runs the action, captures any thrown error in `error`, and refetches this query on success — sharing the query's `isLoading` / `error` state. Use this whenever a mutation should refresh the list it lives next to:
+
+```tsx
+import { addTodo } from './api/todos';
+
+function TodoList() {
+  const { data, mutate, isLoading, error } = useListTodos();
+
+  return (
+    <>
+      <button
+        disabled={isLoading}
+        onClick={() => mutate((client) => addTodo(client, { title: 'Buy milk' }))}
+      >
+        Add
+      </button>
+      {error && <p>{error.message}</p>}
+      <ul>{data?.todos.map(t => <li key={t.id}>{t.title}</li>)}</ul>
+    </>
+  );
+}
+```
+
+`mutate` accepts the action as `(client) => Promise<unknown>` so you don't need to call `useApiClient()` separately at the call site — the hook injects its own client. A bare `Promise<unknown>` is also accepted when you've already started the work (e.g. `mutate(Promise.all([…]))`).
+
+Server-side `aprot.TriggerRefresh(...)` already pushes refreshed data to subscribed queries, so for many flows you don't *need* the explicit refetch. Reach for Pattern 1 specifically when you want the same component's loading state to cover both the mutation and the refresh.
+
+**Pattern 2 — raw async function via `useApiClient()`.** Generated standalone functions throw on failure (`ApiError` for protocol-level errors, `ConnectionError` for transport-level). Use them when there is no query context (no list to refetch), or when you need conditional try/catch logic:
+
+```tsx
+import { useApiClient, ApiError } from './api/client';
+import { addTodo } from './api/todos';
+
+function AddTodoButton() {
+  const client = useApiClient();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const onClick = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await addTodo(client, { title: 'Buy milk' });
+    } catch (err) {
+      setError(err as Error);
+      if (err instanceof ApiError && err.isValidationFailed()) {
+        // field-level UI
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return <button onClick={onClick} disabled={isLoading}>Add</button>;
+}
+```
+
+You manage `isLoading` / `error` / `AbortController` yourself. The trade-off is honest: the generated function is a typed `Promise<TRes>` that resolves with the actual value or throws — no hidden state machine.
+
+### Migrating from `useXxxMutation()` (removed)
+
+If your codebase still calls `useXxxMutation()`, see `MIGRATION_MUTATION_HOOKS.md` for an agent-runnable rewrite prompt. Quick summary: `useCreateUserMutation()` → either `useApiClient() + createUser(client, …)` (raw, throws) or `useListUsers().mutate((c) => createUser(c, …))` (refetch-after-mutation).
 
 ### React 19 Suspense — `useQuerySuspense`
 Single generic hook; works with any generated query function. Opens a subscription, suspends until first response, swaps the promise on each push (no re-suspending).
