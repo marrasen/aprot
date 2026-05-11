@@ -446,6 +446,40 @@ func TestGenerateReact(t *testing.T) {
 	}
 }
 
+func TestGenerateReactErrorProviderSource(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputReact,
+	})
+
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	if !strings.Contains(output, "export interface ApiClientErrorSource") {
+		t.Error("Missing ApiClientErrorSource interface")
+	}
+	if !strings.Contains(output, "struct: string") {
+		t.Error("ApiClientErrorSource should expose `struct: string`")
+	}
+	if !strings.Contains(output, "method: string") {
+		t.Error("ApiClientErrorSource should expose `method: string`")
+	}
+	if !strings.Contains(output, "source: ApiClientErrorSource | null") {
+		t.Error("ApiClientErrorState should expose `source: ApiClientErrorSource | null`")
+	}
+	if !strings.Contains(output, "ApiErrorReporter = (err: Error, source: ApiClientErrorSource) => void") {
+		t.Error("ApiErrorReporter should carry the ApiClientErrorSource alongside the error")
+	}
+	if !strings.Contains(output, "parseMethodSource") {
+		t.Error("Expected a parseMethodSource helper that splits 'Struct.Method' into source")
+	}
+}
+
 func TestGenerateReactMultiFileGenericHooks(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})

@@ -726,8 +726,9 @@ function EventLog({ logs, onClear }: { logs: { message: string; type: string; ti
 // (useListUsers, useNumbers, etc.) — flows through here, so apps that don't
 // want per-call try/catch can rely on this single surface.
 function GlobalErrorBanner() {
-  const { error, clear } = useApiClientError()
+  const { error, source, clear } = useApiClientError()
   if (!error) return null
+  const where = source ? `${source.struct}.${source.method}` : null
   return (
     <div
       style={{
@@ -743,7 +744,9 @@ function GlobalErrorBanner() {
         gap: 12,
       }}
     >
-      <span><strong>API error:</strong> {error.message}</span>
+      <span>
+        <strong>API error{where ? ` in ${where}` : ''}:</strong> {error.message}
+      </span>
       <button onClick={clear} style={{ padding: '2px 10px' }}>Dismiss</button>
     </div>
   )
