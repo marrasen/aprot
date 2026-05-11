@@ -1208,17 +1208,37 @@ const ApiClientContext = createContext<ApiClient | null>(null);
 
 export const ApiClientProvider = ApiClientContext.Provider;
 
+// ApiClientErrorSource identifies which generated call produced an error. The
+// wire name of every generated call is "Struct.Method" (e.g. "Todos.CreateTodo"),
+// so struct names the handler/namespace and method names the operation. If a
+// caller invokes the client with a name that has no dot, struct is the empty
+// string and method holds the full wire name.
+export interface ApiClientErrorSource {
+    struct: string;
+    method: string;
+}
+
+// parseMethodSource splits a "Struct.Method" wire name into the source object
+// reported to <ApiClientErrorProvider>. Split on the first dot only.
+function parseMethodSource(wireMethod: string): ApiClientErrorSource {
+    const dot = wireMethod.indexOf('.');
+    if (dot < 0) return { struct: '', method: wireMethod };
+    return { struct: wireMethod.slice(0, dot), method: wireMethod.slice(dot + 1) };
+}
+
 // ApiErrorReporter is the internal callback an <ApiClientErrorProvider> installs
 // so the wrapped client can report errors up. It is intentionally not exported:
 // callers read the captured error via useApiClientError().
-type ApiErrorReporter = (err: Error) => void;
+type ApiErrorReporter = (err: Error, source: ApiClientErrorSource) => void;
 const ApiErrorReporterContext = createContext<ApiErrorReporter | null>(null);
 
 // ApiClientErrorState is what useApiClientError() returns: the latest captured
-// error and a clear() to reset it. Only one error is held at a time — newer
-// errors replace older ones.
+// error, the source (struct + method) of the call that produced it, and a
+// clear() to reset it. Only one error is held at a time — newer errors replace
+// older ones. source is null exactly when error is null.
 export interface ApiClientErrorState {
     error: Error | null;
+    source: ApiClientErrorSource | null;
     clear: () => void;
 }
 const ApiClientErrorContext = createContext<ApiClientErrorState | null>(null);
@@ -1237,9 +1257,10 @@ function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter
 
             if (prop === 'request') {
                 return function (...args: unknown[]) {
+                    const wireMethod = typeof args[0] === 'string' ? args[0] : '';
                     const result = (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
                     return result.catch((err: unknown) => {
-                        if (err instanceof Error) report(err);
+                        if (err instanceof Error) report(err, parseMethodSource(wireMethod));
                         throw err;
                     });
                 };
@@ -1251,8 +1272,9 @@ function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter
                     callback: (data: unknown) => void,
                     onError?: (err: Error) => void,
                 ) {
+                    const source = parseMethodSource(method);
                     const wrappedOnError = (err: Error) => {
-                        report(err);
+                        report(err, source);
                         onError?.(err);
                     };
                     return (value as (...a: unknown[]) => () => void).apply(
@@ -1263,6 +1285,7 @@ function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter
             }
             if (prop === 'requestStream') {
                 return function (method: string, params: unknown[], options?: unknown) {
+                    const source = parseMethodSource(method);
                     const iterable = (value as (...a: unknown[]) => AsyncIterable<unknown>).apply(
                         target,
                         [method, params, options],
@@ -1275,7 +1298,7 @@ function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter
                                     try {
                                         return await inner.next();
                                     } catch (err) {
-                                        if (err instanceof Error) report(err);
+                                        if (err instanceof Error) report(err, source);
                                         throw err;
                                     }
                                 },
@@ -1312,12 +1335,24 @@ export function useApiClient(): ApiClient {
 // working — the provider just observes a copy.
 //
 // Read the latest captured error with useApiClientError(); call clear() to
-// dismiss. Only one error is held at a time (newest wins).
+// dismiss. Only one error is held at a time (newest wins). The captured state
+// also exposes the source — `{ struct, method }` parsed from the wire name —
+// so a banner can say "Error in Todos.CreateTodo" instead of just the message.
 export function ApiClientErrorProvider({ children }: { children: React.ReactNode }) {
     const [error, setError] = useState<Error | null>(null);
-    const clear = useCallback(() => setError(null), []);
-    const report = useCallback<ApiErrorReporter>((err) => setError(err), []);
-    const state = useMemo<ApiClientErrorState>(() => ({ error, clear }), [error, clear]);
+    const [source, setSource] = useState<ApiClientErrorSource | null>(null);
+    const clear = useCallback(() => {
+        setError(null);
+        setSource(null);
+    }, []);
+    const report = useCallback<ApiErrorReporter>((err, src) => {
+        setError(err);
+        setSource(src);
+    }, []);
+    const state = useMemo<ApiClientErrorState>(
+        () => ({ error, source, clear }),
+        [error, source, clear],
+    );
     return React.createElement(
         ApiErrorReporterContext.Provider,
         { value: report },

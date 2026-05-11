@@ -337,13 +337,21 @@ function App() {
 }
 
 function ErrorBanner() {
-  const { error, clear } = useApiClientError();
+  const { error, source, clear } = useApiClientError();
   if (!error) return null;
-  return <div role="alert">{error.message} <button onClick={clear}>Dismiss</button></div>;
+  const where = source ? `${source.struct}.${source.method}` : null;
+  return (
+    <div role="alert">
+      {where ? <strong>Error in {where}: </strong> : null}
+      {error.message} <button onClick={clear}>Dismiss</button>
+    </div>
+  );
 }
 ```
 
-Latest error wins (newer replaces older); `clear()` resets to `null`. The provider does **not** swallow — calls still throw, so `try/catch` and per-hook `error` fields keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client and `useApiClientError()` throws — adoption is fully opt-in.
+`source: { struct, method } | null` is parsed from the wire name on the first dot — `'Todos.CreateTodo'` becomes `{ struct: 'Todos', method: 'CreateTodo' }`. It is `null` exactly when `error` is `null`. Wire names with no dot put the full string in `method` and leave `struct` as `''`.
+
+Latest error wins (newer replaces older); `clear()` resets both `error` and `source` to `null`. The provider does **not** swallow — calls still throw, so `try/catch` and per-hook `error` fields keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client and `useApiClientError()` throws — adoption is fully opt-in.
 
 ### Migrating from `useXxxMutation()` (removed)
 

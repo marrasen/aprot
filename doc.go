@@ -476,13 +476,21 @@
 //
 // Read with useApiClientError():
 //
-//	const { error, clear } = useApiClientError();
+//	const { error, source, clear } = useApiClientError();
+//	// source is { struct, method } | null — null exactly when error is null.
+//	// A failure from client.request('Todos.CreateTodo', …) yields
+//	// source = { struct: 'Todos', method: 'CreateTodo' }, so a banner can
+//	// name the failing call without each call site reporting itself.
 //
-// Only the latest error is held (newer overrides older); clear() resets it.
-// The provider observes errors but does not swallow them — wrapped client
-// calls still throw, so per-hook `error` fields and explicit try/catch keep
-// working. Without <ApiClientErrorProvider> above, useApiClient() returns the
-// raw client unchanged and useApiClientError() throws — adoption is opt-in.
+// The source is parsed from the wire name on the first dot. Calls whose wire
+// name has no dot set struct to ” and put the full name in method.
+//
+// Only the latest error is held (newer overrides older); clear() resets both
+// error and source. The provider observes errors but does not swallow them —
+// wrapped client calls still throw, so per-hook `error` fields and explicit
+// try/catch keep working. Without <ApiClientErrorProvider> above,
+// useApiClient() returns the raw client unchanged and useApiClientError()
+// throws — adoption is opt-in.
 //
 // # React Suspense
 //
