@@ -454,3 +454,49 @@ func TestTaskSubMethodSubTask(t *testing.T) {
 		}
 	}
 }
+
+// TestTaskSubMethodInheritsParentCtx verifies that subtasks created via
+// Task.SubTask / TaskSub.SubTask (no ctx parameter) inherit the parent's
+// stashed ctx for their hooks, instead of falling back to
+// context.Background. This lets ctx-aware loggers/spans set on the request
+// ctx flow into subtask end-hook callbacks.
+func TestTaskSubMethodInheritsParentCtx(t *testing.T) {
+	type rootKey struct{}
+
+	var mu sync.Mutex
+	seen := map[string]any{}
+	opts := buildEnableOptions([]EnableOption{
+		WithTaskEndHook(func(ctx context.Context, id, title, parent string, err error) {
+			mu.Lock()
+			seen[title] = ctx.Value(rootKey{})
+			mu.Unlock()
+		}),
+	})
+
+	tc := newTestPushConn()
+	d := newRequestDelivery(tc.Conn, "req-1", opts)
+	ctx := context.WithValue(context.Background(), rootKey{}, "request-scoped")
+	ctx = withDelivery(ctx, d)
+
+	_, task := StartTask[any](ctx, "root")
+
+	sub1 := task.SubTask("level-1")
+	sub2 := sub1.SubTask("level-2")
+	sub2.Close()
+	sub1.Close()
+	task.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, title := range []string{"root", "level-1", "level-2"} {
+		v, ok := seen[title]
+		if !ok {
+			t.Errorf("end hook for %q was not fired", title)
+			continue
+		}
+		if v != "request-scoped" {
+			t.Errorf("end hook for %q did not see request-scoped ctx value: got %v",
+				title, v)
+		}
+	}
+}

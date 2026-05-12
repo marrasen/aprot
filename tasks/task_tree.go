@@ -83,13 +83,21 @@ func (n *taskNode) fireEnd(err error) {
 	if n.hooks == nil || n.hooks.onEnd == nil {
 		return
 	}
+	n.hooks.onEnd(n.currentCtx(), n.id, n.title, n.parentID, err)
+}
+
+// currentCtx returns the context most recently stashed by fireStart, or
+// context.Background if fireStart never ran (no hooks installed). Used by
+// fireEnd and by subtask creation paths that need a sensible default ctx
+// when no caller-supplied ctx is available.
+func (n *taskNode) currentCtx() context.Context {
 	n.mu.Lock()
 	ctx := n.hookCtx
 	n.mu.Unlock()
 	if ctx == nil {
-		ctx = context.Background()
+		return context.Background()
 	}
-	n.hooks.onEnd(ctx, n.id, n.title, n.parentID, err)
+	return ctx
 }
 
 func (n *taskNode) snapshot() *TaskNode {

@@ -82,12 +82,13 @@ func (t *Task[M]) Err(err error) {
 
 // SubTask creates a child node under this task.
 //
-// This entry point has no caller-supplied context, so the start hook (if
-// installed) is called with [context.Background]. Use the package-level
-// [SubTask] to retain context propagation into the start hook.
+// Because this entry point takes no context parameter, the lifecycle hooks
+// inherit the parent task's context — the same context used for the
+// parent's hooks. Use the package-level [SubTask] when you need a derived
+// context returned to your handler code.
 func (t *Task[M]) SubTask(title string) *TaskSub[M] {
 	child := t.node.createChild(title)
-	child.fireStart(context.Background())
+	child.fireStart(t.node.currentCtx())
 	return &TaskSub[M]{node: child}
 }
 
@@ -144,12 +145,13 @@ func (s *TaskSub[M]) SetMeta(v M) {
 
 // SubTask creates a child node under this sub-task.
 //
-// This entry point has no caller-supplied context, so the start hook (if
-// installed) is called with [context.Background]. Use the package-level
-// [SubTask] to retain context propagation into the start hook.
+// Because this entry point takes no context parameter, the lifecycle hooks
+// inherit the parent sub-task's context — the same context used for the
+// parent's hooks. Use the package-level [SubTask] when you need a derived
+// context returned to your handler code.
 func (s *TaskSub[M]) SubTask(title string) *TaskSub[M] {
 	child := s.node.createChild(title)
-	child.fireStart(context.Background())
+	child.fireStart(s.node.currentCtx())
 	return &TaskSub[M]{node: child}
 }
 
