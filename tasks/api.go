@@ -83,7 +83,7 @@ func (t *Task[M]) Err(err error) {
 // SubTask creates a child node under this task.
 //
 // Because this entry point takes no context parameter, the lifecycle hooks
-// inherit the parent task's context — the same context used for the
+// inherit the parent task's context, the same context used for the
 // parent's hooks. Use the package-level [SubTask] when you need a derived
 // context returned to your handler code.
 func (t *Task[M]) SubTask(title string) *TaskSub[M] {
