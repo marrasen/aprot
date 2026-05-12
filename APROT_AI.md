@@ -49,6 +49,10 @@ gen.Generate()
 - Hierarchical: `tasks.SubTask(ctx, title, fn)`.
 - Server-wide: `tasks.StartSharedTask[Meta](ctx, title)`.
 - Enable: `tasks.Enable(registry)` before generation/serving.
+- Lifecycle hooks (opt-in): `tasks.Enable(registry, tasks.WithTaskStartHook(fn), tasks.WithTaskEndHook(fn))`.
+  - `TaskStartHook(ctx, id, title, parentID) ctx` — fires when a task transitions to Running. Returned `ctx` propagates to handler + subtasks; use it to attach the title to your logger.
+  - `TaskEndHook(ctx, id, title, parentID, err)` — fires once per task on completion or failure. `err` is non-nil on failure; cancellation surfaces as `err.Error() == "canceled"`. The `ctx` passed in is the one returned by the start hook.
+  - Both hooks fire for root tasks and subtasks. `parentID` is empty for root tasks. `Task.SubTask` / `TaskSub.SubTask` (no ctx parameter) call the start hook with `context.Background`; use the package-level `tasks.SubTask(ctx, ...)` to retain context propagation.
 
 ## Handlers
 

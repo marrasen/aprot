@@ -17,13 +17,15 @@ type taskManager struct {
 	nextID         atomic.Int64
 	lastProgress   map[string]time.Time
 	lastProgressMu sync.Mutex
+	hooks          *enableOptions
 }
 
-func newTaskManager(server *aprot.Server) *taskManager {
+func newTaskManager(server *aprot.Server, hooks *enableOptions) *taskManager {
 	return &taskManager{
 		server:       server,
 		tasks:        make(map[string]*taskNode),
 		lastProgress: make(map[string]time.Time),
+		hooks:        hooks,
 	}
 }
 
@@ -47,6 +49,7 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 		manager:     tm,
 		ownerConnID: connID,
 		topLevel:    topLevel,
+		hooks:       tm.hooks,
 	}
 
 	tm.mu.Lock()

@@ -142,6 +142,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Push events** — broadcast to all clients or target specific users
 - **Hierarchical tasks** — nested task trees with progress tracking, streamed to clients (see [`tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks) subpackage)
 - **Shared tasks** — server-wide tasks visible to all clients with typed metadata
+- **Task lifecycle hooks** — opt-in `WithTaskStartHook`/`WithTaskEndHook` callbacks observe every task start/end (root and subtasks); the start hook decorates `ctx` so the title flows into your logger of choice (slog, zap, zerolog, …)
 - **Progress reporting** — built-in support for long-running operations
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting

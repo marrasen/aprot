@@ -14,8 +14,11 @@ func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
 	return CancelSharedTask(ctx, taskId)
 }
 
-// Enable registers the shared task system with the registry.
-func Enable(r *aprot.Registry) {
+// Enable registers the shared task system with the registry. Pass options
+// such as [WithTaskStartHook] or [WithTaskEndHook] to observe task lifecycle
+// events.
+func Enable(r *aprot.Registry, opts ...EnableOption) {
+	o := buildEnableOptions(opts)
 	handler := &tasksHandler{}
 	r.Register(handler)
 	r.RegisterEnumFor(handler, TaskNodeStatusValues())
@@ -28,7 +31,7 @@ func Enable(r *aprot.Registry) {
 		appendTaskConvenienceCode(results, mode, nil)
 	})
 	r.OnServerInit(func(s *aprot.Server) {
-		tm := newTaskManager(s)
+		tm := newTaskManager(s, o)
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())
@@ -41,8 +44,11 @@ func Enable(r *aprot.Registry) {
 	})
 }
 
-// EnableWithMeta registers the shared task system with typed metadata.
-func EnableWithMeta[M any](r *aprot.Registry) {
+// EnableWithMeta registers the shared task system with typed metadata. Pass
+// options such as [WithTaskStartHook] or [WithTaskEndHook] to observe task
+// lifecycle events.
+func EnableWithMeta[M any](r *aprot.Registry, opts ...EnableOption) {
+	o := buildEnableOptions(opts)
 	metaType := reflect.TypeFor[M]()
 	handler := &tasksHandler{}
 	r.Register(handler)
@@ -56,7 +62,7 @@ func EnableWithMeta[M any](r *aprot.Registry) {
 		appendTaskConvenienceCode(results, mode, metaType)
 	})
 	r.OnServerInit(func(s *aprot.Server) {
-		tm := newTaskManager(s)
+		tm := newTaskManager(s, o)
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 			states := tm.snapshotAllForConn(conn.ID())

@@ -24,10 +24,11 @@ type requestDelivery struct {
 	requestID string
 	nextID    atomic.Int64
 	root      *taskNode // lazily created implicit root
+	hooks     *enableOptions
 }
 
-func newRequestDelivery(conn *aprot.Conn, requestID string) *requestDelivery {
-	return &requestDelivery{conn: conn, requestID: requestID}
+func newRequestDelivery(conn *aprot.Conn, requestID string, hooks *enableOptions) *requestDelivery {
+	return &requestDelivery{conn: conn, requestID: requestID, hooks: hooks}
 }
 
 func (d *requestDelivery) sendSnapshot(_ *taskNode) {

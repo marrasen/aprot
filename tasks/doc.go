@@ -26,6 +26,33 @@
 // This registers the CancelTask handler, push event types, and the
 // middleware that wires task delivery into every request context.
 //
+// # Lifecycle hooks
+//
+// Pass [WithTaskStartHook] and/or [WithTaskEndHook] to observe every task's
+// start and end (root tasks and subtasks). The start hook can decorate the
+// task's context — the returned context is propagated to the handler and
+// any nested subtasks, so callbacks downstream (logging, tracing) see the
+// task title automatically:
+//
+//	tasks.Enable(registry,
+//	    tasks.WithTaskStartHook(func(ctx context.Context, id, title, parent string) context.Context {
+//	        logger := slog.With("task_id", id, "task_title", title)
+//	        return ctxlog.With(ctx, logger)
+//	    }),
+//	    tasks.WithTaskEndHook(func(ctx context.Context, id, title, parent string, err error) {
+//	        if err != nil {
+//	            slog.ErrorContext(ctx, "task failed", "err", err)
+//	        } else {
+//	            slog.InfoContext(ctx, "task completed")
+//	        }
+//	    }),
+//	)
+//
+// The end hook receives the context returned by the start hook, so the
+// decorated logger / span is available on completion too. Hooks fire at most
+// once per task per phase (start, end). Cancellation surfaces as a non-nil
+// err with message "canceled".
+//
 // # Request-scoped tasks
 //
 // Create a task inside a handler. It auto-completes when the handler

@@ -81,8 +81,13 @@ func (t *Task[M]) Err(err error) {
 }
 
 // SubTask creates a child node under this task.
+//
+// This entry point has no caller-supplied context, so the start hook (if
+// installed) is called with [context.Background]. Use the package-level
+// [SubTask] to retain context propagation into the start hook.
 func (t *Task[M]) SubTask(title string) *TaskSub[M] {
 	child := t.node.createChild(title)
+	child.fireStart(context.Background())
 	return &TaskSub[M]{node: child}
 }
 
@@ -138,8 +143,13 @@ func (s *TaskSub[M]) SetMeta(v M) {
 }
 
 // SubTask creates a child node under this sub-task.
+//
+// This entry point has no caller-supplied context, so the start hook (if
+// installed) is called with [context.Background]. Use the package-level
+// [SubTask] to retain context propagation into the start hook.
 func (s *TaskSub[M]) SubTask(title string) *TaskSub[M] {
 	child := s.node.createChild(title)
+	child.fireStart(context.Background())
 	return &TaskSub[M]{node: child}
 }
 
@@ -171,6 +181,7 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 
 	child := parent.createChild(title)
 	childCtx := withTaskNode(ctx, child)
+	childCtx = child.fireStart(childCtx)
 	err := fn(childCtx)
 
 	if err != nil {
@@ -236,6 +247,7 @@ func OutputWriter(ctx context.Context, title string) io.WriteCloser {
 	}
 
 	child := parent.createChild(title)
+	child.fireStart(ctx)
 	return &outputWriter{node: child}
 }
 
@@ -262,6 +274,7 @@ func WriterProgress(ctx context.Context, title string, size int) io.WriteCloser 
 	child.mu.Lock()
 	child.total = size
 	child.mu.Unlock()
+	child.fireStart(ctx)
 	return &progressWriter{node: child, total: size}
 }
 
@@ -296,6 +309,7 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 		id:       d.allocID(),
 		title:    title,
 		status:   TaskNodeStatusCreated,
+		hooks:    rd.hooks,
 	}
 	root.addChild(node)
 
@@ -307,6 +321,7 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 	d.sendSnapshot(nil)
 
 	node.setStatus(TaskNodeStatusRunning)
+	ctx = node.fireStart(ctx)
 	return ctx, &Task[M]{node: node}
 }
 
@@ -332,6 +347,7 @@ func startSharedTask[M any](ctx context.Context, title string) (context.Context,
 	// Use the task's own cancellable context, with delivery and node set.
 	taskCtx := withDelivery(node.ctx, node.delivery)
 	taskCtx = withTaskNode(taskCtx, node)
+	taskCtx = node.fireStart(taskCtx)
 
 	return taskCtx, &Task[M]{node: node}
 }
@@ -361,6 +377,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 
 	childCtx := withDelivery(node.ctx, node.delivery)
 	childCtx = withTaskNode(childCtx, node)
+	childCtx = node.fireStart(childCtx)
 
 	err := SubTask(childCtx, title, fn)
 
