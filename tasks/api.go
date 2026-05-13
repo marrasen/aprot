@@ -81,8 +81,15 @@ func (t *Task[M]) Err(err error) {
 }
 
 // SubTask creates a child node under this task.
+//
+// Lifecycle middleware (if installed) fires for the new child. Because this
+// entry point takes no caller ctx, the middleware inherits the parent's
+// middleware context — so logger/span decorations attached on the parent
+// flow into the child's middleware. Use the package-level [SubTask] when
+// you need a derived context returned to your handler code.
 func (t *Task[M]) SubTask(title string) *TaskSub[M] {
 	child := t.node.createChild(title)
+	child.runManaged(t.node.middlewareInheritedCtx())
 	return &TaskSub[M]{node: child}
 }
 
@@ -138,8 +145,15 @@ func (s *TaskSub[M]) SetMeta(v M) {
 }
 
 // SubTask creates a child node under this sub-task.
+//
+// Lifecycle middleware (if installed) fires for the new child. Because this
+// entry point takes no caller ctx, the middleware inherits the parent's
+// middleware context — so logger/span decorations attached on the parent
+// flow into the child's middleware. Use the package-level [SubTask] when
+// you need a derived context returned to your handler code.
 func (s *TaskSub[M]) SubTask(title string) *TaskSub[M] {
 	child := s.node.createChild(title)
+	child.runManaged(s.node.middlewareInheritedCtx())
 	return &TaskSub[M]{node: child}
 }
 
@@ -170,16 +184,16 @@ func SubTask(ctx context.Context, title string, fn func(ctx context.Context) err
 	}
 
 	child := parent.createChild(title)
-	childCtx := withTaskNode(ctx, child)
-	err := fn(childCtx)
-
-	if err != nil {
-		child.failNode(err.Error())
-	} else {
-		child.closeNode()
-	}
-
-	return err
+	return child.runScoped(ctx, func(ctx context.Context) error {
+		childCtx := withTaskNode(ctx, child)
+		err := fn(childCtx)
+		if err != nil {
+			child.failNode(err.Error())
+		} else {
+			child.closeNode()
+		}
+		return err
+	})
 }
 
 // Output sends a text output message attached to the nearest task node.
@@ -236,6 +250,7 @@ func OutputWriter(ctx context.Context, title string) io.WriteCloser {
 	}
 
 	child := parent.createChild(title)
+	child.runManaged(ctx)
 	return &outputWriter{node: child}
 }
 
@@ -262,6 +277,7 @@ func WriterProgress(ctx context.Context, title string, size int) io.WriteCloser 
 	child.mu.Lock()
 	child.total = size
 	child.mu.Unlock()
+	child.runManaged(ctx)
 	return &progressWriter{node: child, total: size}
 }
 
@@ -294,8 +310,10 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 	node := &taskNode{
 		delivery: d,
 		id:       d.allocID(),
+		parentID: root.id,
 		title:    title,
 		status:   TaskNodeStatusCreated,
+		hooks:    rd.hooks,
 	}
 	root.addChild(node)
 
@@ -307,6 +325,7 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 	d.sendSnapshot(nil)
 
 	node.setStatus(TaskNodeStatusRunning)
+	ctx = node.runManaged(ctx)
 	return ctx, &Task[M]{node: node}
 }
 
@@ -332,6 +351,7 @@ func startSharedTask[M any](ctx context.Context, title string) (context.Context,
 	// Use the task's own cancellable context, with delivery and node set.
 	taskCtx := withDelivery(node.ctx, node.delivery)
 	taskCtx = withTaskNode(taskCtx, node)
+	taskCtx = node.runManaged(taskCtx)
 
 	return taskCtx, &Task[M]{node: node}
 }
@@ -362,15 +382,15 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	childCtx := withDelivery(node.ctx, node.delivery)
 	childCtx = withTaskNode(childCtx, node)
 
-	err := SubTask(childCtx, title, fn)
-
-	if err != nil {
-		node.failTop(err.Error())
-	} else {
-		node.completeTop()
-	}
-
-	return err
+	return node.runScoped(childCtx, func(scopedCtx context.Context) error {
+		err := SubTask(scopedCtx, title, fn)
+		if err != nil {
+			node.failTop(err.Error())
+		} else {
+			node.completeTop()
+		}
+		return err
+	})
 }
 
 // CancelSharedTask cancels a shared task by ID.

@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -26,6 +27,7 @@ func itoa(n int64) string {
 type taskNode struct {
 	delivery taskDelivery
 	id       string
+	parentID string // empty for root nodes
 	title    string
 	status   TaskNodeStatus
 	error    string
@@ -35,6 +37,17 @@ type taskNode struct {
 	children []*taskNode
 	mu       sync.Mutex
 
+	// Lifecycle middleware state. hooks is shared across all nodes in a
+	// task tree (set at root creation, inherited by createChild). For
+	// manual-lifecycle tasks (StartTask, OutputWriter, WriterProgress,
+	// Task.SubTask, TaskSub.SubTask), runManaged spawns a goroutine that
+	// holds the middleware open; middlewareCtx captures the ctx the
+	// middleware passed to next(); middlewareDone is signaled by the
+	// lifecycle terminators so next() returns. All three are mu-guarded.
+	hooks          *enableOptions
+	middlewareCtx  context.Context
+	middlewareDone chan error
+
 	// Shared-task-only fields:
 	cancel      context.CancelFunc // non-nil for top-level shared tasks
 	ctx         context.Context    // task-scoped context for shared tasks
@@ -42,6 +55,99 @@ type taskNode struct {
 	ownerConnID uint64             // connection that created this task
 	topLevel    bool               // true if created by StartTask with Shared()
 
+}
+
+// runScoped wraps fn with the registered task middleware (if any) and runs
+// it synchronously. fn receives a (possibly decorated) context. Used by the
+// scope-based task entry points (SubTask, SharedSubTask) where there is a
+// natural function boundary to wrap.
+func (n *taskNode) runScoped(ctx context.Context, fn func(context.Context) error) error {
+	if n.hooks == nil || n.hooks.middleware == nil {
+		return fn(ctx)
+	}
+	info := TaskInfo{ID: n.id, Title: n.title, ParentID: n.parentID}
+	return n.hooks.middleware(ctx, info, fn)
+}
+
+// runManaged spawns the registered task middleware (if any) in a goroutine
+// and blocks until the middleware calls next(). Returns the ctx the
+// middleware passed to next(), or the input ctx if no middleware is
+// installed (or if the middleware returned without calling next()). The
+// terminal lifecycle methods (setStatus, setFailed, completeTop, failTop,
+// failChildren) signal the middleware's next() return value via
+// middlewareDone. Used by manual-lifecycle entry points (StartTask,
+// OutputWriter, WriterProgress, Task.SubTask, TaskSub.SubTask) where the
+// task body has no synchronous function boundary.
+func (n *taskNode) runManaged(ctx context.Context) context.Context {
+	if n.hooks == nil || n.hooks.middleware == nil {
+		return ctx
+	}
+	info := TaskInfo{ID: n.id, Title: n.title, ParentID: n.parentID}
+	done := make(chan error, 1)
+	ready := make(chan struct{})
+
+	n.mu.Lock()
+	n.middlewareDone = done
+	n.mu.Unlock()
+
+	var readyOnce sync.Once
+	closeReady := func() { readyOnce.Do(func() { close(ready) }) }
+
+	go func() {
+		_ = n.hooks.middleware(ctx, info, func(midCtx context.Context) error {
+			n.mu.Lock()
+			n.middlewareCtx = midCtx
+			n.mu.Unlock()
+			closeReady()
+			return <-done
+		})
+		// If middleware returned without ever calling next(), unblock the
+		// runManaged caller. Subsequent signalMiddlewareEnd sends are
+		// buffered (cap 1) and dropped on the floor — no goroutine leak.
+		closeReady()
+	}()
+
+	<-ready
+	n.mu.Lock()
+	out := n.middlewareCtx
+	n.mu.Unlock()
+	if out == nil {
+		return ctx
+	}
+	return out
+}
+
+// middlewareInheritedCtx returns the ctx most recently captured by this
+// node's middleware (via runManaged), or context.Background if the node
+// has no middleware ctx stashed yet. Used by child task creation paths
+// that take no caller ctx (Task.SubTask, TaskSub.SubTask), so the
+// child's middleware sees whatever decorations the parent applied.
+func (n *taskNode) middlewareInheritedCtx() context.Context {
+	n.mu.Lock()
+	ctx := n.middlewareCtx
+	n.mu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+// signalMiddlewareEnd sends err to the task's middleware next() callback
+// (if any was installed for this node). The channel is buffered (cap 1)
+// and the terminal-state guards in the callers ensure at most one signal
+// per task. Safe to call when no middleware is installed.
+func (n *taskNode) signalMiddlewareEnd(err error) {
+	n.mu.Lock()
+	done := n.middlewareDone
+	n.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case done <- err:
+	default:
+		// Already signaled; drop on the floor.
+	}
 }
 
 func (n *taskNode) snapshot() *TaskNode {
@@ -80,15 +186,27 @@ func (n *taskNode) addChild(child *taskNode) {
 
 func (n *taskNode) setStatus(s TaskNodeStatus) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	if n.status == TaskNodeStatusCompleted || n.status == TaskNodeStatusFailed {
+		n.mu.Unlock()
+		return
+	}
 	n.status = s
+	n.mu.Unlock()
+	if s == TaskNodeStatusCompleted {
+		n.signalMiddlewareEnd(nil)
+	}
 }
 
 func (n *taskNode) setFailed(msg string) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
+	if n.status == TaskNodeStatusCompleted || n.status == TaskNodeStatusFailed {
+		n.mu.Unlock()
+		return
+	}
 	n.status = TaskNodeStatusFailed
 	n.error = msg
+	n.mu.Unlock()
+	n.signalMiddlewareEnd(errors.New(msg))
 }
 
 func (n *taskNode) setProgress(current, total int) {
@@ -121,8 +239,10 @@ func (n *taskNode) createChild(title string) *taskNode {
 	child := &taskNode{
 		delivery: n.delivery,
 		id:       n.delivery.allocID(),
+		parentID: n.id,
 		title:    title,
 		status:   TaskNodeStatusCreated,
+		hooks:    n.hooks,
 	}
 	n.addChild(child)
 	n.delivery.sendSnapshot(nil)
@@ -157,6 +277,7 @@ func (n *taskNode) completeTop() {
 		n.cancel()
 	}
 	n.delivery.sendSnapshot(nil)
+	n.signalMiddlewareEnd(nil)
 	if n.manager != nil {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
@@ -181,6 +302,7 @@ func (n *taskNode) failTop(msg string) {
 	}
 	n.failChildren(msg)
 	n.delivery.sendSnapshot(nil)
+	n.signalMiddlewareEnd(errors.New(msg))
 	if n.manager != nil {
 		go func() {
 			time.Sleep(200 * time.Millisecond)
@@ -198,11 +320,16 @@ func (n *taskNode) failChildren(msg string) {
 
 	for _, child := range children {
 		child.mu.Lock()
+		signaled := false
 		if child.status == TaskNodeStatusRunning || child.status == TaskNodeStatusCreated {
 			child.status = TaskNodeStatusFailed
 			child.error = msg
+			signaled = true
 		}
 		child.mu.Unlock()
+		if signaled {
+			child.signalMiddlewareEnd(errors.New(msg))
+		}
 		child.failChildren(msg)
 	}
 }
@@ -248,6 +375,7 @@ func ensureRoot(d *requestDelivery) *taskNode {
 		id:       "root",
 		title:    "",
 		status:   TaskNodeStatusRunning,
+		hooks:    d.hooks,
 	}
 	return d.root
 }

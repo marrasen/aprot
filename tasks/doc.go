@@ -26,6 +26,35 @@
 // This registers the CancelTask handler, push event types, and the
 // middleware that wires task delivery into every request context.
 //
+// # Task middleware
+//
+// Pass [WithTaskMiddleware] to wrap every task with custom logic — logging,
+// tracing, ctx decoration. The middleware is a single function that brackets
+// the task body around a next() call, mirroring [aprot.Middleware]:
+//
+//	tasks.Enable(registry, tasks.WithTaskMiddleware(
+//	    func(ctx context.Context, info tasks.TaskInfo, next func(context.Context) error) error {
+//	        ctx = ctxlog.With(ctx, slog.With("task_title", info.Title))
+//	        slog.InfoContext(ctx, "task started")
+//	        err := next(ctx)
+//	        if err != nil {
+//	            slog.ErrorContext(ctx, "task failed", "err", err)
+//	        } else {
+//	            slog.InfoContext(ctx, "task completed")
+//	        }
+//	        return err
+//	    },
+//	))
+//
+// The ctx passed to next propagates to the task body and to any nested
+// subtasks, so logger / span decorations chain through the task tree
+// without manual wiring. Cancellation surfaces as a non-nil err with
+// message "canceled". For scope-based tasks ([SubTask], [SharedSubTask])
+// the middleware runs synchronously; for manual-lifecycle tasks
+// ([StartTask], [OutputWriter], [WriterProgress], [Task.SubTask],
+// [TaskSub.SubTask]) the middleware runs in a goroutine and next blocks
+// until Close or Fail is called on the returned handle.
+//
 // # Request-scoped tasks
 //
 // Create a task inside a handler. It auto-completes when the handler

@@ -1,6 +1,9 @@
 package api
 
 import (
+	"context"
+	"log"
+
 	"github.com/marrasen/aprot"
 	"github.com/marrasen/aprot/tasks"
 )
@@ -32,8 +35,27 @@ func NewRegistry(state *SharedState, authMiddleware aprot.Middleware) *aprot.Reg
 	registry.RegisterPushEventFor(protectedHandlers, DirectMessageEvent{})
 
 	// Enable shared tasks with typed metadata
-	// (registers TaskStateEvent, TaskUpdateEvent, CancelTask handler)
-	tasks.EnableWithMeta[TaskMeta](registry)
+	// (registers TaskStateEvent, TaskUpdateEvent, CancelTask handler).
+	// Task middleware logs every task's start and end with title — root
+	// tasks and subtasks both fire. Swap log.Printf for slog / zap /
+	// zerolog as needed; the middleware can also decorate ctx so
+	// downstream handler logs pick up the title automatically.
+	tasks.EnableWithMeta[TaskMeta](registry,
+		tasks.WithTaskMiddleware(func(ctx context.Context, info tasks.TaskInfo, next func(context.Context) error) error {
+			if info.ParentID == "" {
+				log.Printf("[task] started id=%s title=%q", info.ID, info.Title)
+			} else {
+				log.Printf("[task] started id=%s title=%q parent=%s", info.ID, info.Title, info.ParentID)
+			}
+			err := next(ctx)
+			if err != nil {
+				log.Printf("[task] failed id=%s title=%q err=%v", info.ID, info.Title, err)
+			} else {
+				log.Printf("[task] completed id=%s title=%q", info.ID, info.Title)
+			}
+			return err
+		}),
+	)
 
 	return registry
 }
