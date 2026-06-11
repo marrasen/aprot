@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - name: Run Go tests
         run: go test -race -v ./...
@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - name: Check Go formatting
         run: test -z "$(gofmt -l .)"
@@ -38,7 +38,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - name: Lint root module
         uses: golangci/golangci-lint-action@v7
@@ -71,7 +71,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - uses: actions/setup-node@v4
         with:
@@ -104,7 +104,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
 
       - uses: actions/setup-node@v4
         with:
