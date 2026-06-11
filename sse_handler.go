@@ -3,6 +3,7 @@ package aprot
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,26 @@ import (
 	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 )
+
+// decodeBody unmarshals a request body into v, enforcing the server's
+// MaxMessageSize. It writes the error response itself and returns false
+// when the body is invalid or too large.
+func (h *sseHandler) decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	body := r.Body
+	if h.server.options.MaxMessageSize > 0 {
+		body = http.MaxBytesReader(w, r.Body, h.server.options.MaxMessageSize)
+	}
+	if err := json.UnmarshalRead(body, v); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return false
+		}
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
 
 // sseHandler handles SSE+HTTP transport.
 type sseHandler struct {
@@ -156,8 +177,7 @@ func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req rpcRequest
-	if err := json.UnmarshalRead(r.Body, &req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !h.decodeBody(w, r, &req) {
 		return
 	}
 
@@ -205,8 +225,7 @@ type cancelRequestBody struct {
 
 func (h *sseHandler) handleCancel(w http.ResponseWriter, r *http.Request) {
 	var req cancelRequestBody
-	if err := json.UnmarshalRead(r.Body, &req); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	if !h.decodeBody(w, r, &req) {
 		return
 	}
 
