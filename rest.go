@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-json-experiment/json"
@@ -196,9 +198,15 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	// Build JSON params array (same format as WebSocket)
 	var jsonParams []any
 
-	// Add path params (in order)
+	// Add path params (in order), converted to the JSON type the handler
+	// expects — the strict decoder rejects e.g. "123" for an int param.
 	for _, pp := range route.PathParams {
-		val := r.PathValue(pp.Name)
+		val, err := convertPathParam(r.PathValue(pp.Name), pp.Info.Type)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, CodeInvalidParams,
+				fmt.Sprintf("invalid value for path parameter %q: %v", pp.Name, err))
+			return
+		}
 		jsonParams = append(jsonParams, val)
 	}
 
@@ -255,7 +263,9 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	data, err := json.Marshal(result)
+	// Use the shared sql.Null-aware marshaler so the REST wire format
+	// matches the WebSocket/SSE transports.
+	data, err := marshalJSON(result)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, CodeInternalError, "failed to marshal response")
 		return
@@ -283,6 +293,46 @@ func (a *RESTAdapter) buildHandler(info *HandlerInfo) Handler {
 	}
 
 	return handler
+}
+
+// convertPathParam converts a raw path segment into a value that marshals
+// to the JSON type matching the Go parameter: numbers and bools become raw
+// JSON tokens, everything else stays a JSON string.
+func convertPathParam(val string, t reflect.Type) (any, error) {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return jsontext.Value(strconv.FormatInt(n, 10)), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(val, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		return jsontext.Value(strconv.FormatUint(n, 10)), nil
+	case reflect.Float32, reflect.Float64:
+		f, err := strconv.ParseFloat(val, 64)
+		if err != nil {
+			return nil, err
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, fmt.Errorf("value %q is not representable in JSON", val)
+		}
+		return jsontext.Value(strconv.FormatFloat(f, 'g', -1, 64)), nil
+	case reflect.Bool:
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return nil, err
+		}
+		return jsontext.Value(strconv.FormatBool(b)), nil
+	default:
+		return val, nil // marshaled as a JSON string
+	}
 }
 
 // marshalJSONParams marshals a mixed slice of values into a JSON array.
