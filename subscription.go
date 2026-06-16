@@ -37,9 +37,20 @@ func newSubscriptionManager() *subscriptionManager {
 	}
 }
 
-func (sm *subscriptionManager) register(sub *subscription) {
+// register adds a subscription to the indexes. It reports whether the
+// subscription was added; it refuses connections that have already been
+// closed, so a subscribe handler that races a disconnect cannot leave a
+// subscription that outlives its connection (re-executing forever and
+// writing to a dead transport). The closed check holds sm.mu while reading
+// the conn's lock; this never nests against close(), which releases the
+// conn lock before calling unregisterConn.
+func (sm *subscriptionManager) register(sub *subscription) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if sub.conn.isClosed() {
+		return false
+	}
 
 	connID := sub.conn.id
 
@@ -56,6 +67,7 @@ func (sm *subscriptionManager) register(sub *subscription) {
 		}
 		sm.byKey[key][sub] = struct{}{}
 	}
+	return true
 }
 
 func (sm *subscriptionManager) unregister(connID uint64, subID string) {
@@ -143,6 +155,20 @@ func (sm *subscriptionManager) updateKeys(connID uint64, subID string, newKeys m
 			sm.byKey[key] = make(map[*subscription]struct{})
 		}
 		sm.byKey[key][sub] = struct{}{}
+	}
+}
+
+// updateParams replaces the stored raw params for a subscription. Called when
+// a client re-subscribes with the same ID but different params, so that
+// server-driven re-execution uses the latest params rather than stale ones.
+func (sm *subscriptionManager) updateParams(connID uint64, subID string, params jsontext.Value) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if connSubs, ok := sm.byConn[connID]; ok {
+		if sub, ok := connSubs[subID]; ok {
+			sub.params = params
+		}
 	}
 }
 

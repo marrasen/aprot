@@ -87,6 +87,10 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Run connect hooks
 	if err := h.server.runConnectHooks(r.Context(), conn); err != nil {
+		// A hook may have called SetUserID before a later hook rejected the
+		// connection; undo that association so a dead conn can't linger in
+		// userConns and have a later PushToUser block on its send buffer.
+		h.server.disassociateUser(conn)
 		code := CodeConnectionRejected
 		var message string
 		var errData any
@@ -131,7 +135,18 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	h.connections[connectionID] = conn
 	h.mu.Unlock()
 
-	h.server.register <- conn
+	// Register, but don't block forever if the server has already shut down
+	// (run() has exited and will never read s.register).
+	select {
+	case h.server.register <- conn:
+	case <-h.server.done:
+		h.server.disassociateUser(conn)
+		h.mu.Lock()
+		delete(h.connections, connectionID)
+		h.mu.Unlock()
+		sseT.Close()
+		return
+	}
 
 	// Keep-alive loop, blocks until client disconnects
 	keepAlive := time.NewTicker(15 * time.Second)
