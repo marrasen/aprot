@@ -57,12 +57,24 @@
 // All clients receive [TaskStateEvent] and [TaskUpdateEvent] push events.
 // Each client sees an IsOwner flag indicating whether it started the task.
 //
-// To let a shared task outlive the client connection, use
+// A shared task started on the request context is auto-completed (or
+// auto-failed) when the handler returns, like a request-scoped task.
+//
+// To let a shared task outlive the handler and the client connection —
+// the fire-and-forget pattern — start it on a detached context with
 // [context.WithoutCancel]:
 //
 //	ctx, task := tasks.StartTask[MyMeta](
 //	    context.WithoutCancel(ctx), "Background job", tasks.Shared(),
 //	)
+//	go func() {
+//	    defer task.Err(doWork(ctx)) // completes or fails the task
+//	}()
+//	return &tasks.TaskRef{TaskID: task.ID()}, nil
+//
+// A detached task is not auto-finalized when the handler returns: the
+// background goroutine owns its lifecycle and must call [Task.Close],
+// [Task.Fail], or [Task.Err] when done.
 //
 // # SharedSubTask bridge
 //

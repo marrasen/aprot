@@ -296,6 +296,13 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 
 func (c *Conn) handleRequest(msg IncomingMessage) {
 	defer c.server.requestsWg.Done()
+	// Each request runs on its own goroutine, so an unrecovered panic would
+	// kill the whole process, not just this request (unlike net/http).
+	defer func() {
+		if r := recover(); r != nil {
+			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+		}
+	}()
 
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
@@ -482,6 +489,11 @@ func (c *Conn) sendStreamEnd(reqID string, err error) {
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	defer c.server.requestsWg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+		}
+	}()
 
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
@@ -579,6 +591,11 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 // and sends the updated response directly to the subscriber.
 func (c *Conn) refreshSubscription(sub *subscription) {
 	defer c.server.requestsWg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			c.sendError(sub.id, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+		}
+	}()
 
 	// Check that the subscription still exists (may have been unsubscribed)
 	if !c.server.subscriptions.has(c.id, sub.id) {

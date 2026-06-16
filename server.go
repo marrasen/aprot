@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
@@ -32,6 +33,24 @@ type ServerOptions struct {
 	ReconnectMaxInterval int
 	// ReconnectMaxAttempts is the maximum number of reconnect attempts. 0 = unlimited. Default: 0
 	ReconnectMaxAttempts int
+	// MaxMessageSize is the maximum size in bytes of an inbound WebSocket
+	// frame or SSE RPC request body. Larger messages close the connection
+	// (WebSocket) or are rejected with 413 (SSE). Set to -1 to disable the
+	// limit. Default: 4 MiB.
+	MaxMessageSize int64
+	// WriteTimeout is the maximum time to write a single outbound WebSocket
+	// message. A connection whose peer stops reading is closed once a write
+	// exceeds this timeout, so a stalled client cannot back-pressure the
+	// whole server. Set to -1 to disable. Default: 30s.
+	WriteTimeout time.Duration
+	// PingInterval is how often the server sends WebSocket ping frames.
+	// Set to -1 to disable keepalive pings. Default: 30s.
+	PingInterval time.Duration
+	// PongTimeout is how long a WebSocket connection may go without any
+	// inbound traffic (data or pong) before it is considered dead and
+	// closed. Must be larger than PingInterval. Only effective while pings
+	// are enabled. Set to -1 to disable. Default: 60s.
+	PongTimeout time.Duration
 }
 
 func defaultServerOptions() ServerOptions {
@@ -39,6 +58,10 @@ func defaultServerOptions() ServerOptions {
 		ReconnectInterval:    1000,
 		ReconnectMaxInterval: 30000,
 		ReconnectMaxAttempts: 0,
+		MaxMessageSize:       4 << 20,
+		WriteTimeout:         30 * time.Second,
+		PingInterval:         30 * time.Second,
+		PongTimeout:          60 * time.Second,
 	}
 }
 
@@ -80,6 +103,19 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		}
 		if opt.ReconnectMaxAttempts > 0 {
 			options.ReconnectMaxAttempts = opt.ReconnectMaxAttempts
+		}
+		// Non-zero overrides the default; negative values disable a limit.
+		if opt.MaxMessageSize != 0 {
+			options.MaxMessageSize = opt.MaxMessageSize
+		}
+		if opt.WriteTimeout != 0 {
+			options.WriteTimeout = opt.WriteTimeout
+		}
+		if opt.PingInterval != 0 {
+			options.PingInterval = opt.PingInterval
+		}
+		if opt.PongTimeout != 0 {
+			options.PongTimeout = opt.PongTimeout
 		}
 	}
 
@@ -135,13 +171,11 @@ func (s *Server) OnStop(hook func()) {
 	s.stopHooks = append(s.stopHooks, hook)
 }
 
-// ForEachConn iterates over all active connections under a read lock.
-// The callback must not block or call methods that acquire the server's
-// write lock.
+// ForEachConn iterates over a snapshot of the active connections. The
+// callback runs outside the server's lock, so it may block or send; note
+// that a connection may be closing concurrently while it is visited.
 func (s *Server) ForEachConn(fn func(conn *Conn)) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for conn := range s.conns {
+	for _, conn := range s.connsSnapshot() {
 		fn(conn)
 	}
 }
@@ -207,13 +241,19 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 // registered via RegisterPushEventFor.
 func (s *Server) PushToUser(userID string, data any) {
 	event := s.registry.eventName(data)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
-	if conns, ok := s.userConns[userID]; ok {
-		for conn := range conns {
-			_ = conn.push(event, data)
-		}
+	// Snapshot under the lock, send outside it: pushes can block on a slow
+	// connection's send buffer, and blocking while holding s.mu would stall
+	// register/unregister for every other connection.
+	s.mu.RLock()
+	conns := make([]*Conn, 0, len(s.userConns[userID]))
+	for conn := range s.userConns[userID] {
+		conns = append(conns, conn)
+	}
+	s.mu.RUnlock()
+
+	for _, conn := range conns {
+		_ = conn.push(event, data)
 	}
 }
 
@@ -244,6 +284,15 @@ func (s *Server) disassociateUser(conn *Conn) {
 }
 
 // SetCheckOrigin sets the origin check function for the WebSocket upgrader.
+//
+// The default accepts any Origin so non-browser clients work out of the box.
+// Deployments that authenticate browsers with cookies MUST restrict origins,
+// otherwise any website can open an authenticated WebSocket to this server
+// from a visitor's browser (cross-site WebSocket hijacking):
+//
+//	server.SetCheckOrigin(func(r *http.Request) bool {
+//	    return r.Header.Get("Origin") == "https://app.example.com"
+//	})
 func (s *Server) SetCheckOrigin(f func(r *http.Request) bool) {
 	s.upgrader.CheckOrigin = f
 }
@@ -276,8 +325,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	connID := atomic.AddUint64(&s.nextConnID, 1)
 	ctx := r.Context()
-	wst := newWSTransport(ws)
+	wst := newWSTransport(ws, s.options)
 	conn := newConn(wst, s, connID, r, ctx)
+
+	// Bound the direct writes below (rejection/config) the same way the
+	// write pump bounds its writes; the pump refreshes the deadline per
+	// message once it starts.
+	if s.options.WriteTimeout > 0 {
+		_ = ws.SetWriteDeadline(time.Now().Add(s.options.WriteTimeout))
+	}
 
 	// Run connect hooks before starting message processing
 	if err := s.runConnectHooks(ctx, conn); err != nil {
@@ -301,12 +357,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // registered via RegisterPushEventFor.
 func (s *Server) Broadcast(data any) {
 	event := s.registry.eventName(data)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for conn := range s.conns {
+	for _, conn := range s.connsSnapshot() {
 		_ = conn.push(event, data)
 	}
+}
+
+// connsSnapshot copies the current connection set under the read lock.
+// Senders iterate the copy without holding the lock, so a blocking send
+// can never wedge register/unregister processing.
+func (s *Server) connsSnapshot() []*Conn {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	conns := make([]*Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	return conns
 }
 
 // ConnectionCount returns the number of active connections.

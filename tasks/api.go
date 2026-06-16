@@ -325,7 +325,12 @@ func startSharedTask[M any](ctx context.Context, title string) (context.Context,
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
 
-	if slot := taskSlotFromContext(ctx); slot != nil {
+	// A detached context (context.WithoutCancel — recognizable by its nil
+	// Done channel) is the documented fire-and-forget pattern: the task
+	// outlives the handler, so it must not be auto-finalized by the task
+	// middleware when the handler returns. The background goroutine owns
+	// completion via Task.Close / Task.Fail / Task.Err.
+	if slot := taskSlotFromContext(ctx); slot != nil && ctx.Done() != nil {
 		slot.node = node
 	}
 

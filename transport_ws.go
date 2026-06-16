@@ -12,13 +12,15 @@ type wsTransport struct {
 	ws   *websocket.Conn
 	send chan []byte
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
+	opts ServerOptions // read limit, write timeout, and keepalive settings
 }
 
-func newWSTransport(ws *websocket.Conn) *wsTransport {
+func newWSTransport(ws *websocket.Conn, opts ServerOptions) *wsTransport {
 	return &wsTransport{
 		ws:   ws,
 		send: make(chan []byte, 256),
 		done: make(chan struct{}),
+		opts: opts,
 	}
 }
 
@@ -27,7 +29,8 @@ func (t *wsTransport) Send(data []byte) error {
 	// immediately if the transport is closed. Previously this method dropped
 	// on a full buffer, which silently lost responses/progress for slow
 	// clients; streams need guaranteed delivery and all other message types
-	// benefit too.
+	// benefit too. The wait is bounded: writePump enforces WriteTimeout, so
+	// a peer that stops reading is closed instead of stalling senders forever.
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
@@ -63,35 +66,73 @@ func (t *wsTransport) CloseGracefully() error {
 }
 
 // readPump reads messages from the WebSocket and dispatches them to the connection.
+// It enforces MaxMessageSize and, when keepalive pings are enabled, a read
+// deadline that drops half-open connections whose peer no longer responds.
 func (t *wsTransport) readPump(conn *Conn) {
 	defer func() {
 		conn.server.unregister <- conn
 		t.ws.Close()
 	}()
 
+	if t.opts.MaxMessageSize > 0 {
+		t.ws.SetReadLimit(t.opts.MaxMessageSize)
+	}
+	keepalive := t.opts.PingInterval > 0 && t.opts.PongTimeout > 0
+	if keepalive {
+		_ = t.ws.SetReadDeadline(time.Now().Add(t.opts.PongTimeout))
+		t.ws.SetPongHandler(func(string) error {
+			return t.ws.SetReadDeadline(time.Now().Add(t.opts.PongTimeout))
+		})
+	}
+
 	for {
 		_, data, err := t.ws.ReadMessage()
 		if err != nil {
 			return
 		}
+		if keepalive {
+			// Any inbound traffic proves liveness, not just pongs.
+			_ = t.ws.SetReadDeadline(time.Now().Add(t.opts.PongTimeout))
+		}
 		conn.handleIncomingMessage(data)
 	}
 }
 
-// writePump writes messages from the send channel to the WebSocket.
-// It exits when done is closed; the send channel is never closed (only
-// the sender should close a channel, but multiple goroutines may send).
+// writePump writes messages from the send channel to the WebSocket and sends
+// keepalive pings. It exits when done is closed; the send channel is never
+// closed (only the sender should close a channel, but multiple goroutines may
+// send).
 func (t *wsTransport) writePump() {
 	defer t.ws.Close()
+
+	var pingC <-chan time.Time
+	if t.opts.PingInterval > 0 {
+		ticker := time.NewTicker(t.opts.PingInterval)
+		defer ticker.Stop()
+		pingC = ticker.C
+	}
 
 	for {
 		select {
 		case <-t.done:
 			return
+		case <-pingC:
+			if err := t.writeMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		case data := <-t.send:
-			if err := t.ws.WriteMessage(websocket.TextMessage, data); err != nil {
+			if err := t.writeMessage(websocket.TextMessage, data); err != nil {
 				return
 			}
 		}
 	}
+}
+
+// writeMessage writes one frame, bounded by WriteTimeout so a peer that
+// stops reading cannot stall the pump (and with it every Send caller).
+func (t *wsTransport) writeMessage(messageType int, data []byte) error {
+	if t.opts.WriteTimeout > 0 {
+		_ = t.ws.SetWriteDeadline(time.Now().Add(t.opts.WriteTimeout))
+	}
+	return t.ws.WriteMessage(messageType, data)
 }

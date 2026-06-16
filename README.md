@@ -146,6 +146,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
+- **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, and WebSocket keepalive pings — all configurable via `ServerOptions`
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -723,6 +724,38 @@ const off = client.onConnectionError((err) => {
     else hideOfflineBanner();
 });
 ```
+
+## Server Hardening & Security
+
+The server protects itself from misbehaving clients out of the box, and every limit is configurable through `ServerOptions`:
+
+```go
+server := aprot.NewServer(registry, aprot.ServerOptions{
+    MaxMessageSize: 1 << 20,          // max inbound WS frame / SSE body size (default 4 MiB)
+    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
+    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
+    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+})
+```
+
+Set any of these to `-1` to disable it. Defaults apply when the field is zero.
+
+- **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error, mirroring `net/http`. One buggy handler cannot take down the process.
+- **Message size limits** — oversized WebSocket frames close the connection; oversized SSE RPC bodies get HTTP 413.
+- **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
+- **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up.
+
+### Origin checking (cross-site WebSocket hijacking)
+
+By default the WebSocket upgrader accepts **any** `Origin` header so non-browser clients work out of the box. If your deployment authenticates browsers with **cookies**, you must restrict origins — otherwise any website a logged-in user visits can open an authenticated WebSocket to your server from their browser:
+
+```go
+server.SetCheckOrigin(func(r *http.Request) bool {
+    return r.Header.Get("Origin") == "https://app.example.com"
+})
+```
+
+Token-based auth (e.g. a token passed via the connection URL) is not affected by this, but setting an origin check is still good hygiene for browser-facing deployments.
 
 ## REST Adapter
 

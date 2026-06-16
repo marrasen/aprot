@@ -33,6 +33,10 @@ http.Handle("/sse/", server.HTTPTransport())
 http.Handle("/api/", aprot.NewRESTAdapter(registry)) // optional REST
 ```
 
+Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{MaxMessageSize, WriteTimeout, PingInterval, PongTimeout}` — inbound size limit (default 4 MiB), stalled-peer write timeout (30s), WS keepalive ping (30s) and pong timeout (60s). Handler panics are recovered per request and returned as internal errors.
+
+**Cookie-auth deployments must set an origin check** (default allows all origins — CSWSH risk): `server.SetCheckOrigin(func(r *http.Request) bool { return r.Header.Get("Origin") == "https://app.example.com" })`.
+
 ### 3. TypeScript Generation
 ```go
 gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
@@ -47,7 +51,7 @@ gen.Generate()
 ### 4. Progress & Tasks
 - Simple: `aprot.Progress(ctx).Update(current, total, message)`.
 - Hierarchical: `tasks.SubTask(ctx, title, fn)`.
-- Server-wide: `tasks.StartSharedTask[Meta](ctx, title)`.
+- Server-wide: `tasks.StartTask[Meta](ctx, title, tasks.Shared())`. Start it on `context.WithoutCancel(ctx)` for a fire-and-forget task that outlives the handler — then the goroutine must finish it via `task.Close()` / `task.Fail()` / `task.Err()`.
 - Enable: `tasks.Enable(registry)` before generation/serving.
 
 ## Handlers
@@ -161,7 +165,7 @@ server.Broadcast(&UserCreatedEvent{ID: "1"})
 server.PushToUser("user_123", &NotificationEvent{Message: "hello"})
 ```
 
-Event name on the wire is the Go type name. Subscribed via the generated per-event hook (React) or `subscribe`/`onUserCreated` standalone (vanilla).
+Event name on the wire is the Go type name. Subscribed via the generated per-event hook (React) or the `onUserCreatedEvent`-style standalone (vanilla) — generated names match the Go event type name exactly.
 
 ## Subscription Refresh
 
@@ -239,19 +243,20 @@ The `'server-rejected'` bucket is also surfaced via the older `onConnectionRejec
 
 ## TypeScript Hooks (React Output)
 
-aprot generates **only two hook flavors per handler**: `useXxx()` for query/subscription, and `useStreamXxx()` / `usePushXxx()` for streams and push events. There is **no per-handler mutation hook** — call the generated async function directly, or use the query hook's `mutate(action)` helper to compose a mutation with a refetch.
+aprot generates one hook per handler named after the handler itself: `useXxx()` for query/subscription handlers **and** stream handlers (e.g. stream handler `Numbers` → `useNumbers()`), plus `useXxxEvent()` for push events (named after the Go event type, e.g. `UserCreatedEvent` → `useUserCreatedEvent()`). There is **no per-handler mutation hook** — call the generated async function directly, or use the query hook's `mutate(action)` helper to compose a mutation with a refetch.
 
 ```tsx
 import {
   useListUsers, useGetUser, createUser, deleteUser,
-  useUserCreatedEvent, useStreamNumbers,
+  useUserCreatedEvent,
 } from './api/handlers';
+import { useNumbers } from './api/streaming-handlers';
 import { useApiClient } from './api/client';
 
 const { data, isLoading, error, refetch, mutate, cancel } = useListUsers();
 const { data: user } = useGetUser(userId);                          // re-fetches when userId changes
 
-const { items, done, error, isLoading, restart, cancel } = useStreamNumbers(10, 100);
+const { items, done, error, isLoading, restart, cancel } = useNumbers(10, 100);
 const { lastEvent, events, clear } = useUserCreatedEvent();
 ```
 
@@ -374,7 +379,7 @@ function UserView({ id }: { id: string }) {
   return <h1>{user.name}</h1>;
 }
 ```
-Errors propagate to the nearest error boundary. Mutations and streams stay on `useMutation` / `useStream`.
+Errors propagate to the nearest error boundary. Mutations stay on the generated async functions (or the query hook's `mutate` helper); streams stay on the generated stream hooks.
 
 ### Connection / loading hooks
 ```tsx
@@ -386,7 +391,7 @@ const isLoading = useIsLoading();               // any in-flight request anywher
 
 ### Generic primitives
 ```tsx
-import { useQuery, useMutation, useStream, usePushEvent } from './api/client';
+import { useQuery, useStream, usePushEvent } from './api/client';
 ```
 
 ## Vanilla Output
@@ -394,11 +399,11 @@ import { useQuery, useMutation, useStream, usePushEvent } from './api/client';
 Per-handler standalone functions plus `subscribe`/`unsubscribe` helpers for live data:
 
 ```ts
-import { listUsers, subscribeListUsers, onUserCreated } from './api/handlers';
+import { listUsers, subscribeListUsers, onUserCreatedEvent } from './api/handlers';
 
 const users = await listUsers(client);
 const unsub = subscribeListUsers(client, (next) => render(next));
-const off = onUserCreated(client, (evt) => append(evt));
+const off = onUserCreatedEvent(client, (evt) => append(evt));
 ```
 
 ## Cancel Causes

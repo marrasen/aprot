@@ -224,9 +224,35 @@
 // cannot be exposed via REST and will panic at registration — use
 // WebSocket or SSE for those.
 //
-// Use [ServerOptions] to configure client reconnection behavior. The server
-// sends this configuration to clients on connect; TypeScript clients apply it
-// automatically.
+// Use [ServerOptions] to configure client reconnection behavior and
+// connection hardening. The reconnect settings are sent to clients on
+// connect; TypeScript clients apply them automatically. The hardening
+// settings protect the server from misbehaving clients:
+//
+//	server := aprot.NewServer(registry, aprot.ServerOptions{
+//	    MaxMessageSize: 1 << 20,          // max inbound WS frame / SSE body size (default 4 MiB)
+//	    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
+//	    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
+//	    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+//	})
+//
+// Set a field to -1 to disable that limit; zero applies the default.
+// Handler panics are recovered per request and surfaced to the client as
+// internal errors, mirroring net/http — one buggy handler cannot take down
+// the process.
+//
+// # Security
+//
+// The WebSocket upgrader accepts any Origin header by default so that
+// non-browser clients work out of the box. Deployments that authenticate
+// browsers with cookies must restrict origins with [Server.SetCheckOrigin] —
+// otherwise any website a logged-in user visits can open an authenticated
+// WebSocket to the server from the user's browser (cross-site WebSocket
+// hijacking):
+//
+//	server.SetCheckOrigin(func(r *http.Request) bool {
+//	    return r.Header.Get("Origin") == "https://app.example.com"
+//	})
 //
 // # Connection Lifecycle
 //
