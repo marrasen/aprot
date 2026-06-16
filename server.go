@@ -270,15 +270,21 @@ func (s *Server) associateUser(conn *Conn, userID string) {
 
 // disassociateUser removes a connection from user tracking.
 func (s *Server) disassociateUser(conn *Conn) {
+	// Read userID under the connection's own lock (it is written there by
+	// SetUserID); reading it under s.mu alone is a data race. UserID() takes
+	// c.mu and returns before we acquire s.mu, so the two locks never nest.
+	userID := conn.UserID()
+	if userID == "" {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if conn.userID != "" {
-		if conns, ok := s.userConns[conn.userID]; ok {
-			delete(conns, conn)
-			if len(conns) == 0 {
-				delete(s.userConns, conn.userID)
-			}
+	if conns, ok := s.userConns[userID]; ok {
+		delete(conns, conn)
+		if len(conns) == 0 {
+			delete(s.userConns, userID)
 		}
 	}
 }
@@ -337,6 +343,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Run connect hooks before starting message processing
 	if err := s.runConnectHooks(ctx, conn); err != nil {
+		// A hook may have called SetUserID before a later hook rejected the
+		// connection; undo that association so a dead conn can't linger in
+		// userConns and have a later PushToUser block on its send buffer.
+		s.disassociateUser(conn)
 		// Send rejection directly before pumps start
 		sendConnectionRejectedWS(ws, err)
 		ws.Close()
@@ -346,7 +356,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Send config directly before pumps start
 	sendConfigWS(ws, s.options)
 
-	s.register <- conn
+	// Register the connection, but don't block forever if the server has
+	// already shut down (run() has exited and will never read s.register).
+	select {
+	case s.register <- conn:
+	case <-s.done:
+		s.disassociateUser(conn)
+		ws.Close()
+		return
+	}
 
 	go wst.writePump()
 	wst.readPump(conn)
@@ -389,6 +407,14 @@ func (s *Server) run() {
 	for {
 		select {
 		case conn := <-s.register:
+			if s.stopping.Load() {
+				// This connection registered after Stop's close sweep, so it
+				// would otherwise never be closed and would keep run() from
+				// ever seeing an empty connection set. Close it and don't
+				// track it; its pumps tear down on their own.
+				conn.close()
+				continue
+			}
 			s.mu.Lock()
 			s.conns[conn] = struct{}{}
 			s.mu.Unlock()
@@ -462,10 +488,15 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	// Signal run() to exit
 	s.stopOnce.Do(func() { close(s.stopCh) })
-	// Wait for run() to finish processing remaining unregister events
-	<-s.done
-
-	return nil
+	// Wait for run() to finish processing remaining unregister events, but
+	// don't ignore the caller's deadline — a pathological disconnect hook or
+	// a wedged connection must not be able to hang Stop forever.
+	select {
+	case <-s.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Registry returns the server's handler registry.

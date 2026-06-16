@@ -73,6 +73,13 @@ func (c *Conn) ID() uint64 {
 	return c.id
 }
 
+// isClosed reports whether the connection has been closed.
+func (c *Conn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 // Info returns HTTP request information captured at connection time.
 func (c *Conn) Info() ConnInfo {
 	return c.info
@@ -250,8 +257,26 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 
 func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if c.closed {
+		// The connection was closed between the request goroutine starting and
+		// reaching here. close() already swept c.requests, so storing this
+		// cancel would leak it: the handler would block on ctx.Done() forever,
+		// holding requestsWg and stalling Server.Stop. Cancel immediately.
+		c.mu.Unlock()
+		cancel(ErrConnectionClosed)
+		return
+	}
+	// A client may (maliciously or accidentally) reuse an in-flight request
+	// ID. Overwriting the map entry would orphan the previous request's
+	// cancel func — its context would never be canceled until the connection
+	// closes. Cancel the shadowed request instead.
+	old := c.requests[id]
 	c.requests[id] = cancel
+	c.mu.Unlock()
+
+	if old != nil {
+		old(ErrClientCanceled)
+	}
 }
 
 func (c *Conn) unregisterRequest(id string) {
@@ -570,14 +595,20 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	if len(keys) > 0 {
 		if c.server.subscriptions.has(c.id, msg.ID) {
 			c.server.subscriptions.updateKeys(c.id, msg.ID, keys)
-		} else {
-			c.server.subscriptions.register(&subscription{
-				conn:   c,
-				id:     msg.ID,
-				method: msg.Method,
-				keys:   keys,
-				params: msg.Params,
-			})
+			// Re-subscribe with the same ID may carry new params; refresh them
+			// so server-driven re-execution doesn't replay the stale ones.
+			c.server.subscriptions.updateParams(c.id, msg.ID, msg.Params)
+		} else if !c.server.subscriptions.register(&subscription{
+			conn:   c,
+			id:     msg.ID,
+			method: msg.Method,
+			keys:   keys,
+			params: msg.Params,
+		}) {
+			// The connection closed while the handler was running; the
+			// subscription was refused so it can't outlive the conn. Don't
+			// send a response — the transport is gone.
+			return
 		}
 	}
 
