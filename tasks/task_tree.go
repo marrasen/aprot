@@ -239,15 +239,19 @@ func (n *taskNode) sharedSnapshotForConn(connID uint64) SharedTaskState {
 }
 
 // ensureRoot lazily creates an implicit root node for a request delivery.
+// Handlers may create tasks from multiple worker goroutines, so creation is
+// guarded: without the lock two callers could each install a root and one's
+// subtree would be silently lost.
 func ensureRoot(d *requestDelivery) *taskNode {
-	if d.root != nil {
-		return d.root
-	}
-	d.root = &taskNode{
-		delivery: d,
-		id:       "root",
-		title:    "",
-		status:   TaskNodeStatusRunning,
+	d.rootMu.Lock()
+	defer d.rootMu.Unlock()
+	if d.root == nil {
+		d.root = &taskNode{
+			delivery: d,
+			id:       "root",
+			title:    "",
+			status:   TaskNodeStatusRunning,
+		}
 	}
 	return d.root
 }

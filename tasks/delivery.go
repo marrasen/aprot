@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/marrasen/aprot"
@@ -23,7 +24,8 @@ type requestDelivery struct {
 	conn      *aprot.Conn
 	requestID string
 	nextID    atomic.Int64
-	root      *taskNode // lazily created implicit root
+	rootMu    sync.Mutex // guards root; handlers may create tasks from worker goroutines
+	root      *taskNode  // lazily created implicit root
 }
 
 func newRequestDelivery(conn *aprot.Conn, requestID string) *requestDelivery {
@@ -31,10 +33,13 @@ func newRequestDelivery(conn *aprot.Conn, requestID string) *requestDelivery {
 }
 
 func (d *requestDelivery) sendSnapshot(_ *taskNode) {
-	if d.root == nil {
+	d.rootMu.Lock()
+	root := d.root
+	d.rootMu.Unlock()
+	if root == nil {
 		return
 	}
-	nodes := d.root.snapshotChildren()
+	nodes := root.snapshotChildren()
 	if nodes != nil {
 		_ = d.conn.Push(RequestTaskTreeEvent{RequestID: d.requestID, Tasks: nodes})
 	}
@@ -97,3 +102,20 @@ func (d *sharedDelivery) allocID() string {
 }
 
 func (d *sharedDelivery) isShared() bool { return true }
+
+// noopDelivery is used for detached tasks created when there is no client to
+// deliver to (e.g. the REST path, which has no connection or task manager).
+// Every method is a safe no-op so handler code written for WebSocket — which
+// calls Progress/Output/SetMeta/Close — does not panic over REST; the task
+// state simply isn't delivered anywhere.
+type noopDelivery struct {
+	nextID atomic.Int64
+}
+
+func (d *noopDelivery) sendSnapshot(_ *taskNode)        {}
+func (d *noopDelivery) sendOutput(_, _ string)          {}
+func (d *noopDelivery) sendProgress(_ string, _, _ int) {}
+func (d *noopDelivery) onComplete(node *taskNode)       { node.setStatus(TaskNodeStatusCompleted) }
+func (d *noopDelivery) onFail(_ *taskNode)              {}
+func (d *noopDelivery) allocID() string                 { return "t" + itoa(d.nextID.Add(1)) }
+func (d *noopDelivery) isShared() bool                  { return false }

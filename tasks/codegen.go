@@ -132,6 +132,21 @@ func buildInterfaceData(t reflect.Type) metaInterfaceData {
 	return iface
 }
 
+// underlyingStructType peels pointer, slice, array, and map-value wrappers off
+// t to reach the underlying element type. A struct used only as a map value
+// (e.g. map[string]Info) must be reached so its interface gets declared,
+// otherwise the generated TS references an undeclared type.
+func underlyingStructType(t reflect.Type) reflect.Type {
+	for {
+		switch t.Kind() {
+		case reflect.Ptr, reflect.Slice, reflect.Array, reflect.Map:
+			t = t.Elem()
+		default:
+			return t
+		}
+	}
+}
+
 func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[reflect.Type]bool) {
 	if seen[t] {
 		return
@@ -146,16 +161,7 @@ func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[refle
 		if field.Tag.Get("json") == "-" {
 			continue
 		}
-		ft := field.Type
-		if ft.Kind() == reflect.Ptr {
-			ft = ft.Elem()
-		}
-		if ft.Kind() == reflect.Slice {
-			ft = ft.Elem()
-			if ft.Kind() == reflect.Ptr {
-				ft = ft.Elem()
-			}
-		}
+		ft := underlyingStructType(field.Type)
 		if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !hasMarshalOverride(ft) {
 			collectNestedStructs(ft, nested, seen)
 			*nested = append(*nested, ft)

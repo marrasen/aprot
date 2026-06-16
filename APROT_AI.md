@@ -53,6 +53,8 @@ gen.Generate()
 - Hierarchical: `tasks.SubTask(ctx, title, fn)`.
 - Server-wide: `tasks.StartTask[Meta](ctx, title, tasks.Shared())`. Start it on `context.WithoutCancel(ctx)` for a fire-and-forget task that outlives the handler — then the goroutine must finish it via `task.Close()` / `task.Fail()` / `task.Err()`.
 - Enable: `tasks.Enable(registry)` before generation/serving.
+- Cancel is owner-only: `tasks.CancelSharedTask(ctx, id)` (and the generated `CancelTask` handler) only cancels a task created by the calling connection; others get `CodeForbidden`.
+- `StartTask` never returns nil. On transports with no client channel (e.g. the REST adapter — no connection/manager on ctx) it returns a no-op `*Task`, so `Progress`/`Output`/`SetMeta`/`Close` are safe but undelivered.
 
 ## Handlers
 
