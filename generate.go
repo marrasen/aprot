@@ -414,6 +414,14 @@ type fieldData struct {
 	// is a registered enum. Zod codegen uses it to emit the enum expression
 	// inside z.array(...) / z.record(...).
 	ElemEnum *EnumInfo
+	// ElemLazy is set when the slice/map element references a generated schema
+	// that is part of a reference cycle (self-referential or mutually
+	// recursive). Zod codegen then wraps the element reference in
+	// z.lazy(() => XSchema) so the cyclic const is not dereferenced before it
+	// is initialized (which would be a temporal-dead-zone ReferenceError).
+	// Set by buildZodSchemas after cycle analysis; the per-field reflection
+	// pass leaves it false.
+	ElemLazy bool
 }
 
 type paramData struct {

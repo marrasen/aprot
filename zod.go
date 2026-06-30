@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -76,6 +77,31 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 		return body
 	}
 
+	// oneof restricts the value to a fixed set, so (like a registered enum) it
+	// replaces the base type with z.enum(...) / z.union(z.literal(...)) rather
+	// than appending a chain method. Honoring it here keeps z.infer matching
+	// the documented "value must be one of" semantics instead of silently
+	// dropping the rule.
+	for _, r := range rules {
+		if r.Tag != "oneof" {
+			continue
+		}
+		body := zodOneof(effectiveKind, r.Param)
+		if body == "" {
+			break
+		}
+		if isNullable {
+			body += ".nullable()"
+		}
+		if hasValidateOmitempty && effectiveKind == "string" {
+			body = `z.union([z.literal(""), ` + body + `])`
+		}
+		if optional {
+			body += ".optional()"
+		}
+		return body
+	}
+
 	// Issue 2 (#163): if an explicit min rule is present on a string, skip
 	// the implicit required -> min(1) so we don't emit .min(1).min(N).
 	hasExplicitMin := false
@@ -87,7 +113,7 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 	}
 
 	var chain []string
-	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, f.ElemEnum, knownSchemas))
+	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, f.ElemEnum, f.ElemLazy, knownSchemas))
 
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -124,7 +150,7 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 // through to z.any(). elemEnum is non-nil when the slice/map element is a
 // registered enum; in that case zodElemExpr emits z.enum(...) / z.union(...)
 // for the element (#176).
-func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, elemEnum *EnumInfo, knownSchemas map[string]bool) string {
+func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, elemEnum *EnumInfo, elemLazy bool, knownSchemas map[string]bool) string {
 	switch goKind {
 	case "string":
 		return "string()"
@@ -135,9 +161,9 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 	case "bool":
 		return "boolean()"
 	case "slice":
-		return "array(" + zodElemExpr(elemGoKind, elemTypeName, elemEnum, knownSchemas) + ")"
+		return "array(" + zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas) + ")"
 	case "map":
-		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, elemEnum, knownSchemas) + ")"
+		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas) + ")"
 	default:
 		// Struct or unknown — use any()
 		return "any()"
@@ -149,7 +175,7 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 // anonymous structs, slices of slices) so callers can wrap it directly.
 // When elemEnum is non-nil, the element is a registered enum and is emitted
 // as z.enum([...]) / z.union([...]) (#176).
-func zodElemExpr(elemGoKind string, elemTypeName string, elemEnum *EnumInfo, knownSchemas map[string]bool) string {
+func zodElemExpr(elemGoKind string, elemTypeName string, elemEnum *EnumInfo, elemLazy bool, knownSchemas map[string]bool) string {
 	if elemEnum != nil {
 		return "z." + zodEnumBase(elemEnum)
 	}
@@ -164,6 +190,11 @@ func zodElemExpr(elemGoKind string, elemTypeName string, elemEnum *EnumInfo, kno
 		return "z.boolean()"
 	case "struct":
 		if elemTypeName != "" && knownSchemas[elemTypeName] {
+			if elemLazy {
+				// Cyclic reference — defer evaluation so the cyclic const is
+				// not dereferenced before it is initialized (#207).
+				return "z.lazy(() => " + elemTypeName + "Schema)"
+			}
 			return elemTypeName + "Schema"
 		}
 		return "z.any()"
@@ -182,7 +213,7 @@ func zodEnumBase(info *EnumInfo) string {
 		parts := make([]string, 0, len(info.Values))
 		for _, v := range info.Values {
 			s, _ := v.Value.(string)
-			parts = append(parts, `"`+s+`"`)
+			parts = append(parts, strconv.Quote(s))
 		}
 		return "enum([" + strings.Join(parts, ", ") + "])"
 	}
@@ -193,8 +224,63 @@ func zodEnumBase(info *EnumInfo) string {
 	return "union([" + strings.Join(parts, ", ") + "])"
 }
 
+// zodOneof builds the Zod expression for a oneof validate rule. The param is a
+// space-separated value list (go-playground syntax). String kinds become
+// z.enum([...]); numeric kinds become a z.union of z.literal(...) (or a single
+// z.literal when there is only one value, since z.union requires two members).
+// Returns "" for kinds where oneof has no literal representation.
+func zodOneof(goKind string, param string) string {
+	vals := strings.Fields(param)
+	if len(vals) == 0 {
+		return ""
+	}
+	switch goKind {
+	case "string":
+		parts := make([]string, len(vals))
+		for i, v := range vals {
+			parts[i] = strconv.Quote(v)
+		}
+		return "z.enum([" + strings.Join(parts, ", ") + "])"
+	case "int", "uint", "float":
+		if len(vals) == 1 {
+			return "z.literal(" + vals[0] + ")"
+		}
+		parts := make([]string, len(vals))
+		for i, v := range vals {
+			parts[i] = "z.literal(" + v + ")"
+		}
+		return "z.union([" + strings.Join(parts, ", ") + "])"
+	default:
+		return ""
+	}
+}
+
 // zodConstraint maps a single validate rule to a Zod chain method.
 func zodConstraint(goKind string, rule ValidateRule) string {
+	// z.record() exposes no length/size constraint methods, so a size rule on
+	// a map would otherwise emit invalid TS like z.record(...).min(...). Drop
+	// size constraints for maps rather than emit something that won't parse.
+	if goKind == "map" {
+		return ""
+	}
+	// For strings and slices the go-playground validator's gt/lt operate on
+	// length, but Zod strings and arrays have no numeric .gt()/.lt() — those
+	// exist only on z.number(). Translate the strict length comparison to the
+	// inclusive .min()/.max() form (gt=n → min(n+1), lt=n → max(n-1)).
+	if goKind == "string" || goKind == "slice" {
+		switch rule.Tag {
+		case "gt":
+			if n, err := strconv.Atoi(rule.Param); err == nil {
+				return fmt.Sprintf("min(%d)", n+1)
+			}
+			return ""
+		case "lt":
+			if n, err := strconv.Atoi(rule.Param); err == nil {
+				return fmt.Sprintf("max(%d)", n-1)
+			}
+			return ""
+		}
+	}
 	switch rule.Tag {
 	case "required":
 		// In Zod, fields are required by default; skip unless we want .nonempty()
@@ -233,15 +319,15 @@ func zodConstraint(goKind string, rule ValidateRule) string {
 	case "alphanum":
 		return `regex(/^[a-zA-Z0-9]+$/)`
 	case "oneof":
-		// "red green blue" -> z.enum(["red", "green", "blue"])
-		// This replaces the base type entirely, handled separately
+		// Handled in fieldToZod via zodOneof — oneof replaces the base type
+		// (z.enum / z.union of literals) rather than appending a chain method.
 		return ""
 	case "contains":
-		return fmt.Sprintf(`refine(v => v.includes("%s"), { message: "must contain %s" })`, rule.Param, rule.Param)
+		return fmt.Sprintf(`refine(v => v.includes(%s), { message: %s })`, strconv.Quote(rule.Param), strconv.Quote("must contain "+rule.Param))
 	case "startswith":
-		return fmt.Sprintf(`refine(v => v.startsWith("%s"), { message: "must start with %s" })`, rule.Param, rule.Param)
+		return fmt.Sprintf(`refine(v => v.startsWith(%s), { message: %s })`, strconv.Quote(rule.Param), strconv.Quote("must start with "+rule.Param))
 	case "endswith":
-		return fmt.Sprintf(`refine(v => v.endsWith("%s"), { message: "must end with %s" })`, rule.Param, rule.Param)
+		return fmt.Sprintf(`refine(v => v.endsWith(%s), { message: %s })`, strconv.Quote(rule.Param), strconv.Quote("must end with "+rule.Param))
 	default:
 		return ""
 	}
@@ -271,7 +357,30 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 		}
 	}
 
-	// Build the schema list in source order first.
+	// Collect each schema's slice/map element dependencies (only those that are
+	// themselves generated schemas). This drives both the cycle analysis below
+	// and the topological sort.
+	deps := make(map[string][]string, len(interfaces))
+	for _, iface := range interfaces {
+		if !knownSchemas[iface.Name] {
+			continue
+		}
+		var schemaDeps []string
+		seen := make(map[string]bool)
+		for _, f := range iface.Fields {
+			if f.ElemTypeName != "" && knownSchemas[f.ElemTypeName] && !seen[f.ElemTypeName] {
+				schemaDeps = append(schemaDeps, f.ElemTypeName)
+				seen[f.ElemTypeName] = true
+			}
+		}
+		deps[iface.Name] = schemaDeps
+	}
+
+	// Build the schema list in source order. A field whose element schema can
+	// reach back to the schema being built participates in a reference cycle
+	// (self-referential or mutually recursive); mark it ElemLazy so fieldToZod
+	// wraps the reference in z.lazy(() => XSchema) and avoids a temporal-dead-
+	// zone ReferenceError at module load (#207).
 	bySource := make([]zodSchemaData, 0, len(interfaces))
 	for _, iface := range interfaces {
 		if !knownSchemas[iface.Name] {
@@ -279,6 +388,9 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 		}
 		schema := zodSchemaData{Name: iface.Name}
 		for _, f := range iface.Fields {
+			if f.ElemTypeName != "" && knownSchemas[f.ElemTypeName] && depReaches(deps, f.ElemTypeName, iface.Name) {
+				f.ElemLazy = true
+			}
 			schema.Fields = append(schema.Fields, zodFieldData{
 				Name:    f.Name,
 				ZodType: fieldToZod(f, knownSchemas),
@@ -288,29 +400,32 @@ func buildZodSchemas(interfaces []interfaceData) []zodSchemaData {
 	}
 
 	// Topologically sort so leaf schemas come before any schema that
-	// references them. We collect dependencies by walking each interface's
-	// field list once, looking at slice/map element type names. Cycles fall
-	// back to source order (cycles are out of scope for #169 — the codegen
-	// emits z.any() for self-referential structs).
-	deps := make(map[string][]string, len(bySource))
-	ifaceByName := make(map[string]interfaceData, len(interfaces))
-	for _, iface := range interfaces {
-		ifaceByName[iface.Name] = iface
-	}
-	for _, schema := range bySource {
-		iface := ifaceByName[schema.Name]
-		var schemaDeps []string
-		seen := make(map[string]bool)
-		for _, f := range iface.Fields {
-			if f.ElemTypeName != "" && knownSchemas[f.ElemTypeName] && !seen[f.ElemTypeName] {
-				schemaDeps = append(schemaDeps, f.ElemTypeName)
-				seen[f.ElemTypeName] = true
+	// references them. Cycles fall back to source order; their cross-references
+	// are emitted lazily (see ElemLazy above), so the runtime reference still
+	// resolves regardless of declaration order.
+	return topoSortSchemas(bySource, deps)
+}
+
+// depReaches reports whether schema `from` can reach schema `to` by following
+// element dependency edges. Used to detect reference cycles: an edge A→B is
+// cyclic (and must be emitted lazily) exactly when B can reach A.
+func depReaches(deps map[string][]string, from, to string) bool {
+	visited := make(map[string]bool)
+	stack := []string{from}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, dep := range deps[n] {
+			if dep == to {
+				return true
+			}
+			if !visited[dep] {
+				visited[dep] = true
+				stack = append(stack, dep)
 			}
 		}
-		deps[schema.Name] = schemaDeps
 	}
-
-	return topoSortSchemas(bySource, deps)
+	return false
 }
 
 // topoSortSchemas reorders schemas so that every schema appears after its
