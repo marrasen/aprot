@@ -152,8 +152,14 @@ func toKebabAcronyms(s string) string {
 			j++
 		}
 		runLen := j - i
-		if runLen == 1 || j == len(runes) {
-			// Single uppercase letter or acronym at end of string — emit all lowercase.
+		// The last uppercase char of a multi-letter run only starts a new word
+		// when it is immediately followed by a lowercase letter (e.g. the "P"
+		// in "XMLParser"). When the run ends at a digit or end-of-string, the
+		// whole run is a single acronym word ("API2" → "api2", not "ap-i2").
+		splitLast := runLen > 1 && j < len(runes) && unicode.IsLower(runes[j])
+		if !splitLast {
+			// Single uppercase letter, or acronym ending at a digit / end of
+			// string — emit all lowercase.
 			for k := i; k < j; k++ {
 				result.WriteRune(unicode.ToLower(runes[k]))
 			}
@@ -203,8 +209,16 @@ func toLowerCamelAcronyms(s string) string {
 		runes[0] = unicode.ToLower(runes[0])
 		return string(runes)
 	}
-	// Multiple uppercase: lowercase all except the last (which starts the next word).
-	for i := 0; i < upper-1; i++ {
+	// Multiple uppercase. The last uppercase char starts the next word (and
+	// stays capitalized) only when it is followed by a lowercase letter, e.g.
+	// the "P" in "XMLParser" → "xmlParser". When the run ends at a digit, the
+	// whole run is one acronym word and is fully lowercased ("API2..." →
+	// "api2...").
+	end := upper
+	if upper < len(runes) && unicode.IsLower(runes[upper]) {
+		end = upper - 1
+	}
+	for i := 0; i < end; i++ {
 		runes[i] = unicode.ToLower(runes[i])
 	}
 	return string(runes)
