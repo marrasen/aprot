@@ -747,7 +747,7 @@ Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 - **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error, mirroring `net/http`. One buggy handler cannot take down the process.
 - **Message size limits** — oversized WebSocket frames close the connection; oversized SSE RPC bodies get HTTP 413.
 - **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
-- **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up.
+- **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
 
 ### Origin checking (cross-site WebSocket hijacking)
 

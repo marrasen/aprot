@@ -734,12 +734,15 @@ func (g *Generator) Generate() (map[string]string, error) {
 
 	// Write to files if OutputDir is set
 	if g.options.OutputDir != "" {
-		if err := os.MkdirAll(g.options.OutputDir, 0755); err != nil {
+		// Generated TypeScript client source is non-sensitive and meant to be
+		// read by the developer's toolchain (and usually committed), so the
+		// conventional world-readable source perms are intentional here.
+		if err := os.MkdirAll(g.options.OutputDir, 0o755); err != nil { // #nosec G301 -- generated client source dir, not sensitive
 			return nil, err
 		}
 		for filename, content := range results {
 			path := filepath.Join(g.options.OutputDir, filename)
-			if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil { // #nosec G306 -- generated client source file, not sensitive
 				return nil, err
 			}
 		}

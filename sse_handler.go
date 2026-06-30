@@ -144,7 +144,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		delete(h.connections, connectionID)
 		h.mu.Unlock()
-		sseT.Close()
+		_ = sseT.Close()
 		return
 	}
 
@@ -157,7 +157,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			// Client disconnected — close transport first to drain in-flight writes
 			// before the HTTP server finalizes the response writer.
-			sseT.Close()
+			_ = sseT.Close()
 			h.mu.Lock()
 			delete(h.connections, connectionID)
 			h.mu.Unlock()

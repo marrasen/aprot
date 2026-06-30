@@ -48,8 +48,10 @@ type ServerOptions struct {
 	PingInterval time.Duration
 	// PongTimeout is how long a WebSocket connection may go without any
 	// inbound traffic (data or pong) before it is considered dead and
-	// closed. Must be larger than PingInterval. Only effective while pings
-	// are enabled. Set to -1 to disable. Default: 60s.
+	// closed. Must be larger than PingInterval; if it is set to a value less
+	// than or equal to PingInterval (while both are enabled), NewServer clamps
+	// it up to 2*PingInterval so healthy connections aren't dropped. Only
+	// effective while pings are enabled. Set to -1 to disable. Default: 60s.
 	PongTimeout time.Duration
 }
 
@@ -117,6 +119,15 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.PongTimeout != 0 {
 			options.PongTimeout = opt.PongTimeout
 		}
+	}
+
+	// PongTimeout is the inbound read deadline; pings fire every PingInterval.
+	// If the deadline isn't comfortably longer than the ping period, a healthy
+	// connection is closed before its next ping/pong can refresh the deadline.
+	// When both are enabled but misconfigured, clamp PongTimeout up to twice the
+	// ping interval rather than silently dropping live connections.
+	if options.PingInterval > 0 && options.PongTimeout > 0 && options.PongTimeout <= options.PingInterval {
+		options.PongTimeout = 2 * options.PingInterval
 	}
 
 	s := &Server{
@@ -349,7 +360,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.disassociateUser(conn)
 		// Send rejection directly before pumps start
 		sendConnectionRejectedWS(ws, err)
-		ws.Close()
+		_ = ws.Close()
 		return
 	}
 
@@ -362,7 +373,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case s.register <- conn:
 	case <-s.done:
 		s.disassociateUser(conn)
-		ws.Close()
+		_ = ws.Close()
 		return
 	}
 
