@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/e2e/e2eapi"
 	"github.com/marrasen/aprot/example/vanilla/api"
 )
 
@@ -17,12 +18,16 @@ func main() {
 	authMiddleware := api.AuthMiddleware(tokenStore)
 	registry := api.NewRegistry(state, authMiddleware)
 
+	// Add REST + validation handlers for e2e coverage of those surfaces.
+	e2eapi.Register(registry)
+
 	server := aprot.NewServer(registry)
 
 	state.Broadcaster = server
 	state.UserPusher = server
 
 	sseHandler := server.HTTPTransport()
+	restAdapter := aprot.NewRESTAdapter(registry)
 
 	// Rejection server — always rejects connections for e2e testing.
 	rejectRegistry := aprot.NewRegistry()
@@ -36,6 +41,7 @@ func main() {
 	mux.Handle("/ws-reject", rejectServer)
 	mux.Handle("/sse", http.StripPrefix("/sse", sseHandler))
 	mux.Handle("/sse/", http.StripPrefix("/sse", sseHandler))
+	mux.Handle("/api/", http.StripPrefix("/api", restAdapter))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
