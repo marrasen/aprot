@@ -1675,6 +1675,27 @@ func TestGenerateInvalidIdentifierFieldKey(t *testing.T) {
 	}
 }
 
+func TestGenerateInstantiatedGenericInterface(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&GenericBoxHandlers{})
+
+	var buf bytes.Buffer
+	if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	if strings.Contains(output, "Box[int]") {
+		t.Errorf("generated TS contains invalid identifier Box[int]\n%s", output)
+	}
+	if !strings.Contains(output, "export interface BoxInt") {
+		t.Errorf("expected sanitized interface BoxInt\n%s", output)
+	}
+	if !strings.Contains(output, "value: number;") {
+		t.Errorf("expected BoxInt to carry value: number\n%s", output)
+	}
+}
+
 // time.Duration has no default JSON representation in jsonv2 and fails at
 // runtime, so the generator should reject it at generation time unless an
 // explicit json `format:` option is present.
@@ -2282,6 +2303,17 @@ func TestInferTypeFromMarshal(t *testing.T) {
 	}
 }
 
+// Box is a generic struct used to exercise instantiated-generic codegen.
+type Box[T any] struct {
+	Value T `json:"value"`
+}
+
+type GenericBoxHandlers struct{}
+
+func (h *GenericBoxHandlers) GetBox(ctx context.Context) (*Box[int], error) {
+	return &Box[int]{Value: 1}, nil
+}
+
 func TestGoTypeToTSValidTypeScript(t *testing.T) {
 	registry := NewRegistry()
 	g := NewGenerator(registry)
@@ -2294,6 +2326,9 @@ func TestGoTypeToTSValidTypeScript(t *testing.T) {
 		// json.RawMessage is a named []byte but carries arbitrary JSON; emitting
 		// number[] is wrong. It should be `unknown`.
 		{"json.RawMessage is unknown", reflect.TypeOf(json.RawMessage(nil)), "unknown"},
+		// Instantiated generics reflect as "Box[int]" — not a valid TS
+		// identifier. Sanitize to a valid name.
+		{"instantiated generic name", reflect.TypeOf(Box[int]{}), "BoxInt"},
 		// map[bool]T → Record<boolean, T> does not compile (boolean is not a
 		// valid index signature). jsonv2 encodes bool keys as "true"/"false".
 		{"map[bool] is valid record", reflect.TypeOf(map[bool]int(nil)), `Partial<Record<"true" | "false", number>>`},

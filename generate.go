@@ -812,7 +812,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			Name:        event.Name,
 			HandlerName: g.naming().HandlerName(event.Name),
 			HookName:    g.naming().HookName(event.Name),
-			DataType:    event.DataType.Name(),
+			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
 
@@ -913,7 +913,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 	})
 
 	for _, t := range types {
-		iface := interfaceData{Name: t.Name()}
+		iface := interfaceData{Name: sanitizeTSIdent(t.Name())}
 		iface.Fields = g.collectInterfaceFields(t)
 		data.Interfaces = append(data.Interfaces, iface)
 	}
@@ -936,7 +936,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 			Name:        event.Name,
 			HandlerName: g.naming().HandlerName(event.Name),
 			HookName:    g.naming().HookName(event.Name),
-			DataType:    event.DataType.Name(),
+			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
 
@@ -994,7 +994,7 @@ func (g *Generator) buildInterfaces() []interfaceData {
 
 	var ifaces []interfaceData
 	for _, t := range types {
-		iface := interfaceData{Name: t.Name()}
+		iface := interfaceData{Name: sanitizeTSIdent(t.Name())}
 		iface.Fields = g.collectInterfaceFields(t)
 		ifaces = append(ifaces, iface)
 	}
@@ -1098,6 +1098,37 @@ func tsSafeParamName(name string) string {
 		return name + "_"
 	}
 	return name
+}
+
+// sanitizeTSIdent converts a Go type name into a valid TypeScript identifier.
+// Instantiated generics reflect as names like "Box[int]" or "Pair[string,int]"
+// which are not valid TS identifiers; the bracketed type arguments are folded
+// into the name as TitleCased words ("BoxInt", "PairStringInt"). Names that are
+// already valid identifiers are returned unchanged. Applied consistently at
+// every emission site (interface declarations, type references, OpenAPI schema
+// names and $refs) so a generic type and its references stay in sync.
+func sanitizeTSIdent(name string) string {
+	if isValidJSIdent(name) {
+		return name
+	}
+	var b strings.Builder
+	newWord := false
+	for i, r := range name {
+		switch {
+		case r == '_' || r == '$' || unicode.IsLetter(r) || (i > 0 && unicode.IsDigit(r)):
+			if newWord {
+				r = unicode.ToUpper(r)
+				newWord = false
+			}
+			b.WriteRune(r)
+		default:
+			// Any other rune (brackets, commas, dots, slashes, spaces, '*')
+			// is a word separator that is dropped; the next letter starts a
+			// new TitleCased word.
+			newWord = true
+		}
+	}
+	return b.String()
 }
 
 // containsTypeName checks whether name appears as a complete identifier in typeStr,
@@ -1492,7 +1523,9 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 		// <Name>Schema. Anonymous structs (PkgPath == "") and types with no
 		// name fall through to z.any() at the call site.
 		if elem.Name() != "" && elem.PkgPath() != "" {
-			return kind, elem.Name()
+			// Sanitize so a generic element type's schema/interface reference
+			// matches its (sanitized) declaration name.
+			return kind, sanitizeTSIdent(elem.Name())
 		}
 		return "", ""
 	}
@@ -1664,7 +1697,7 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		if t.PkgPath() == "" {
 			return "any"
 		}
-		return t.Name()
+		return sanitizeTSIdent(t.Name())
 	case reflect.Interface:
 		return "any"
 	default:

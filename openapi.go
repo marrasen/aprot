@@ -294,7 +294,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 
 	// Collect schemas into components
 	for t, schema := range g.schemas {
-		spec.Components.Schemas[t.Name()] = schema
+		spec.Components.Schemas[sanitizeTSIdent(t.Name())] = schema
 	}
 
 	return spec, nil
@@ -356,7 +356,7 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 		if _, exists := g.schemas[t]; !exists {
 			g.buildStructSchema(t)
 		}
-		return &JSONSchema{Ref: "#/components/schemas/" + t.Name()}
+		return &JSONSchema{Ref: "#/components/schemas/" + sanitizeTSIdent(t.Name())}
 	case reflect.Interface:
 		return &JSONSchema{}
 	default:
