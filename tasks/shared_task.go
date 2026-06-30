@@ -40,14 +40,16 @@ type taskManager struct {
 
 	throttles  map[string]*progressThrottle
 	progressMu sync.Mutex
+	hooks      *enableOptions
 }
 
-func newTaskManager(server *aprot.Server) *taskManager {
+func newTaskManager(server *aprot.Server, hooks *enableOptions) *taskManager {
 	return &taskManager{
 		server:    server,
 		broadcast: server.Broadcast,
 		tasks:     make(map[string]*taskNode),
 		throttles: make(map[string]*progressThrottle),
+		hooks:     hooks,
 	}
 }
 
@@ -71,6 +73,7 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 		manager:     tm,
 		ownerConnID: connID,
 		topLevel:    topLevel,
+		hooks:       tm.hooks,
 	}
 
 	tm.mu.Lock()

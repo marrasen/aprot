@@ -26,10 +26,11 @@ type requestDelivery struct {
 	nextID    atomic.Int64
 	rootMu    sync.Mutex // guards root; handlers may create tasks from worker goroutines
 	root      *taskNode  // lazily created implicit root
+	hooks     *enableOptions
 }
 
-func newRequestDelivery(conn *aprot.Conn, requestID string) *requestDelivery {
-	return &requestDelivery{conn: conn, requestID: requestID}
+func newRequestDelivery(conn *aprot.Conn, requestID string, hooks *enableOptions) *requestDelivery {
+	return &requestDelivery{conn: conn, requestID: requestID, hooks: hooks}
 }
 
 func (d *requestDelivery) sendSnapshot(_ *taskNode) {

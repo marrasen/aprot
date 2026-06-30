@@ -27,7 +27,7 @@ func setupTestServer(t *testing.T) (*aprot.Server, *taskManager) {
 	registry.RegisterPushEventFor(handler, TaskUpdateEvent{})
 
 	server := aprot.NewServer(registry)
-	tm := newTaskManager(server)
+	tm := newTaskManager(server, nil)
 	t.Cleanup(func() {
 		tm.stop()
 		server.Stop(context.Background()) //nolint:errcheck
@@ -675,7 +675,7 @@ func TestSharedSubTaskStandalone(t *testing.T) {
 func TestSharedSubTaskWithoutConnection(t *testing.T) {
 	// Supply a request delivery so the SubTask fallback has something to work with.
 	tc := newTestPushConn()
-	d := newRequestDelivery(tc.Conn, "req-1")
+	d := newRequestDelivery(tc.Conn, "req-1", nil)
 	ctx := withDelivery(context.Background(), d)
 
 	var innerCtx context.Context

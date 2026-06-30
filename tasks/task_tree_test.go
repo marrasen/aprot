@@ -79,7 +79,7 @@ func newTestPushConn() *aprot.TestPushConn {
 // newTestCtx returns a context that has a request delivery backed by a
 // TestPushConn.
 func newTestCtx(tc *aprot.TestPushConn) context.Context {
-	d := newRequestDelivery(tc.Conn, "req-1")
+	d := newRequestDelivery(tc.Conn, "req-1", nil)
 	return withDelivery(context.Background(), d)
 }
 

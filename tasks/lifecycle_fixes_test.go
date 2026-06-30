@@ -121,7 +121,7 @@ func TestEnsureRootConcurrentReturnsSameRoot(t *testing.T) {
 
 	for iter := 0; iter < iterations; iter++ {
 		tc := newTestPushConn()
-		d := newRequestDelivery(tc.Conn, "req-1")
+		d := newRequestDelivery(tc.Conn, "req-1", nil)
 
 		var wg sync.WaitGroup
 		start := make(chan struct{})
