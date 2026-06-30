@@ -1632,6 +1632,195 @@ func TestGenerateEmbeddedPointerStruct(t *testing.T) {
 	t.Logf("Generated TypeScript (pointer-embedded struct):\n%s", output)
 }
 
+// Invalid-identifier field name: a json tag like "my-field" is not a valid JS
+// identifier and must be emitted as a quoted key in both the TS interface and
+// the Zod schema, otherwise the generated module fails to parse.
+type WeirdKeyRequest struct {
+	MyField string `json:"my-field" validate:"required"`
+	Normal  string `json:"normal"`
+}
+
+type WeirdKeyHandlers struct{}
+
+func (h *WeirdKeyHandlers) Submit(ctx context.Context, req *WeirdKeyRequest) error {
+	return nil
+}
+
+func TestGenerateInvalidIdentifierFieldKey(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&WeirdKeyHandlers{})
+
+	results, err := NewGenerator(registry).WithOptions(GeneratorOptions{Mode: OutputVanilla, Zod: true}).Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	var iface, schema string
+	for name, content := range results {
+		if strings.HasSuffix(name, ".schema.ts") {
+			schema += content
+		} else {
+			iface += content
+		}
+	}
+
+	if !strings.Contains(iface, `"my-field": string;`) {
+		t.Errorf("interface should quote hyphenated key as \"my-field\": string;\n%s", iface)
+	}
+	if strings.Contains(iface, "my-field?:") || strings.Contains(iface, "my-field:") && !strings.Contains(iface, `"my-field":`) {
+		t.Error("interface emitted an unquoted hyphenated key")
+	}
+	if !strings.Contains(schema, `"my-field": z.string().min(1)`) {
+		t.Errorf("zod schema should quote hyphenated key\n%s", schema)
+	}
+}
+
+func TestGenerateInstantiatedGenericInterface(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&GenericBoxHandlers{})
+
+	var buf bytes.Buffer
+	if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	if strings.Contains(output, "Box[int]") {
+		t.Errorf("generated TS contains invalid identifier Box[int]\n%s", output)
+	}
+	if !strings.Contains(output, "export interface BoxInt") {
+		t.Errorf("expected sanitized interface BoxInt\n%s", output)
+	}
+	if !strings.Contains(output, "value: number;") {
+		t.Errorf("expected BoxInt to carry value: number\n%s", output)
+	}
+}
+
+// time.Duration has no default JSON representation in jsonv2 and fails at
+// runtime, so the generator should reject it at generation time unless an
+// explicit json `format:` option is present.
+type DurationRequest struct {
+	Timeout time.Duration `json:"timeout"`
+}
+
+type DurationHandlers struct{}
+
+func (h *DurationHandlers) Submit(ctx context.Context, req *DurationRequest) error { return nil }
+
+type DurationFormattedRequest struct {
+	Timeout time.Duration `json:"timeout,format:nano"`
+}
+
+type DurationFormattedHandlers struct{}
+
+func (h *DurationFormattedHandlers) Submit(ctx context.Context, req *DurationFormattedRequest) error {
+	return nil
+}
+
+func TestGenerateDurationErrors(t *testing.T) {
+	t.Run("bare duration errors", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.Register(&DurationHandlers{})
+
+		if _, err := NewGenerator(registry).Generate(); err == nil {
+			t.Fatal("expected Generate() to error on a bare time.Duration field")
+		} else if !strings.Contains(err.Error(), "time.Duration") {
+			t.Errorf("error should mention time.Duration, got: %v", err)
+		}
+
+		registry2 := NewRegistry()
+		registry2.Register(&DurationHandlers{})
+		var buf bytes.Buffer
+		if err := NewGenerator(registry2).GenerateTo(&buf); err == nil {
+			t.Error("expected GenerateTo() to error on a bare time.Duration field")
+		}
+	})
+
+	t.Run("formatted duration is allowed", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.Register(&DurationFormattedHandlers{})
+
+		if _, err := NewGenerator(registry).Generate(); err != nil {
+			t.Errorf("time.Duration with a format option should generate, got: %v", err)
+		}
+	})
+}
+
+// Reserved-word params: Go param names that are TypeScript reserved words
+// (new, class, function, …) produce a syntax error when emitted verbatim into
+// the generated client method signature. They must be sanitized.
+type ReservedParamHandlers struct{}
+
+func (h *ReservedParamHandlers) Pick(ctx context.Context, new string, class int, function bool) error {
+	_ = new
+	_ = class
+	_ = function
+	return nil
+}
+
+func TestGenerateReservedWordParams(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&ReservedParamHandlers{})
+
+	var buf bytes.Buffer
+	if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	for _, want := range []string{"new_: string", "class_: number", "function_: boolean"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("missing sanitized param %q\n%s", want, output)
+		}
+	}
+	// The unsanitized reserved word must not appear as a bare param.
+	for _, bad := range []string{"new: string", "class: number", "function: boolean"} {
+		if strings.Contains(output, bad) {
+			t.Errorf("emitted reserved word as bare param: %q", bad)
+		}
+	}
+}
+
+// Pointer-nullability test: a bare pointer field (no json omitempty) is always
+// present on the wire and carries null when nil, so it should be `T | null`
+// (required, nullable) rather than `?: T` (optional/absent). A pointer with
+// omitempty is genuinely optional and stays `?: T`.
+type PointerNullRequest struct {
+	Required  *string `json:"required"`            // bare pointer → string | null
+	Omittable *string `json:"omittable,omitempty"` // pointer + omitempty → optional
+	Plain     string  `json:"plain"`               // control
+}
+
+type PointerNullHandlers struct{}
+
+func (h *PointerNullHandlers) Submit(ctx context.Context, req *PointerNullRequest) error {
+	return nil
+}
+
+func TestGeneratePointerNullability(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&PointerNullHandlers{})
+
+	var buf bytes.Buffer
+	if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	checks := []struct {
+		want, desc string
+	}{
+		{"required: string | null;", "bare pointer is required and nullable"},
+		{"omittable?: string;", "pointer with omitempty stays optional, no null"},
+		{"plain: string;", "non-pointer control unchanged"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(output, c.want) {
+			t.Errorf("missing %q (%s)\n--- output ---\n%s", c.want, c.desc, output)
+		}
+	}
+}
+
 // Embedded struct with nested type that should still be collected
 type EmbeddedWithNestedType struct {
 	ID   int64 `json:"ID"`
@@ -2109,6 +2298,50 @@ func TestInferTypeFromMarshal(t *testing.T) {
 			}
 			if result.TSType != tc.wantType {
 				t.Errorf("expected TSType=%q, got %q", tc.wantType, result.TSType)
+			}
+		})
+	}
+}
+
+// Box is a generic struct used to exercise instantiated-generic codegen.
+type Box[T any] struct {
+	Value T `json:"value"`
+}
+
+type GenericBoxHandlers struct{}
+
+func (h *GenericBoxHandlers) GetBox(ctx context.Context) (*Box[int], error) {
+	return &Box[int]{Value: 1}, nil
+}
+
+func TestGoTypeToTSValidTypeScript(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		// json.RawMessage is a named []byte but carries arbitrary JSON; emitting
+		// number[] is wrong. It should be `unknown`.
+		{"json.RawMessage is unknown", reflect.TypeOf(json.RawMessage(nil)), "unknown"},
+		// Instantiated generics reflect as "Box[int]" — not a valid TS
+		// identifier. Sanitize to a valid name.
+		{"instantiated generic name", reflect.TypeOf(Box[int]{}), "BoxInt"},
+		// map[bool]T → Record<boolean, T> does not compile (boolean is not a
+		// valid index signature). jsonv2 encodes bool keys as "true"/"false".
+		{"map[bool] is valid record", reflect.TypeOf(map[bool]int(nil)), `Partial<Record<"true" | "false", number>>`},
+		// Regressions: existing map key handling is unchanged.
+		{"map[string] unchanged", reflect.TypeOf(map[string]int(nil)), "Record<string, number>"},
+		{"map[int] unchanged", reflect.TypeOf(map[int]string(nil)), "Record<number, string>"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := g.goTypeToTS(tc.typ)
+			if got != tc.want {
+				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
 			}
 		})
 	}

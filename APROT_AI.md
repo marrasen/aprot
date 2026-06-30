@@ -457,9 +457,18 @@ Auto-mapped in TS generation and unwrapped at runtime:
 - `sql.NullBool` → `boolean | null`
 - `sql.NullFloat64` → `number | null`
 - `sql.NullTime` → `string | null`
-- `sql.Null[T]` (generic) → `T | null`
+- `sql.Null[T]` (generic) → `T | null` — unwrapped at runtime for the common
+  `T` (`string`, `int`, `int64`, `int32`, `int16`, `float64`, `bool`,
+  `time.Time`); other instantiations fall back to the `{"V":…,"Valid":…}` object.
 
 Zod schemas mirror these as `T.nullable()`.
+
+Other type-mapping notes:
+- Bare pointer `*T` (no `json:,omitempty`) → `T | null` (always sent; null when nil). `*T` with `omitempty` stays optional `?: T`.
+- `map[bool]V` → `Partial<Record<"true" | "false", V>>` (boolean isn't a valid TS index type).
+- `json.RawMessage` → `unknown`.
+- `time.Duration` has no default JSON representation in the v2 encoder and is **rejected at generation time** — add a json format option (e.g. `json:"d,format:nano"`) or use a different type.
+- Field names and handler param names that aren't valid TS identifiers are quoted (`"my-field"`) or suffixed (`new_`) automatically.
 
 ## Naming Plugins
 

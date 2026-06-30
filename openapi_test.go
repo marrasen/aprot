@@ -82,6 +82,65 @@ func TestOpenAPIGenerator_ValidationConstraints(t *testing.T) {
 	}
 }
 
+func TestApplyValidateConstraints_KeywordsAndArrays(t *testing.T) {
+	t.Run("gt/lt use 3.0.3 boolean exclusive form", func(t *testing.T) {
+		s := &JSONSchema{Type: "integer"}
+		applyValidateConstraints(s, "gt=5,lt=10", reflect.TypeOf(0))
+		// In OpenAPI 3.0.3, exclusiveMinimum/Maximum are booleans paired with
+		// minimum/maximum — not the 3.1 numeric form.
+		if s.Minimum == nil || *s.Minimum != 5 {
+			t.Errorf("expected minimum=5, got %v", s.Minimum)
+		}
+		if s.ExclusiveMinimum == nil || !*s.ExclusiveMinimum {
+			t.Errorf("expected exclusiveMinimum=true, got %v", s.ExclusiveMinimum)
+		}
+		if s.Maximum == nil || *s.Maximum != 10 {
+			t.Errorf("expected maximum=10, got %v", s.Maximum)
+		}
+		if s.ExclusiveMaximum == nil || !*s.ExclusiveMaximum {
+			t.Errorf("expected exclusiveMaximum=true, got %v", s.ExclusiveMaximum)
+		}
+	})
+
+	t.Run("min/max on a slice map to minItems/maxItems", func(t *testing.T) {
+		s := &JSONSchema{Type: "array"}
+		applyValidateConstraints(s, "min=2,max=8", reflect.TypeOf([]string{}))
+		if s.MinItems == nil || *s.MinItems != 2 {
+			t.Errorf("expected minItems=2, got %v", s.MinItems)
+		}
+		if s.MaxItems == nil || *s.MaxItems != 8 {
+			t.Errorf("expected maxItems=8, got %v", s.MaxItems)
+		}
+		if s.Minimum != nil || s.Maximum != nil {
+			t.Errorf("array min/max must not set numeric minimum/maximum: %v %v", s.Minimum, s.Maximum)
+		}
+	})
+
+	t.Run("len on a slice maps to min/maxItems", func(t *testing.T) {
+		s := &JSONSchema{Type: "array"}
+		applyValidateConstraints(s, "len=3", reflect.TypeOf([]int{}))
+		if s.MinItems == nil || *s.MinItems != 3 || s.MaxItems == nil || *s.MaxItems != 3 {
+			t.Errorf("expected minItems=maxItems=3, got %v %v", s.MinItems, s.MaxItems)
+		}
+	})
+
+	t.Run("regression: string min/max stay length", func(t *testing.T) {
+		s := &JSONSchema{Type: "string"}
+		applyValidateConstraints(s, "min=2,max=5", reflect.TypeOf(""))
+		if s.MinLength == nil || *s.MinLength != 2 || s.MaxLength == nil || *s.MaxLength != 5 {
+			t.Errorf("expected minLength=2,maxLength=5, got %v %v", s.MinLength, s.MaxLength)
+		}
+	})
+
+	t.Run("regression: number min/max stay numeric", func(t *testing.T) {
+		s := &JSONSchema{Type: "integer"}
+		applyValidateConstraints(s, "min=2,max=5", reflect.TypeOf(0))
+		if s.Minimum == nil || *s.Minimum != 2 || s.Maximum == nil || *s.Maximum != 5 {
+			t.Errorf("expected minimum=2,maximum=5, got %v %v", s.Minimum, s.Maximum)
+		}
+	})
+}
+
 func TestOpenAPIGenerator_HTTPMethods(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterREST(&RESTHandlers{})

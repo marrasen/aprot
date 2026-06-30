@@ -613,12 +613,20 @@
 //   - int, float64, etc. → number
 //   - bool → boolean
 //   - []T → T[]
-//   - map[K]V → Record<K, V>
-//   - *T → T (optional field)
+//   - map[K]V → Record<K, V> (map[bool]V → Partial<Record<"true" | "false", V>>)
+//   - *T (json:,omitempty) → T (optional field); bare *T → T | null (always sent)
 //   - time.Time → string (RFC 3339)
-//   - sql.NullString → string | null (all sql.Null* types supported)
+//   - sql.NullString → string | null (all sql.Null* types supported). The
+//     generic sql.Null[T] is unwrapped at runtime for the common T (string,
+//     int, int64, int32, int16, float64, bool, time.Time); other
+//     instantiations fall back to the {"V":…,"Valid":…} object shape.
+//   - json.RawMessage → unknown
 //   - struct → interface
 //   - Registered enum → const object + union type
+//
+// time.Duration has no default JSON representation in the v2 encoder and is
+// rejected at generation time; add a json format option (e.g.
+// `json:"d,format:nano"`) or use a different type.
 //
 // # Wire Protocol
 //

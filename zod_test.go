@@ -207,6 +207,128 @@ func TestFieldToZod(t *testing.T) {
 	}
 }
 
+// TestFieldToZodOneof verifies that the oneof validate rule is honored rather
+// than silently dropped: a string oneof becomes z.enum([...]) and a numeric
+// oneof becomes a z.union of literals (or a single z.literal for one value),
+// matching go-playground's "value must be one of" semantics.
+func TestFieldToZodOneof(t *testing.T) {
+	tests := []struct {
+		name  string
+		field fieldData
+		want  string
+	}{
+		{"string oneof", fieldData{GoType: "string", Type: "string", ValidateTag: "oneof=red green blue"}, `z.enum(["red", "green", "blue"])`},
+		{"string oneof optional", fieldData{GoType: "string", Type: "string", Optional: true, ValidateTag: "oneof=red green"}, `z.enum(["red", "green"]).optional()`},
+		{"string oneof omitempty", fieldData{GoType: "string", Type: "string", ValidateTag: "omitempty,oneof=red green"}, `z.union([z.literal(""), z.enum(["red", "green"])])`},
+		{"string oneof nullable", fieldData{GoType: "struct", Type: "string | null", SQLNullKind: "string", ValidateTag: "oneof=red green"}, `z.enum(["red", "green"]).nullable()`},
+		{"string oneof with quote", fieldData{GoType: "string", Type: "string", ValidateTag: `oneof=a"b`}, `z.enum(["a\"b"])`},
+		{"int oneof", fieldData{GoType: "int", Type: "number", ValidateTag: "oneof=1 2 3"}, `z.union([z.literal(1), z.literal(2), z.literal(3)])`},
+		{"int oneof single", fieldData{GoType: "int", Type: "number", ValidateTag: "oneof=5"}, `z.literal(5)`},
+		{"int oneof optional", fieldData{GoType: "int", Type: "number", Optional: true, ValidateTag: "oneof=1 2"}, `z.union([z.literal(1), z.literal(2)]).optional()`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fieldToZod(tt.field, nil)
+			if got != tt.want {
+				t.Errorf("fieldToZod(%+v) = %q, want %q", tt.field, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFieldToZodKindAwareConstraints guards against emitting Zod chain methods
+// that don't exist for the base type: strings have no numeric .gt()/.lt()
+// comparators (only length via .min()/.max()), and z.record() exposes no
+// length/size constraint at all. Slices keep array-length .min()/.max().
+func TestFieldToZodKindAwareConstraints(t *testing.T) {
+	tests := []struct {
+		name  string
+		field fieldData
+		want  string
+	}{
+		// String gt/lt translate to inclusive length bounds, not invalid .gt()/.lt().
+		{"string gt", fieldData{GoType: "string", Type: "string", ValidateTag: "gt=5"}, "z.string().min(6)"},
+		{"string lt", fieldData{GoType: "string", Type: "string", ValidateTag: "lt=5"}, "z.string().max(4)"},
+		// Maps: size constraints have no z.record() equivalent — drop them.
+		{"map min dropped", fieldData{GoType: "map", Type: "Record<string, string>", ElemGoKind: "string", ValidateTag: "min=1"}, "z.record(z.string(), z.string())"},
+		{"map max dropped", fieldData{GoType: "map", Type: "Record<string, number>", ElemGoKind: "int", ValidateTag: "max=5"}, "z.record(z.string(), z.number().int())"},
+		// Slices keep array-length min/max (valid Zod) and translate gt/lt.
+		{"slice max kept", fieldData{GoType: "slice", Type: "string[]", ElemGoKind: "string", ValidateTag: "max=10"}, "z.array(z.string()).max(10)"},
+		{"slice gt", fieldData{GoType: "slice", Type: "number[]", ElemGoKind: "int", ValidateTag: "gt=2"}, "z.array(z.number().int()).min(3)"},
+		{"slice lt", fieldData{GoType: "slice", Type: "number[]", ElemGoKind: "int", ValidateTag: "lt=4"}, "z.array(z.number().int()).max(3)"},
+		// Numbers keep the real .gt()/.lt() comparators.
+		{"int gt kept", fieldData{GoType: "int", Type: "number", ValidateTag: "gt=2"}, "z.number().int().gt(2)"},
+		{"int lt kept", fieldData{GoType: "int", Type: "number", ValidateTag: "lt=9"}, "z.number().int().lt(9)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fieldToZod(tt.field, nil)
+			if got != tt.want {
+				t.Errorf("fieldToZod(%+v) = %q, want %q", tt.field, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFieldToZodEscaping guards against unescaped string injection into the
+// generated TypeScript. Enum string values and the params of refine-based
+// rules (contains/startswith/endswith) flow straight into a TS string literal;
+// a value containing a double quote or backslash must be escaped or it breaks
+// the generated module at parse time.
+func TestFieldToZodEscaping(t *testing.T) {
+	tests := []struct {
+		name  string
+		field fieldData
+		want  string
+	}{
+		// Enum value containing a double quote must be escaped.
+		{
+			"string enum with quote",
+			fieldData{GoType: "string", Type: "QuoteType", Enum: stringEnumFixture("Quote", `a"b`, "c")},
+			`z.enum(["a\"b", "c"])`,
+		},
+		// Enum value containing a backslash must be escaped.
+		{
+			"string enum with backslash",
+			fieldData{GoType: "string", Type: "PathType", Enum: stringEnumFixture("Path", `a\b`)},
+			`z.enum(["a\\b"])`,
+		},
+		// contains= param with a double quote must not break the refine literal.
+		{
+			"contains with quote",
+			fieldData{GoType: "string", Type: "string", ValidateTag: `contains=a"b`},
+			`z.string().refine(v => v.includes("a\"b"), { message: "must contain a\"b" })`,
+		},
+		// Plain contains stays byte-for-byte identical (backward compat).
+		{
+			"contains plain",
+			fieldData{GoType: "string", Type: "string", ValidateTag: `contains=foo`},
+			`z.string().refine(v => v.includes("foo"), { message: "must contain foo" })`,
+		},
+		{
+			"startswith with quote",
+			fieldData{GoType: "string", Type: "string", ValidateTag: `startswith=x"y`},
+			`z.string().refine(v => v.startsWith("x\"y"), { message: "must start with x\"y" })`,
+		},
+		{
+			"endswith with quote",
+			fieldData{GoType: "string", Type: "string", ValidateTag: `endswith=x"y`},
+			`z.string().refine(v => v.endsWith("x\"y"), { message: "must end with x\"y" })`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fieldToZod(tt.field, nil)
+			if got != tt.want {
+				t.Errorf("fieldToZod(%+v) = %q, want %q", tt.field, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildZodSchemas(t *testing.T) {
 	interfaces := []interfaceData{
 		{
@@ -234,6 +356,92 @@ func TestBuildZodSchemas(t *testing.T) {
 	if len(schemas[0].Fields) != 2 {
 		t.Errorf("expected 2 fields, got %d", len(schemas[0].Fields))
 	}
+}
+
+func TestBuildZodSchemas_RecursiveLazy(t *testing.T) {
+	// Self-referential and mutually recursive schemas must wrap the cyclic
+	// element reference in z.lazy(() => XSchema). Without it, the generated
+	// `const XSchema = z.object({ ... XSchema ... })` hits a temporal-dead-zone
+	// ReferenceError at module load. Non-cyclic references stay direct (and are
+	// ordered by the topological sort).
+	fieldZod := func(schemas []zodSchemaData, schema, field string) string {
+		for _, s := range schemas {
+			if s.Name != schema {
+				continue
+			}
+			for _, f := range s.Fields {
+				if f.Name == field {
+					return f.ZodType
+				}
+			}
+		}
+		return ""
+	}
+
+	t.Run("self reference", func(t *testing.T) {
+		interfaces := []interfaceData{
+			{
+				Name: "TreeNode",
+				Fields: []fieldData{
+					{Name: "label", GoType: "string", Type: "string", ValidateTag: "required,min=1"},
+					{Name: "children", GoType: "slice", Type: "TreeNode[]", ElemGoKind: "struct", ElemTypeName: "TreeNode", ValidateTag: "dive"},
+				},
+			},
+		}
+		got := fieldZod(buildZodSchemas(interfaces), "TreeNode", "children")
+		want := "z.array(z.lazy(() => TreeNodeSchema))"
+		if got != want {
+			t.Errorf("children = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("mutual recursion", func(t *testing.T) {
+		interfaces := []interfaceData{
+			{
+				Name: "Category",
+				Fields: []fieldData{
+					{Name: "name", GoType: "string", Type: "string", ValidateTag: "required"},
+					{Name: "items", GoType: "slice", Type: "Item[]", ElemGoKind: "struct", ElemTypeName: "Item", ValidateTag: "dive"},
+				},
+			},
+			{
+				Name: "Item",
+				Fields: []fieldData{
+					{Name: "title", GoType: "string", Type: "string", ValidateTag: "required"},
+					{Name: "category", GoType: "map", Type: "Record<string, Category>", ElemGoKind: "struct", ElemTypeName: "Category"},
+				},
+			},
+		}
+		schemas := buildZodSchemas(interfaces)
+		if got, want := fieldZod(schemas, "Category", "items"), "z.array(z.lazy(() => ItemSchema))"; got != want {
+			t.Errorf("Category.items = %q, want %q", got, want)
+		}
+		if got, want := fieldZod(schemas, "Item", "category"), "z.record(z.string(), z.lazy(() => CategorySchema))"; got != want {
+			t.Errorf("Item.category = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("non-cyclic stays direct", func(t *testing.T) {
+		interfaces := []interfaceData{
+			{
+				Name: "Parent",
+				Fields: []fieldData{
+					{Name: "tags", GoType: "slice", Type: "Leaf[]", ElemGoKind: "struct", ElemTypeName: "Leaf", ValidateTag: "dive"},
+				},
+			},
+			{
+				Name: "Leaf",
+				Fields: []fieldData{
+					{Name: "name", GoType: "string", Type: "string", ValidateTag: "required"},
+				},
+			},
+		}
+		got := fieldZod(buildZodSchemas(interfaces), "Parent", "tags")
+		want := "z.array(LeafSchema)"
+		if got != want {
+			t.Errorf("Parent.tags = %q, want %q (non-cyclic refs must not be lazy)", got, want)
+		}
+	})
 }
 
 func TestZodGeneration_Integration(t *testing.T) {

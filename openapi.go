@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"encoding/json"
+	"fmt"
 	"go/doc"
 	"reflect"
 	"sort"
@@ -76,23 +77,28 @@ type Components struct {
 
 // JSONSchema represents a JSON Schema object (subset used by OpenAPI 3.0).
 type JSONSchema struct {
-	Type                 string                 `json:"type,omitempty"`
-	Format               string                 `json:"format,omitempty"`
-	Properties           map[string]*JSONSchema `json:"properties,omitempty"`
-	Required             []string               `json:"required,omitempty"`
-	Items                *JSONSchema            `json:"items,omitempty"`
-	Enum                 []any                  `json:"enum,omitempty"`
-	Ref                  string                 `json:"$ref,omitempty"`
-	MinLength            *int                   `json:"minLength,omitempty"`
-	MaxLength            *int                   `json:"maxLength,omitempty"`
-	Minimum              *float64               `json:"minimum,omitempty"`
-	Maximum              *float64               `json:"maximum,omitempty"`
-	ExclusiveMinimum     *float64               `json:"exclusiveMinimum,omitempty"`
-	ExclusiveMaximum     *float64               `json:"exclusiveMaximum,omitempty"`
-	Pattern              string                 `json:"pattern,omitempty"`
-	Description          string                 `json:"description,omitempty"`
-	Nullable             bool                   `json:"nullable,omitempty"`
-	AdditionalProperties *JSONSchema            `json:"additionalProperties,omitempty"`
+	Type       string                 `json:"type,omitempty"`
+	Format     string                 `json:"format,omitempty"`
+	Properties map[string]*JSONSchema `json:"properties,omitempty"`
+	Required   []string               `json:"required,omitempty"`
+	Items      *JSONSchema            `json:"items,omitempty"`
+	Enum       []any                  `json:"enum,omitempty"`
+	Ref        string                 `json:"$ref,omitempty"`
+	MinLength  *int                   `json:"minLength,omitempty"`
+	MaxLength  *int                   `json:"maxLength,omitempty"`
+	MinItems   *int                   `json:"minItems,omitempty"`
+	MaxItems   *int                   `json:"maxItems,omitempty"`
+	Minimum    *float64               `json:"minimum,omitempty"`
+	Maximum    *float64               `json:"maximum,omitempty"`
+	// ExclusiveMinimum/Maximum are booleans in OpenAPI 3.0.3 (modifiers on
+	// minimum/maximum), unlike the numeric form added in 3.1. This spec
+	// declares 3.0.3, so they must be booleans paired with Minimum/Maximum.
+	ExclusiveMinimum     *bool       `json:"exclusiveMinimum,omitempty"`
+	ExclusiveMaximum     *bool       `json:"exclusiveMaximum,omitempty"`
+	Pattern              string      `json:"pattern,omitempty"`
+	Description          string      `json:"description,omitempty"`
+	Nullable             bool        `json:"nullable,omitempty"`
+	AdditionalProperties *JSONSchema `json:"additionalProperties,omitempty"`
 }
 
 // OpenAPIGenerator generates an OpenAPI 3.0 spec from a Registry.
@@ -202,7 +208,10 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 				if pt.Kind() == reflect.Struct {
 					bodyParam = p
 				} else {
-					name := "arg"
+					// Match the REST adapter's fallback naming (arg0, arg1, …)
+					// so OpenAPI path params line up with the actual routes and
+					// multiple unnamed params don't collide on a single "arg".
+					name := fmt.Sprintf("arg%d", i)
 					if i < len(astNames) {
 						name = astNames[i]
 					}
@@ -294,7 +303,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 
 	// Collect schemas into components
 	for t, schema := range g.schemas {
-		spec.Components.Schemas[t.Name()] = schema
+		spec.Components.Schemas[sanitizeTSIdent(t.Name())] = schema
 	}
 
 	return spec, nil
@@ -356,7 +365,7 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 		if _, exists := g.schemas[t]; !exists {
 			g.buildStructSchema(t)
 		}
-		return &JSONSchema{Ref: "#/components/schemas/" + t.Name()}
+		return &JSONSchema{Ref: "#/components/schemas/" + sanitizeTSIdent(t.Name())}
 	case reflect.Interface:
 		return &JSONSchema{}
 	default:
@@ -530,41 +539,59 @@ func applyValidateConstraints(schema *JSONSchema, tag string, t reflect.Type) {
 		kind = t.Elem().Kind()
 	}
 	isString := kind == reflect.String
+	isArray := kind == reflect.Slice || kind == reflect.Array
 
 	for _, r := range rules {
 		switch r.Tag {
 		case "min":
 			n := parseFloat(r.Param)
-			if isString {
+			switch {
+			case isString:
 				intN := int(n)
 				schema.MinLength = &intN
-			} else {
+			case isArray:
+				intN := int(n)
+				schema.MinItems = &intN
+			default:
 				schema.Minimum = &n
 			}
 		case "max":
 			n := parseFloat(r.Param)
-			if isString {
+			switch {
+			case isString:
 				intN := int(n)
 				schema.MaxLength = &intN
-			} else {
+			case isArray:
+				intN := int(n)
+				schema.MaxItems = &intN
+			default:
 				schema.Maximum = &n
 			}
 		case "len":
 			n := int(parseFloat(r.Param))
-			schema.MinLength = &n
-			schema.MaxLength = &n
+			if isArray {
+				schema.MinItems = &n
+				schema.MaxItems = &n
+			} else {
+				schema.MinLength = &n
+				schema.MaxLength = &n
+			}
 		case "gte":
 			n := parseFloat(r.Param)
 			schema.Minimum = &n
 		case "gt":
 			n := parseFloat(r.Param)
-			schema.ExclusiveMinimum = &n
+			tru := true
+			schema.Minimum = &n
+			schema.ExclusiveMinimum = &tru
 		case "lte":
 			n := parseFloat(r.Param)
 			schema.Maximum = &n
 		case "lt":
 			n := parseFloat(r.Param)
-			schema.ExclusiveMaximum = &n
+			tru := true
+			schema.Maximum = &n
+			schema.ExclusiveMaximum = &tru
 		case "email":
 			schema.Format = "email"
 		case "url":

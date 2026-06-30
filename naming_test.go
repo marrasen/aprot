@@ -20,6 +20,10 @@ func TestToKebabAcronyms(t *testing.T) {
 		{"ABCDef", "abc-def"},
 		{"AWord", "a-word"},
 		{"HTMLToJSON", "html-to-json"},
+		// Digit after an acronym run must not split the run: the trailing
+		// uppercase only starts a new word when followed by a lowercase letter.
+		{"API2Handlers", "api2-handlers"},
+		{"HTTP2Server", "http2-server"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -46,6 +50,9 @@ func TestToLowerCamelAcronyms(t *testing.T) {
 		{"ABCDef", "abcDef"},
 		{"Simple", "simple"},
 		{"getUser", "getUser"},
+		// Digit after a leading acronym run keeps the run intact.
+		{"API2Handlers", "api2Handlers"},
+		{"HTTP2Server", "http2Server"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

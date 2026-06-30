@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/go-json-experiment/json"
 )
@@ -59,7 +60,30 @@ var sqlNullMarshalers = json.JoinMarshalers(
 		}
 		return json.Marshal(v.Time)
 	}),
+	// Generic sql.Null[T] (Go 1.22+). A marshaler can only be registered for a
+	// concrete instantiation, so cover the common T; these unwrap to value-or-
+	// null to match the generated `T | null` codegen. Exotic instantiations
+	// (e.g. Null[CustomStruct]) fall back to the default {"V":…,"Valid":…}.
+	marshalGenericNull[string](),
+	marshalGenericNull[int](),
+	marshalGenericNull[int64](),
+	marshalGenericNull[int32](),
+	marshalGenericNull[int16](),
+	marshalGenericNull[float64](),
+	marshalGenericNull[bool](),
+	marshalGenericNull[time.Time](),
 )
+
+// marshalGenericNull builds a marshaler for sql.Null[T] that emits the unwrapped
+// value when Valid and null otherwise.
+func marshalGenericNull[T any]() *json.Marshalers {
+	return json.MarshalFunc(func(v sql.Null[T]) ([]byte, error) {
+		if !v.Valid {
+			return []byte("null"), nil
+		}
+		return json.Marshal(v.V)
+	})
+}
 
 // sqlNullUnmarshalers provides custom JSON unmarshalers for database/sql
 // nullable types. Since sql.Null* types do not implement json.Unmarshaler,
@@ -130,7 +154,30 @@ var sqlNullUnmarshalers = json.JoinUnmarshalers(
 		v.Valid = true
 		return json.Unmarshal(data, &v.Time)
 	}),
+	// Generic sql.Null[T] (Go 1.22+) for the common instantiations — accept the
+	// unwrapped value (or null), parallel to the concrete types above.
+	unmarshalGenericNull[string](),
+	unmarshalGenericNull[int](),
+	unmarshalGenericNull[int64](),
+	unmarshalGenericNull[int32](),
+	unmarshalGenericNull[int16](),
+	unmarshalGenericNull[float64](),
+	unmarshalGenericNull[bool](),
+	unmarshalGenericNull[time.Time](),
 )
+
+// unmarshalGenericNull builds an unmarshaler for sql.Null[T] that accepts the
+// unwrapped value or null.
+func unmarshalGenericNull[T any]() *json.Unmarshalers {
+	return json.UnmarshalFunc(func(data []byte, v *sql.Null[T]) error {
+		if string(data) == "null" {
+			v.Valid = false
+			return nil
+		}
+		v.Valid = true
+		return json.Unmarshal(data, &v.V)
+	})
+}
 
 // sqlNullOptions combines the marshal and unmarshal overrides for sql.Null*
 // types into a single Options value ready for json.Marshal / json.Unmarshal.

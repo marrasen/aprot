@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -316,6 +317,24 @@ type Generator struct {
 	collectedEnums map[reflect.Type]*EnumInfo // enums used by current handler
 	marshalCache   map[reflect.Type]*MarshalTSType
 	marshalChecked map[reflect.Type]bool
+	// genErrors accumulates generation-time errors (e.g. fields whose Go type
+	// has no working wire representation). Collected during interface building
+	// and surfaced by Generate/GenerateTo so callers fail at generation time
+	// rather than at runtime. Reset at the start of each generation.
+	genErrors []error
+}
+
+// recordGenError appends a generation-time error.
+func (g *Generator) recordGenError(err error) {
+	g.genErrors = append(g.genErrors, err)
+}
+
+// genError joins all accumulated generation-time errors, or returns nil.
+func (g *Generator) genError() error {
+	if len(g.genErrors) == 0 {
+		return nil
+	}
+	return errors.Join(g.genErrors...)
 }
 
 // NewGenerator creates a new TypeScript generator.
@@ -414,6 +433,20 @@ type fieldData struct {
 	// is a registered enum. Zod codegen uses it to emit the enum expression
 	// inside z.array(...) / z.record(...).
 	ElemEnum *EnumInfo
+	// Nullable is set when the field is a bare pointer without json omitempty:
+	// such a field is always present on the wire and carries null when nil, so
+	// its TypeScript type gets a `| null` and its Zod schema a .nullable().
+	// (A pointer *with* omitempty is omitted when nil, so it is optional, not
+	// nullable.) Set by collectInterfaceFields.
+	Nullable bool
+	// ElemLazy is set when the slice/map element references a generated schema
+	// that is part of a reference cycle (self-referential or mutually
+	// recursive). Zod codegen then wraps the element reference in
+	// z.lazy(() => XSchema) so the cyclic const is not dereferenced before it
+	// is initialized (which would be a temporal-dead-zone ReferenceError).
+	// Set by buildZodSchemas after cycle analysis; the per-field reflection
+	// pass leaves it false.
+	ElemLazy bool
 }
 
 type paramData struct {
@@ -456,6 +489,7 @@ type errorCodeData struct {
 //   - {handler-name}.ts: Handler-specific interfaces and methods for each handler group
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
+	g.genErrors = nil
 
 	// Phase 1: Pre-scan all groups to find types shared across 2+ groups.
 	// Shared types go into per-package .ts files; group-specific types stay in handler files.
@@ -688,6 +722,11 @@ func (g *Generator) Generate() (map[string]string, error) {
 	}
 	results["client.ts"] = baseBuf.String()
 
+	// Surface any generation-time errors before writing anything.
+	if err := g.genError(); err != nil {
+		return nil, err
+	}
+
 	// Run generate hooks
 	for _, hook := range g.registry.generateHooks {
 		hook(results, g.options.Mode)
@@ -712,6 +751,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 // GenerateTo writes TypeScript client code to a single writer.
 // This combines all handler groups into one file (legacy behavior).
 func (g *Generator) GenerateTo(w io.Writer) error {
+	g.genErrors = nil
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
@@ -772,7 +812,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			Name:        event.Name,
 			HandlerName: g.naming().HandlerName(event.Name),
 			HookName:    g.naming().HookName(event.Name),
-			DataType:    event.DataType.Name(),
+			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
 
@@ -791,6 +831,11 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	templateName := "client.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		templateName = "client-react.ts.tmpl"
+	}
+
+	// Surface any generation-time errors before emitting output.
+	if err := g.genError(); err != nil {
+		return err
 	}
 
 	// Execute template to a buffer so we can run hooks
@@ -868,7 +913,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 	})
 
 	for _, t := range types {
-		iface := interfaceData{Name: t.Name()}
+		iface := interfaceData{Name: sanitizeTSIdent(t.Name())}
 		iface.Fields = g.collectInterfaceFields(t)
 		data.Interfaces = append(data.Interfaces, iface)
 	}
@@ -891,7 +936,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 			Name:        event.Name,
 			HandlerName: g.naming().HandlerName(event.Name),
 			HookName:    g.naming().HookName(event.Name),
-			DataType:    event.DataType.Name(),
+			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
 
@@ -949,7 +994,7 @@ func (g *Generator) buildInterfaces() []interfaceData {
 
 	var ifaces []interfaceData
 	for _, t := range types {
-		iface := interfaceData{Name: t.Name()}
+		iface := interfaceData{Name: sanitizeTSIdent(t.Name())}
 		iface.Fields = g.collectInterfaceFields(t)
 		ifaces = append(ifaces, iface)
 	}
@@ -1025,6 +1070,65 @@ func tsObjectKey(s string) string {
 		return s
 	}
 	return strconv.Quote(s)
+}
+
+// tsReservedWords are JavaScript/TypeScript keywords and reserved words that
+// cannot be used as a bare parameter identifier in generated code. A Go param
+// whose name collides with one of these is renamed (see tsSafeParamName).
+var tsReservedWords = map[string]bool{
+	"break": true, "case": true, "catch": true, "class": true, "const": true,
+	"continue": true, "debugger": true, "default": true, "delete": true, "do": true,
+	"else": true, "enum": true, "export": true, "extends": true, "false": true,
+	"finally": true, "for": true, "function": true, "if": true, "import": true,
+	"in": true, "instanceof": true, "new": true, "null": true, "return": true,
+	"super": true, "switch": true, "this": true, "throw": true, "true": true,
+	"try": true, "typeof": true, "var": true, "void": true, "while": true,
+	"with": true, "implements": true, "interface": true, "let": true,
+	"package": true, "private": true, "protected": true, "public": true,
+	"static": true, "yield": true, "await": true,
+}
+
+// tsSafeParamName returns a parameter name safe to emit in generated TypeScript.
+// Names that collide with a reserved word, or that aren't valid JS identifiers,
+// are suffixed with "_" (parameter positions are matched by order in the
+// generated client, so the rename is purely cosmetic and stays consistent
+// across the signature, body, and call site).
+func tsSafeParamName(name string) string {
+	if tsReservedWords[name] || !isValidJSIdent(name) {
+		return name + "_"
+	}
+	return name
+}
+
+// sanitizeTSIdent converts a Go type name into a valid TypeScript identifier.
+// Instantiated generics reflect as names like "Box[int]" or "Pair[string,int]"
+// which are not valid TS identifiers; the bracketed type arguments are folded
+// into the name as TitleCased words ("BoxInt", "PairStringInt"). Names that are
+// already valid identifiers are returned unchanged. Applied consistently at
+// every emission site (interface declarations, type references, OpenAPI schema
+// names and $refs) so a generic type and its references stay in sync.
+func sanitizeTSIdent(name string) string {
+	if isValidJSIdent(name) {
+		return name
+	}
+	var b strings.Builder
+	newWord := false
+	for i, r := range name {
+		switch {
+		case r == '_' || r == '$' || unicode.IsLetter(r) || (i > 0 && unicode.IsDigit(r)):
+			if newWord {
+				r = unicode.ToUpper(r)
+				newWord = false
+			}
+			b.WriteRune(r)
+		default:
+			// Any other rune (brackets, commas, dots, slashes, spaces, '*')
+			// is a word separator that is dropped; the next letter starts a
+			// new TitleCased word.
+			newWord = true
+		}
+	}
+	return b.String()
 }
 
 // containsTypeName checks whether name appears as a complete identifier in typeStr,
@@ -1169,9 +1273,35 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 				continue
 			}
 		}
+		// time.Duration has no default JSON representation in jsonv2 and fails
+		// at runtime (both marshal and unmarshal) unless an explicit json
+		// `format:` option is given. Fail at generation time instead so the
+		// developer learns of it up front rather than on the wire.
+		if dt := field.Type; dt != nil {
+			ft := dt
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.PkgPath() == "time" && ft.Name() == "Duration" && jsonFormatOption(field) == "" {
+				g.recordGenError(fmt.Errorf("%s.%s: time.Duration has no default JSON representation and fails at runtime; add a json format option (e.g. `json:\"%s,format:nano\"`) or use a different type", t.Name(), field.Name, g.getJSONName(field)))
+			}
+		}
+
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		goType := goKindString(field.Type)
 		tsType := g.goTypeToTS(field.Type)
+		optional := g.isOptional(field)
+		// A bare pointer (no json omitempty) is always serialized — as null when
+		// nil — so it is required and nullable, not absent. Reflect that in both
+		// the TS type (`| null`) and the optionality flag.
+		nullable := false
+		if field.Type.Kind() == reflect.Ptr && !strings.Contains(field.Tag.Get("json"), "omitempty") {
+			nullable = true
+			optional = false
+			if !strings.HasSuffix(tsType, " | null") {
+				tsType += " | null"
+			}
+		}
 		if isByteSlice(field.Type) {
 			// go-json-experiment/json v2 per-field `format:` tag (issue
 			// #174). A tag value wins over the issue #174 default — it can
@@ -1197,9 +1327,13 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		fields = append(fields, fieldData{
-			Name:         g.getJSONName(field),
+			// tsObjectKey quotes names that aren't valid JS identifiers (e.g.
+			// json:"my-field") so both the TS interface and the Zod schema emit
+			// a syntactically valid key.
+			Name:         tsObjectKey(g.getJSONName(field)),
 			Type:         tsType,
-			Optional:     g.isOptional(field),
+			Optional:     optional,
+			Nullable:     nullable,
 			GoType:       goType,
 			ValidateTag:  field.Tag.Get("validate"),
 			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
@@ -1389,7 +1523,9 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 		// <Name>Schema. Anonymous structs (PkgPath == "") and types with no
 		// name fall through to z.any() at the call site.
 		if elem.Name() != "" && elem.PkgPath() != "" {
-			return kind, elem.Name()
+			// Sanitize so a generic element type's schema/interface reference
+			// matches its (sanitized) declaration name.
+			return kind, sanitizeTSIdent(elem.Name())
 		}
 		return "", ""
 	}
@@ -1521,6 +1657,12 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		return tsType
 	}
 
+	// json.RawMessage is a named []byte but carries arbitrary embedded JSON, so
+	// number[] (the named-byte-slice default) is wrong. Type it as `unknown`.
+	if t.PkgPath() == "encoding/json" && t.Name() == "RawMessage" {
+		return "unknown"
+	}
+
 	switch t.Kind() {
 	case reflect.String:
 		return "string"
@@ -1540,8 +1682,14 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		}
 		return elemType + "[]"
 	case reflect.Map:
-		keyType := g.goTypeToTS(t.Key())
 		valType := g.goTypeToTS(t.Elem())
+		// boolean is not a valid TypeScript index signature, so Record<boolean,
+		// T> doesn't compile. jsonv2 encodes bool map keys as the strings
+		// "true"/"false", so model them as an optional string-literal record.
+		if t.Key().Kind() == reflect.Bool {
+			return `Partial<Record<"true" | "false", ` + valType + ">>"
+		}
+		keyType := g.goTypeToTS(t.Key())
 		return "Record<" + keyType + ", " + valType + ">"
 	case reflect.Ptr:
 		return g.goTypeToTS(t.Elem())
@@ -1549,7 +1697,7 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		if t.PkgPath() == "" {
 			return "any"
 		}
-		return t.Name()
+		return sanitizeTSIdent(t.Name())
 	case reflect.Interface:
 		return "any"
 	default:
@@ -1595,6 +1743,7 @@ func (g *Generator) buildParamData(info *HandlerInfo, meta *sourceMeta) []paramD
 		if i < len(astNames) {
 			name = astNames[i]
 		}
+		name = tsSafeParamName(name)
 		tsType := g.goTypeToTS(p.Type)
 		if p.Variadic {
 			tsType = tsType + "[]"
