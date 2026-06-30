@@ -143,6 +143,30 @@ aprot.OnStreamComplete(ctx, func(err error, items int) {
 
 `OnStreamComplete` is a no-op on unary contexts, so the same middleware works for both kinds.
 
+### Logging request params
+
+`req.Params` is the raw JSON wire payload (`jsontext.Value`) — log it directly with `%s`. Two pitfalls:
+
+- **Secrets leak.** Login / API-key / token handlers will dump plaintext credentials unless you redact.
+- **Params are positional.** Wire format is a JSON array `[arg0, arg1, ...]` in source order. For `Login(username, password string)` the wire is `["alice","hunter2"]` — no `password` key to match on, so key-based redaction doesn't help. Use a method skip list instead.
+
+The vanilla example ships a reference logger with both strategies — copy it as a starting point:
+
+```go
+// example/vanilla/api/middleware.go
+server.Use(api.LoggingMiddleware(api.DefaultLoggingOptions()))
+
+// or customize:
+server.Use(api.LoggingMiddleware(api.LoggingOptions{
+    LogParams:   true,
+    RedactKeys:  []string{"password", "token", "secret", "api_key", "authorization"},
+    SkipMethods: []string{"PublicHandlers.Login"}, // entire params hidden
+    MaxParamLen: 1024,
+}))
+```
+
+Behavior: `RedactKeys` matches object keys case-insensitively and recurses into nested objects/arrays, replacing the value with `"[REDACTED]"`. `SkipMethods` (fully-qualified `Struct.Method`) replaces the entire params field with `[REDACTED]`. `MaxParamLen` truncates over-long JSON with `...(truncated)`. The zero `LoggingOptions{}` (or no arg) keeps the original method/duration-only line.
+
 ## Connection Lifecycle
 
 ```go
