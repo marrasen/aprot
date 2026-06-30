@@ -1675,6 +1675,56 @@ func TestGenerateInvalidIdentifierFieldKey(t *testing.T) {
 	}
 }
 
+// time.Duration has no default JSON representation in jsonv2 and fails at
+// runtime, so the generator should reject it at generation time unless an
+// explicit json `format:` option is present.
+type DurationRequest struct {
+	Timeout time.Duration `json:"timeout"`
+}
+
+type DurationHandlers struct{}
+
+func (h *DurationHandlers) Submit(ctx context.Context, req *DurationRequest) error { return nil }
+
+type DurationFormattedRequest struct {
+	Timeout time.Duration `json:"timeout,format:nano"`
+}
+
+type DurationFormattedHandlers struct{}
+
+func (h *DurationFormattedHandlers) Submit(ctx context.Context, req *DurationFormattedRequest) error {
+	return nil
+}
+
+func TestGenerateDurationErrors(t *testing.T) {
+	t.Run("bare duration errors", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.Register(&DurationHandlers{})
+
+		if _, err := NewGenerator(registry).Generate(); err == nil {
+			t.Fatal("expected Generate() to error on a bare time.Duration field")
+		} else if !strings.Contains(err.Error(), "time.Duration") {
+			t.Errorf("error should mention time.Duration, got: %v", err)
+		}
+
+		registry2 := NewRegistry()
+		registry2.Register(&DurationHandlers{})
+		var buf bytes.Buffer
+		if err := NewGenerator(registry2).GenerateTo(&buf); err == nil {
+			t.Error("expected GenerateTo() to error on a bare time.Duration field")
+		}
+	})
+
+	t.Run("formatted duration is allowed", func(t *testing.T) {
+		registry := NewRegistry()
+		registry.Register(&DurationFormattedHandlers{})
+
+		if _, err := NewGenerator(registry).Generate(); err != nil {
+			t.Errorf("time.Duration with a format option should generate, got: %v", err)
+		}
+	})
+}
+
 // Reserved-word params: Go param names that are TypeScript reserved words
 // (new, class, function, …) produce a syntax error when emitted verbatim into
 // the generated client method signature. They must be sanitized.

@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -316,6 +317,24 @@ type Generator struct {
 	collectedEnums map[reflect.Type]*EnumInfo // enums used by current handler
 	marshalCache   map[reflect.Type]*MarshalTSType
 	marshalChecked map[reflect.Type]bool
+	// genErrors accumulates generation-time errors (e.g. fields whose Go type
+	// has no working wire representation). Collected during interface building
+	// and surfaced by Generate/GenerateTo so callers fail at generation time
+	// rather than at runtime. Reset at the start of each generation.
+	genErrors []error
+}
+
+// recordGenError appends a generation-time error.
+func (g *Generator) recordGenError(err error) {
+	g.genErrors = append(g.genErrors, err)
+}
+
+// genError joins all accumulated generation-time errors, or returns nil.
+func (g *Generator) genError() error {
+	if len(g.genErrors) == 0 {
+		return nil
+	}
+	return errors.Join(g.genErrors...)
 }
 
 // NewGenerator creates a new TypeScript generator.
@@ -470,6 +489,7 @@ type errorCodeData struct {
 //   - {handler-name}.ts: Handler-specific interfaces and methods for each handler group
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
+	g.genErrors = nil
 
 	// Phase 1: Pre-scan all groups to find types shared across 2+ groups.
 	// Shared types go into per-package .ts files; group-specific types stay in handler files.
@@ -702,6 +722,11 @@ func (g *Generator) Generate() (map[string]string, error) {
 	}
 	results["client.ts"] = baseBuf.String()
 
+	// Surface any generation-time errors before writing anything.
+	if err := g.genError(); err != nil {
+		return nil, err
+	}
+
 	// Run generate hooks
 	for _, hook := range g.registry.generateHooks {
 		hook(results, g.options.Mode)
@@ -726,6 +751,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 // GenerateTo writes TypeScript client code to a single writer.
 // This combines all handler groups into one file (legacy behavior).
 func (g *Generator) GenerateTo(w io.Writer) error {
+	g.genErrors = nil
 	// Collect all types from all groups
 	for _, group := range g.registry.Groups() {
 		for _, info := range group.Handlers {
@@ -805,6 +831,11 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	templateName := "client.ts.tmpl"
 	if g.options.Mode == OutputReact {
 		templateName = "client-react.ts.tmpl"
+	}
+
+	// Surface any generation-time errors before emitting output.
+	if err := g.genError(); err != nil {
+		return err
 	}
 
 	// Execute template to a buffer so we can run hooks
@@ -1211,6 +1242,20 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 				continue
 			}
 		}
+		// time.Duration has no default JSON representation in jsonv2 and fails
+		// at runtime (both marshal and unmarshal) unless an explicit json
+		// `format:` option is given. Fail at generation time instead so the
+		// developer learns of it up front rather than on the wire.
+		if dt := field.Type; dt != nil {
+			ft := dt
+			if ft.Kind() == reflect.Ptr {
+				ft = ft.Elem()
+			}
+			if ft.PkgPath() == "time" && ft.Name() == "Duration" && jsonFormatOption(field) == "" {
+				g.recordGenError(fmt.Errorf("%s.%s: time.Duration has no default JSON representation and fails at runtime; add a json format option (e.g. `json:\"%s,format:nano\"`) or use a different type", t.Name(), field.Name, g.getJSONName(field)))
+			}
+		}
+
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		goType := goKindString(field.Type)
 		tsType := g.goTypeToTS(field.Type)
