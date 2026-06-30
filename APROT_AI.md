@@ -47,6 +47,7 @@ gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 })
 gen.Generate()
 ```
+Output is split: `client.ts` (base), one file per handler group, and a `{pkg}.ts` file per Go package for types/enums shared across groups. If a package's shared file would collide with a handler file (package `settings` + handler `Settings` both → `settings.ts`), the shared file is emitted as `{pkg}.types.ts` instead so neither silently overwrites the other.
 
 ### 4. Progress & Tasks
 - Simple: `aprot.Progress(ctx).Update(current, total, message)`.

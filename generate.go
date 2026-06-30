@@ -573,6 +573,27 @@ func (g *Generator) Generate() (map[string]string, error) {
 	}
 	sort.Strings(sortedPkgs)
 
+	// Shared package files live in the same flat output directory as handler
+	// files. If a package's short name resolves to the same file as a handler
+	// (e.g. package "settings" + handler "Settings" both -> "settings.ts"), the
+	// handler file — written later — would silently overwrite the shared file,
+	// dropping its type/enum definitions and leaving every referencing file
+	// importing a type nobody defines (issue #206). Give any colliding shared
+	// file a distinct "{pkg}.types" base instead. A kebab-cased handler file
+	// name can never contain a dot, so the alternate base is collision-free.
+	handlerFileNames := make(map[string]bool)
+	for _, group := range g.registry.Groups() {
+		handlerFileNames[g.naming().FileName(group.Name)] = true
+	}
+	pkgBase := make(map[string]string, len(sortedPkgs))
+	for _, pkg := range sortedPkgs {
+		base := pkg
+		if handlerFileNames[base] {
+			base = pkg + ".types"
+		}
+		pkgBase[pkg] = base
+	}
+
 	// Pass 1: build pkgData for every shared package and accumulate
 	// sharedTypeNames across all of them. Rendering is deferred so that Pass 2
 	// can resolve cross-package references using the complete name map —
@@ -598,12 +619,12 @@ func (g *Generator) Generate() (map[string]string, error) {
 
 		pkgData := &templateData{
 			StructName: pkg,
-			FileName:   pkg + ".ts",
+			FileName:   pkgBase[pkg] + ".ts",
 		}
 		pkgData.Interfaces = g.buildInterfaces()
 		pkgData.Enums = g.buildEnums()
 
-		module := "./" + pkg
+		module := "./" + pkgBase[pkg]
 		for _, iface := range pkgData.Interfaces {
 			sharedTypeNames[iface.Name] = module
 		}
@@ -619,7 +640,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// are excluded so a file never imports from itself.
 	for _, pkg := range sortedPkgs {
 		pkgData := pkgDataByPkg[pkg]
-		selfModule := "./" + pkg
+		selfModule := "./" + pkgBase[pkg]
 		selfNames := make(map[string]bool, len(pkgData.Interfaces)+len(pkgData.Enums))
 		for _, iface := range pkgData.Interfaces {
 			selfNames[iface.Name] = true
