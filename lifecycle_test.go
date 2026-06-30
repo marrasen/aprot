@@ -431,6 +431,41 @@ func TestRegisterRequestIDCollisionCancelsPrevious(t *testing.T) {
 	}
 }
 
+// When a shadowed request unwinds after its replacement (same ID) has been
+// registered, its deferred unregister must not delete the replacement's cancel
+// func. Otherwise the replacement can no longer be canceled via cancel,
+// unsubscribe, or connection-close bookkeeping, leaking its goroutine until it
+// finishes naturally and stalling graceful shutdown. (#225)
+func TestUnregisterRequestKeepsReplacement(t *testing.T) {
+	tc := NewTestPushConn(2)
+	c := tc.Conn
+
+	first := func(cause error) {}
+	c.registerRequest("dup", first)
+
+	replacementCanceled := false
+	replacement := func(cause error) { replacementCanceled = true }
+	c.registerRequest("dup", replacement)
+
+	// The shadowed (first) handler unwinds and runs its deferred unregister
+	// with its own cancel func. This must be a no-op because the map now holds
+	// the replacement.
+	c.unregisterRequest("dup", first)
+
+	c.mu.Lock()
+	got, exists := c.requests["dup"]
+	c.mu.Unlock()
+	if !exists {
+		t.Fatal("replacement request was unregistered by the shadowed handler's deferred unregister")
+	}
+
+	// The retained entry must be the replacement, and canceling it must work.
+	got(ErrClientCanceled)
+	if !replacementCanceled {
+		t.Error("retained cancel func is not the replacement's")
+	}
+}
+
 // SetUserID racing a disconnect (disassociateUser) must not be a data race on
 // Conn.userID. This is primarily a guard for `go test -race` in CI; it should
 // always pass otherwise. (#207 P2)
