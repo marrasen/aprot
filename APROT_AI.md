@@ -53,6 +53,11 @@ gen.Generate()
 - Hierarchical: `tasks.SubTask(ctx, title, fn)`.
 - Server-wide: `tasks.StartTask[Meta](ctx, title, tasks.Shared())`. Start it on `context.WithoutCancel(ctx)` for a fire-and-forget task that outlives the handler — then the goroutine must finish it via `task.Close()` / `task.Fail()` / `task.Err()`.
 - Enable: `tasks.Enable(registry)` before generation/serving.
+- Lifecycle middleware (opt-in): `tasks.Enable(registry, tasks.WithTaskMiddleware(mw))`.
+  - `TaskMiddleware = func(ctx context.Context, info TaskInfo, next func(context.Context) error) error` — same shape as `aprot.Middleware`. Decorate ctx, call next, observe err. The decorated ctx propagates to the task body and all nested subtasks.
+  - `TaskInfo`: `{ID, Title, ParentID string}` (ParentID empty for root tasks).
+  - For scope-based tasks (`SubTask`, `SharedSubTask`) the middleware runs synchronously around fn. For manual-lifecycle tasks (`StartTask`, `OutputWriter`, `WriterProgress`, `Task.SubTask`, `TaskSub.SubTask`) the middleware runs in a dedicated goroutine; `next()` blocks until `Close`/`Fail` is called on the returned task handle. Cancellation surfaces as `err.Error() == "canceled"`.
+  - Subtasks created via `Task.SubTask` (no ctx parameter) inherit the parent's middleware ctx, so logger decorations chain through nested calls.
 
 ## Handlers
 

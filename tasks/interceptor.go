@@ -15,7 +15,7 @@ func taskMiddleware(tm *taskManager) aprot.Middleware {
 			if conn == nil {
 				return next(ctx, req)
 			}
-			d := newRequestDelivery(conn, req.ID)
+			d := newRequestDelivery(conn, req.ID, tm.hooks)
 			ctx = withDelivery(ctx, d)
 			slot := &taskSlot{}
 			ctx = withTaskSlot(ctx, slot)
