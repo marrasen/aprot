@@ -13,6 +13,60 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestNewServer_ClampsPongTimeout(t *testing.T) {
+	tests := []struct {
+		name            string
+		ping, pong      time.Duration
+		wantPongAtLeast time.Duration // 0 means "don't assert a lower bound"
+		wantPongExact   time.Duration // 0 means "don't assert exact"
+	}{
+		{
+			name:            "pong below ping is clamped above ping",
+			ping:            30 * time.Second,
+			pong:            10 * time.Second,
+			wantPongAtLeast: 30*time.Second + time.Nanosecond,
+		},
+		{
+			name:            "pong equal to ping is clamped above ping",
+			ping:            30 * time.Second,
+			pong:            30 * time.Second,
+			wantPongAtLeast: 30*time.Second + time.Nanosecond,
+		},
+		{
+			name:          "valid pong is left untouched",
+			ping:          30 * time.Second,
+			pong:          90 * time.Second,
+			wantPongExact: 90 * time.Second,
+		},
+		{
+			name:          "disabled keepalive is not clamped",
+			ping:          -1,
+			pong:          5 * time.Second,
+			wantPongExact: 5 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewServer(NewRegistry(), ServerOptions{PingInterval: tt.ping, PongTimeout: tt.pong})
+			defer s.Stop(context.Background())
+
+			got := s.options.PongTimeout
+			if tt.wantPongExact != 0 && got != tt.wantPongExact {
+				t.Errorf("PongTimeout = %v, want exactly %v", got, tt.wantPongExact)
+			}
+			if tt.wantPongAtLeast != 0 {
+				if got < tt.wantPongAtLeast {
+					t.Errorf("PongTimeout = %v, want >= %v (must exceed PingInterval %v)", got, tt.wantPongAtLeast, s.options.PingInterval)
+				}
+				if got <= s.options.PingInterval {
+					t.Errorf("PongTimeout %v must exceed PingInterval %v", got, s.options.PingInterval)
+				}
+			}
+		})
+	}
+}
+
 // userConnCount returns the number of connections tracked for a user.
 func userConnCount(s *Server, userID string) int {
 	s.mu.RLock()
