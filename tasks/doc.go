@@ -162,5 +162,17 @@
 // # Cancellation
 //
 // Clients can cancel shared tasks via the generated CancelTask handler.
-// On the server side, use [CancelSharedTask] directly.
+// On the server side, use [CancelSharedTask] directly. Cancellation is
+// owner-scoped: only the connection that started a task may cancel it; any
+// other caller is refused with CodeForbidden. (Internal callers that already
+// hold the task can still cancel it directly via the task handle.)
+//
+// # REST and other transports without a client channel
+//
+// [StartTask] and the Shared variant need a delivery channel (WebSocket/SSE)
+// to push task state. On transports that have none — notably the REST
+// adapter, which has no connection or task manager on the context — they
+// return a usable no-op [Task] rather than nil, so handler code written for
+// WebSocket (Progress, Output, SetMeta, Close, …) runs without panicking;
+// the task state simply isn't delivered anywhere.
 package tasks

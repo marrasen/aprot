@@ -727,7 +727,10 @@ func TestSharedSubTaskRoutesThroughSharedContext(t *testing.T) {
 func TestCancelSharedTaskViaAPI(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	ctx := withTaskManager(context.Background(), tm)
+	const ownerID uint64 = 1
+	// The cancel API is owner-scoped: the request must carry the owning
+	// connection.
+	ctx := withTaskManager(aprot.WithTestConnection(context.Background(), ownerID), tm)
 
 	// Unknown task should return an error.
 	err := CancelSharedTask(ctx, "nonexistent")
@@ -735,8 +738,8 @@ func TestCancelSharedTaskViaAPI(t *testing.T) {
 		t.Error("expected error for unknown task ID, got nil")
 	}
 
-	// Known running task should be canceled successfully.
-	node := tm.create("cancel-api", 1, true, context.Background())
+	// Known running task owned by the caller should be canceled successfully.
+	node := tm.create("cancel-api", ownerID, true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()

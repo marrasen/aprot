@@ -295,14 +295,27 @@ func StartTask[M any](ctx context.Context, title string, opts ...TaskOption) (co
 	return startRequestTask[M](ctx, title)
 }
 
+// newDetachedTask returns a usable task backed by a no-op delivery, for cases
+// where there is no client to deliver to (e.g. the REST path). Callers can use
+// the returned task normally; its updates simply go nowhere.
+func newDetachedTask[M any](ctx context.Context, title string) (context.Context, *Task[M]) {
+	node := &taskNode{
+		delivery: &noopDelivery{},
+		id:       "t0",
+		title:    title,
+		status:   TaskNodeStatusRunning,
+	}
+	return ctx, &Task[M]{node: node}
+}
+
 func startRequestTask[M any](ctx context.Context, title string) (context.Context, *Task[M]) {
 	d := deliveryFromContext(ctx)
 	if d == nil {
-		return ctx, nil
+		return newDetachedTask[M](ctx, title)
 	}
 	rd, ok := d.(*requestDelivery)
 	if !ok {
-		return ctx, nil
+		return newDetachedTask[M](ctx, title)
 	}
 
 	root := ensureRoot(rd)
@@ -332,11 +345,13 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 func startSharedTask[M any](ctx context.Context, title string) (context.Context, *Task[M]) {
 	conn := aprot.Connection(ctx)
 	if conn == nil {
-		return ctx, nil
+		// No connection (e.g. REST path): a shared task can't be broadcast, so
+		// degrade to a detached no-op task rather than returning nil.
+		return newDetachedTask[M](ctx, title)
 	}
 	tm := taskManagerFromContext(ctx)
 	if tm == nil {
-		return ctx, nil
+		return newDetachedTask[M](ctx, title)
 	}
 	node := tm.create(title, conn.ID(), true, ctx)
 	tm.broadcastNow() // first message shows CREATED
@@ -384,14 +399,14 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
 
-	childCtx := withDelivery(node.ctx, node.delivery)
-	childCtx = withTaskNode(childCtx, node)
-
 	// Run fn directly under the shared node. We deliberately do not delegate
 	// to SubTask here: that would create a redundant child node carrying the
 	// same title and run the task middleware a second time for the same
 	// logical task. fn still sees the shared node on its context, so nested
 	// SubTask / Output / TaskProgress calls attach to it as before.
+	childCtx := withDelivery(node.ctx, node.delivery)
+	childCtx = withTaskNode(childCtx, node)
+
 	return node.runScoped(childCtx, func(scopedCtx context.Context) error {
 		err := fn(scopedCtx)
 		if err != nil {
@@ -403,14 +418,22 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	})
 }
 
-// CancelSharedTask cancels a shared task by ID.
+// CancelSharedTask cancels a shared task by ID. Only the connection that
+// created the task may cancel it; any other caller (including one with no
+// connection, such as the REST path) is refused with CodeForbidden. The same
+// error is returned whether the task is missing or owned by someone else, so a
+// caller can't probe for the existence of other clients' tasks.
 func CancelSharedTask(ctx context.Context, taskID string) error {
 	tm := taskManagerFromContext(ctx)
 	if tm == nil {
 		return aprot.NewError(aprot.CodeInternalError, "tasks not enabled")
 	}
-	if !tm.cancelTask(taskID) {
-		return aprot.NewError(aprot.CodeInvalidParams, "task not found: "+taskID)
+	conn := aprot.Connection(ctx)
+	if conn == nil {
+		return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
+	}
+	if !tm.cancelTaskOwnedBy(taskID, conn.ID()) {
+		return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
 	}
 	return nil
 }

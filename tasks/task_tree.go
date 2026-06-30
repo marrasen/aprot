@@ -383,6 +383,23 @@ func (n *taskNode) IsShared() bool {
 	return n.delivery.isShared()
 }
 
+// collectIDs appends this node's descendant ids (depth-first) to acc and
+// returns the result. The node's own id is not appended — callers seed acc with
+// it. Node ids are assigned once at creation and never mutated, so they are
+// safe to read without the node lock; only the children slice is guarded.
+func (n *taskNode) collectIDs(acc []string) []string {
+	n.mu.Lock()
+	children := make([]*taskNode, len(n.children))
+	copy(children, n.children)
+	n.mu.Unlock()
+
+	for _, child := range children {
+		acc = append(acc, child.id)
+		acc = child.collectIDs(acc)
+	}
+	return acc
+}
+
 // sharedSnapshot returns a SharedTaskState for this node.
 func (n *taskNode) sharedSnapshot() SharedTaskState {
 	n.mu.Lock()
@@ -410,16 +427,20 @@ func (n *taskNode) sharedSnapshotForConn(connID uint64) SharedTaskState {
 }
 
 // ensureRoot lazily creates an implicit root node for a request delivery.
+// Handlers may create tasks from multiple worker goroutines, so creation is
+// guarded: without the lock two callers could each install a root and one's
+// subtree would be silently lost.
 func ensureRoot(d *requestDelivery) *taskNode {
-	if d.root != nil {
-		return d.root
-	}
-	d.root = &taskNode{
-		delivery: d,
-		id:       "root",
-		title:    "",
-		status:   TaskNodeStatusRunning,
-		hooks:    d.hooks,
+	d.rootMu.Lock()
+	defer d.rootMu.Unlock()
+	if d.root == nil {
+		d.root = &taskNode{
+			delivery: d,
+			id:       "root",
+			title:    "",
+			status:   TaskNodeStatusRunning,
+			hooks:    d.hooks,
+		}
 	}
 	return d.root
 }

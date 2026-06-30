@@ -58,6 +58,8 @@ gen.Generate()
   - `TaskInfo`: `{ID, Title, ParentID string}` (ParentID empty for root tasks).
   - For scope-based tasks (`SubTask`, `SharedSubTask`) the middleware runs synchronously around fn. For manual-lifecycle tasks (`StartTask`, `OutputWriter`, `WriterProgress`, `Task.SubTask`, `TaskSub.SubTask`) the middleware runs in a dedicated goroutine; `next()` blocks until `Close`/`Fail` is called on the returned task handle. Cancellation surfaces as `err.Error() == "canceled"`.
   - Subtasks created via `Task.SubTask` (no ctx parameter) inherit the parent's middleware ctx, so logger decorations chain through nested calls.
+- Cancel is owner-only: `tasks.CancelSharedTask(ctx, id)` (and the generated `CancelTask` handler) only cancels a task created by the calling connection; others get `CodeForbidden`.
+- `StartTask` never returns nil. On transports with no client channel (e.g. the REST adapter — no connection/manager on ctx) it returns a no-op `*Task`, so `Progress`/`Output`/`SetMeta`/`Close` are safe but undelivered.
 
 ## Handlers
 
