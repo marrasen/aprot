@@ -71,7 +71,7 @@ func (t *wsTransport) CloseGracefully() error {
 func (t *wsTransport) readPump(conn *Conn) {
 	defer func() {
 		conn.server.unregister <- conn
-		t.ws.Close()
+		_ = t.ws.Close()
 	}()
 
 	if t.opts.MaxMessageSize > 0 {

@@ -717,7 +717,7 @@ func (c *Conn) close() {
 	}
 	c.mu.Unlock()
 	c.server.subscriptions.unregisterConn(c.id)
-	c.transport.Close()
+	_ = c.transport.Close()
 }
 
 func (c *Conn) closeGracefully() {

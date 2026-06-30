@@ -360,7 +360,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.disassociateUser(conn)
 		// Send rejection directly before pumps start
 		sendConnectionRejectedWS(ws, err)
-		ws.Close()
+		_ = ws.Close()
 		return
 	}
 
@@ -373,7 +373,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case s.register <- conn:
 	case <-s.done:
 		s.disassociateUser(conn)
-		ws.Close()
+		_ = ws.Close()
 		return
 	}
 

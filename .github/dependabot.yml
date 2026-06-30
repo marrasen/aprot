@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # Go modules — one entry per module in the repo. Minor/patch bumps are
+  # grouped into a single weekly PR per module to keep the noise down; majors
+  # are raised individually so they can be reviewed on their own.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: gomod
+    directory: /example/vanilla
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: gomod
+    directory: /example/react
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: gomod
+    directory: /example/task-middleware
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: gomod
+    directory: /e2e
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # GitHub Actions used by the CI workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # npm packages for the example/e2e clients (only directories with a lockfile).
+  - package-ecosystem: npm
+    directory: /e2e
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /example/react/client
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
