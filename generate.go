@@ -414,6 +414,12 @@ type fieldData struct {
 	// is a registered enum. Zod codegen uses it to emit the enum expression
 	// inside z.array(...) / z.record(...).
 	ElemEnum *EnumInfo
+	// Nullable is set when the field is a bare pointer without json omitempty:
+	// such a field is always present on the wire and carries null when nil, so
+	// its TypeScript type gets a `| null` and its Zod schema a .nullable().
+	// (A pointer *with* omitempty is omitted when nil, so it is optional, not
+	// nullable.) Set by collectInterfaceFields.
+	Nullable bool
 	// ElemLazy is set when the slice/map element references a generated schema
 	// that is part of a reference cycle (self-referential or mutually
 	// recursive). Zod codegen then wraps the element reference in
@@ -1035,6 +1041,34 @@ func tsObjectKey(s string) string {
 	return strconv.Quote(s)
 }
 
+// tsReservedWords are JavaScript/TypeScript keywords and reserved words that
+// cannot be used as a bare parameter identifier in generated code. A Go param
+// whose name collides with one of these is renamed (see tsSafeParamName).
+var tsReservedWords = map[string]bool{
+	"break": true, "case": true, "catch": true, "class": true, "const": true,
+	"continue": true, "debugger": true, "default": true, "delete": true, "do": true,
+	"else": true, "enum": true, "export": true, "extends": true, "false": true,
+	"finally": true, "for": true, "function": true, "if": true, "import": true,
+	"in": true, "instanceof": true, "new": true, "null": true, "return": true,
+	"super": true, "switch": true, "this": true, "throw": true, "true": true,
+	"try": true, "typeof": true, "var": true, "void": true, "while": true,
+	"with": true, "implements": true, "interface": true, "let": true,
+	"package": true, "private": true, "protected": true, "public": true,
+	"static": true, "yield": true, "await": true,
+}
+
+// tsSafeParamName returns a parameter name safe to emit in generated TypeScript.
+// Names that collide with a reserved word, or that aren't valid JS identifiers,
+// are suffixed with "_" (parameter positions are matched by order in the
+// generated client, so the rename is purely cosmetic and stays consistent
+// across the signature, body, and call site).
+func tsSafeParamName(name string) string {
+	if tsReservedWords[name] || !isValidJSIdent(name) {
+		return name + "_"
+	}
+	return name
+}
+
 // containsTypeName checks whether name appears as a complete identifier in typeStr,
 // not as a substring of a longer identifier. For example, containsTypeName("UserProfile", "User")
 // returns false, but containsTypeName("User[]", "User") returns true.
@@ -1180,6 +1214,18 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		goType := goKindString(field.Type)
 		tsType := g.goTypeToTS(field.Type)
+		optional := g.isOptional(field)
+		// A bare pointer (no json omitempty) is always serialized — as null when
+		// nil — so it is required and nullable, not absent. Reflect that in both
+		// the TS type (`| null`) and the optionality flag.
+		nullable := false
+		if field.Type.Kind() == reflect.Ptr && !strings.Contains(field.Tag.Get("json"), "omitempty") {
+			nullable = true
+			optional = false
+			if !strings.HasSuffix(tsType, " | null") {
+				tsType += " | null"
+			}
+		}
 		if isByteSlice(field.Type) {
 			// go-json-experiment/json v2 per-field `format:` tag (issue
 			// #174). A tag value wins over the issue #174 default — it can
@@ -1205,9 +1251,13 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		fields = append(fields, fieldData{
-			Name:         g.getJSONName(field),
+			// tsObjectKey quotes names that aren't valid JS identifiers (e.g.
+			// json:"my-field") so both the TS interface and the Zod schema emit
+			// a syntactically valid key.
+			Name:         tsObjectKey(g.getJSONName(field)),
 			Type:         tsType,
-			Optional:     g.isOptional(field),
+			Optional:     optional,
+			Nullable:     nullable,
 			GoType:       goType,
 			ValidateTag:  field.Tag.Get("validate"),
 			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
@@ -1529,6 +1579,12 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		return tsType
 	}
 
+	// json.RawMessage is a named []byte but carries arbitrary embedded JSON, so
+	// number[] (the named-byte-slice default) is wrong. Type it as `unknown`.
+	if t.PkgPath() == "encoding/json" && t.Name() == "RawMessage" {
+		return "unknown"
+	}
+
 	switch t.Kind() {
 	case reflect.String:
 		return "string"
@@ -1548,8 +1604,14 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		}
 		return elemType + "[]"
 	case reflect.Map:
-		keyType := g.goTypeToTS(t.Key())
 		valType := g.goTypeToTS(t.Elem())
+		// boolean is not a valid TypeScript index signature, so Record<boolean,
+		// T> doesn't compile. jsonv2 encodes bool map keys as the strings
+		// "true"/"false", so model them as an optional string-literal record.
+		if t.Key().Kind() == reflect.Bool {
+			return `Partial<Record<"true" | "false", ` + valType + ">>"
+		}
+		keyType := g.goTypeToTS(t.Key())
 		return "Record<" + keyType + ", " + valType + ">"
 	case reflect.Ptr:
 		return g.goTypeToTS(t.Elem())
@@ -1603,6 +1665,7 @@ func (g *Generator) buildParamData(info *HandlerInfo, meta *sourceMeta) []paramD
 		if i < len(astNames) {
 			name = astNames[i]
 		}
+		name = tsSafeParamName(name)
 		tsType := g.goTypeToTS(p.Type)
 		if p.Variadic {
 			tsType = tsType + "[]"

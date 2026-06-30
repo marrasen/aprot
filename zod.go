@@ -36,6 +36,11 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 		effectiveKind = f.SQLNullKind
 		isNullable = true
 	}
+	// A bare pointer field (no json omitempty) is nullable on the wire — its TS
+	// type is `T | null`, so its schema must accept null too (#207).
+	if f.Nullable {
+		isNullable = true
+	}
 
 	// Issue 1 (#163): validate-tag omitempty on strings wraps the chain in
 	// z.union([z.literal(""), ...]) so empty strings pass the schema — the
