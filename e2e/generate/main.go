@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/marrasen/aprot"
+	"github.com/marrasen/aprot/e2e/e2eapi"
 	"github.com/marrasen/aprot/example/vanilla/api"
 )
 
@@ -15,6 +16,9 @@ func main() {
 	state := api.NewSharedState(tokenStore)
 	authMiddleware := api.AuthMiddleware(tokenStore)
 	registry := api.NewRegistry(state, authMiddleware)
+
+	// Add REST + validation handlers so the generated client includes them.
+	e2eapi.Register(registry)
 
 	gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 		OutputDir: "../api",
