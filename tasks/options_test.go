@@ -303,7 +303,6 @@ func TestMiddlewareSkipNextManual(t *testing.T) {
 	var nextCalled atomic.Bool
 	mw := func(ctx context.Context, info TaskInfo, next func(context.Context) error) error {
 		// Deliberately don't call next.
-		_ = nextCalled
 		return nil
 	}
 	opts := buildEnableOptions([]EnableOption{WithTaskMiddleware(mw)})
@@ -444,17 +443,10 @@ func TestMiddlewareIdempotentEnd(t *testing.T) {
 
 // TestMiddlewareSharedSubTask exercises the full SharedSubTask path — a real
 // shared task created via the task manager, not the routes-through-an-existing-
-// shared-node shortcut. It pins down how many times the middleware fires for a
-// single SharedSubTask call.
-//
-// NOTE: today the middleware fires TWICE for one SharedSubTask call, both with
-// the same title — once for the shared top-level node, and once for the inner
-// child node that SharedSubTask creates by delegating to SubTask. That means a
-// caller who installs middleware to log/trace sees a duplicate started/
-// completed pair for every SharedSubTask. This is almost certainly unintended
-// (see PR #205 review). This test documents the current behavior so the
-// duplication is visible and asserted; if SharedSubTask is reworked to fire the
-// middleware once per logical call, change wantFires to 1.
+// shared-node shortcut. It verifies that one SharedSubTask call invokes the
+// middleware exactly once: SharedSubTask runs fn directly under the shared
+// node rather than delegating to SubTask (which would create a redundant
+// same-title child node and fire the middleware a second time).
 func TestMiddlewareSharedSubTask(t *testing.T) {
 	invs, mu, mw := recordingMiddleware()
 	opts := buildEnableOptions([]EnableOption{WithTaskMiddleware(mw)})
@@ -475,7 +467,6 @@ func TestMiddlewareSharedSubTask(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("SharedSubTask err: got %v, want %v", err, sentinel)
 	}
-	// The user fn runs exactly once even though the middleware wraps two nodes.
 	if fnRuns != 1 {
 		t.Errorf("user fn ran %d times, want 1", fnRuns)
 	}
@@ -495,11 +486,73 @@ func TestMiddlewareSharedSubTask(t *testing.T) {
 			t.Errorf("middleware end err: got %v, want %q", i.endErr, "boom")
 		}
 	}
-	const wantFires = 2 // see NOTE above: currently double-fires
-	if fires != wantFires {
-		t.Errorf("middleware fired %d times for one SharedSubTask, want %d "+
-			"(shared node + inner child)", fires, wantFires)
+	if fires != 1 {
+		t.Errorf("middleware fired %d times for one SharedSubTask, want 1", fires)
 	}
+}
+
+// TestMiddlewareTerminalBeforeNext covers the cascade race: a node's terminal
+// signal can arrive (via signalMiddlewareEnd) before runManaged's next() begins
+// waiting on the done channel — e.g. a parent cascade-fails a child in the
+// window between createChild and runManaged. The end is recorded on the node,
+// so runManaged's next() must still observe it and return promptly rather than
+// blocking forever (which would leak the middleware goroutine and drop the
+// terminal log).
+func TestMiddlewareTerminalBeforeNext(t *testing.T) {
+	endErrCh := make(chan error, 1)
+	mw := func(ctx context.Context, info TaskInfo, next func(context.Context) error) error {
+		err := next(ctx)
+		endErrCh <- err
+		return err
+	}
+	opts := buildEnableOptions([]EnableOption{WithTaskMiddleware(mw)})
+
+	_, tm := setupTestServer(t)
+	tm.hooks = opts
+	node := tm.create("pre-ended", 1, true, context.Background())
+
+	// Terminal signal arrives BEFORE runManaged registers its done channel.
+	node.signalMiddlewareEnd(errors.New("canceled"))
+
+	if rctx := node.runManaged(context.Background()); rctx == nil {
+		t.Fatal("runManaged returned nil ctx")
+	}
+
+	select {
+	case err := <-endErrCh:
+		if err == nil || err.Error() != "canceled" {
+			t.Errorf("middleware end err: got %v, want %q", err, "canceled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("middleware never observed end — next() blocked / signal lost")
+	}
+}
+
+// TestMiddlewarePanicBeforeNextPropagates verifies that a panic raised by the
+// middleware before it calls next() (manual-lifecycle path) surfaces at the
+// task entry point rather than crashing the detached runManaged goroutine.
+func TestMiddlewarePanicBeforeNextPropagates(t *testing.T) {
+	mw := func(ctx context.Context, info TaskInfo, next func(context.Context) error) error {
+		panic("boom in middleware")
+	}
+	opts := buildEnableOptions([]EnableOption{WithTaskMiddleware(mw)})
+
+	tc := newTestPushConn()
+	d := newRequestDelivery(tc.Conn, "req-1", opts)
+	ctx := withDelivery(context.Background(), d)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected middleware panic to propagate to caller, got none")
+		}
+		if s, ok := r.(string); !ok || s != "boom in middleware" {
+			t.Errorf("recovered %v, want %q", r, "boom in middleware")
+		}
+	}()
+
+	_, _ = StartTask[any](ctx, "panics")
+	t.Fatal("StartTask returned instead of propagating the middleware panic")
 }
 
 // TestMiddlewareConnectionCancel is a dummy reference to aprot to keep

@@ -382,8 +382,13 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	childCtx := withDelivery(node.ctx, node.delivery)
 	childCtx = withTaskNode(childCtx, node)
 
+	// Run fn directly under the shared node. We deliberately do not delegate
+	// to SubTask here: that would create a redundant child node carrying the
+	// same title and run the task middleware a second time for the same
+	// logical task. fn still sees the shared node on its context, so nested
+	// SubTask / Output / TaskProgress calls attach to it as before.
 	return node.runScoped(childCtx, func(scopedCtx context.Context) error {
-		err := SubTask(scopedCtx, title, fn)
+		err := fn(scopedCtx)
 		if err != nil {
 			node.failTop(err.Error())
 		} else {

@@ -17,16 +17,23 @@ type TaskInfo struct {
 // (nil on success; non-nil on failure, including cancellation which
 // surfaces with err.Error() == "canceled").
 //
-// For scope-based tasks ([SubTask], [OutputWriter], [WriterProgress],
-// [SharedSubTask]) the middleware runs synchronously on the caller's
-// goroutine. For manual lifecycle tasks created via [StartTask], the
-// middleware runs in a dedicated goroutine and next blocks until the user
-// calls Close or Fail on the returned task handle.
+// For scope-based tasks ([SubTask], [SharedSubTask]) the middleware runs
+// synchronously on the caller's goroutine. For manual-lifecycle tasks
+// ([StartTask], [OutputWriter], [WriterProgress], [Task.SubTask],
+// [TaskSub.SubTask]) the middleware runs in a dedicated goroutine and next
+// blocks until the task reaches a terminal state (Close/Fail on the handle,
+// the writer's Close, request finalization, or a parent cascade-fail).
 //
 // A middleware that returns without calling next aborts the task body
 // (scope-based fn does not run). For manual tasks, the user can still
 // call Close/Fail; their signals are buffered and dropped on the floor
 // since the goroutine has already exited.
+//
+// Panics: a panic from the middleware before it calls next propagates to the
+// task entry point (for scope-based tasks directly; for manual tasks it is
+// forwarded from the internal goroutine to the [StartTask]/SubTask call). A
+// panic after next, in a manual task, has no caller left to receive it and
+// is re-raised on the internal goroutine.
 type TaskMiddleware func(ctx context.Context, info TaskInfo, next func(context.Context) error) error
 
 // EnableOption configures the task system at registration time. Pass
