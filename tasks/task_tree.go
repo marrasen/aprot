@@ -212,6 +212,23 @@ func (n *taskNode) IsShared() bool {
 	return n.delivery.isShared()
 }
 
+// collectIDs appends this node's descendant ids (depth-first) to acc and
+// returns the result. The node's own id is not appended — callers seed acc with
+// it. Node ids are assigned once at creation and never mutated, so they are
+// safe to read without the node lock; only the children slice is guarded.
+func (n *taskNode) collectIDs(acc []string) []string {
+	n.mu.Lock()
+	children := make([]*taskNode, len(n.children))
+	copy(children, n.children)
+	n.mu.Unlock()
+
+	for _, child := range children {
+		acc = append(acc, child.id)
+		acc = child.collectIDs(acc)
+	}
+	return acc
+}
+
 // sharedSnapshot returns a SharedTaskState for this node.
 func (n *taskNode) sharedSnapshot() SharedTaskState {
 	n.mu.Lock()

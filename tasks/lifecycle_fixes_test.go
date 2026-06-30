@@ -84,6 +84,34 @@ func TestProgressThrottleCleanedUpOnRemove(t *testing.T) {
 	}
 }
 
+// Progress-reporting sub-tasks of a shared task get their own throttle entries
+// (keyed by the child node id). Removing the top-level task must also drop the
+// throttle bookkeeping for every descendant, or the map grows without bound on
+// a long-running server even though the top-level entry is cleaned up. (#207 P2)
+func TestProgressThrottleCleanedUpForSubtaskOnRemove(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	parent := tm.create("parent", 1, true, context.Background())
+	child := parent.createChild("child")
+	child.progress(1, 10) // routes through sharedDelivery → throttles[child.id]
+
+	tm.progressMu.Lock()
+	_, exists := tm.throttles[child.id]
+	tm.progressMu.Unlock()
+	if !exists {
+		t.Fatal("expected a throttle entry for the child after a progress update")
+	}
+
+	tm.remove(parent.id)
+
+	tm.progressMu.Lock()
+	_, stillExists := tm.throttles[child.id]
+	tm.progressMu.Unlock()
+	if stillExists {
+		t.Error("child throttle entry leaked after parent task removal (unbounded memory growth)")
+	}
+}
+
 // Concurrent ensureRoot calls must all observe the same implicit root. Without
 // synchronization two goroutines can each create a root and one's subtree is
 // silently lost. (#207 P2)

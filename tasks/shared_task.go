@@ -82,16 +82,25 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 
 func (tm *taskManager) remove(id string) {
 	tm.mu.Lock()
+	node := tm.tasks[id]
 	delete(tm.tasks, id)
 	tm.mu.Unlock()
 
-	// Drop the task's throttle bookkeeping so it can't grow without bound on a
-	// long-running server, and stop any pending trailing flush.
-	tm.progressMu.Lock()
-	if pt := tm.throttles[id]; pt != nil && pt.timer != nil {
-		pt.timer.Stop()
+	// Drop throttle bookkeeping for the task and every descendant so it can't
+	// grow without bound on a long-running server, and stop any pending trailing
+	// flush. Sub-tasks report progress under their own node ids, so cleaning up
+	// only the top-level id would leak the children's entries.
+	ids := []string{id}
+	if node != nil {
+		ids = node.collectIDs(ids)
 	}
-	delete(tm.throttles, id)
+	tm.progressMu.Lock()
+	for _, tid := range ids {
+		if pt := tm.throttles[tid]; pt != nil && pt.timer != nil {
+			pt.timer.Stop()
+		}
+		delete(tm.throttles, tid)
+	}
 	tm.progressMu.Unlock()
 
 	tm.broadcastNow()
