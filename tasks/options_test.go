@@ -442,6 +442,66 @@ func TestMiddlewareIdempotentEnd(t *testing.T) {
 	}
 }
 
+// TestMiddlewareSharedSubTask exercises the full SharedSubTask path — a real
+// shared task created via the task manager, not the routes-through-an-existing-
+// shared-node shortcut. It pins down how many times the middleware fires for a
+// single SharedSubTask call.
+//
+// NOTE: today the middleware fires TWICE for one SharedSubTask call, both with
+// the same title — once for the shared top-level node, and once for the inner
+// child node that SharedSubTask creates by delegating to SubTask. That means a
+// caller who installs middleware to log/trace sees a duplicate started/
+// completed pair for every SharedSubTask. This is almost certainly unintended
+// (see PR #205 review). This test documents the current behavior so the
+// duplication is visible and asserted; if SharedSubTask is reworked to fire the
+// middleware once per logical call, change wantFires to 1.
+func TestMiddlewareSharedSubTask(t *testing.T) {
+	invs, mu, mw := recordingMiddleware()
+	opts := buildEnableOptions([]EnableOption{WithTaskMiddleware(mw)})
+
+	_, tm := setupTestServer(t)
+	tm.hooks = opts // inject after setup since setupTestServer uses nil
+
+	tc := newTestPushConn()
+	ctx := tc.WithContext(context.Background()) // sets aprot.Connection
+	ctx = withTaskManager(ctx, tm)
+
+	var fnRuns int
+	sentinel := errors.New("boom")
+	err := SharedSubTask(ctx, "shared-sub", func(context.Context) error {
+		fnRuns++
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("SharedSubTask err: got %v, want %v", err, sentinel)
+	}
+	// The user fn runs exactly once even though the middleware wraps two nodes.
+	if fnRuns != 1 {
+		t.Errorf("user fn ran %d times, want 1", fnRuns)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var fires int
+	for _, i := range *invs {
+		if i.info.Title != "shared-sub" {
+			continue
+		}
+		fires++
+		if !i.nextRan {
+			t.Error("middleware next did not run for shared-sub")
+		}
+		if i.endErr == nil || i.endErr.Error() != "boom" {
+			t.Errorf("middleware end err: got %v, want %q", i.endErr, "boom")
+		}
+	}
+	const wantFires = 2 // see NOTE above: currently double-fires
+	if fires != wantFires {
+		t.Errorf("middleware fired %d times for one SharedSubTask, want %d "+
+			"(shared node + inner child)", fires, wantFires)
+	}
+}
+
 // TestMiddlewareConnectionCancel is a dummy reference to aprot to keep
 // the import in case other tests in this file get pruned.
 var _ = aprot.Connection
