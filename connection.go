@@ -279,10 +279,19 @@ func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 	}
 }
 
-func (c *Conn) unregisterRequest(id string) {
+// unregisterRequest removes the request's cancel func from the map, but only
+// if it is still the one this handler registered. A client may reuse an
+// in-flight request ID, in which case registerRequest replaces the map entry
+// and cancels the shadowed request. When that shadowed handler later unwinds,
+// its deferred unregister must not delete the replacement's cancel func — doing
+// so would make the still-running replacement uncancelable via cancel,
+// unsubscribe, or connection-close bookkeeping. (#225)
+func (c *Conn) unregisterRequest(id string, cancel context.CancelCauseFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.requests, id)
+	if reflect.ValueOf(c.requests[id]).Pointer() == reflect.ValueOf(cancel).Pointer() {
+		delete(c.requests, id)
+	}
 }
 
 func (c *Conn) cancelRequest(id string) {
@@ -338,7 +347,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	c.registerRequest(msg.ID, cancel)
 	defer func() {
-		c.unregisterRequest(msg.ID)
+		c.unregisterRequest(msg.ID, cancel)
 		cancel(nil)
 	}()
 
@@ -536,7 +545,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	c.registerRequest(msg.ID, cancel)
 	defer func() {
-		c.unregisterRequest(msg.ID)
+		c.unregisterRequest(msg.ID, cancel)
 		cancel(nil)
 	}()
 
@@ -641,7 +650,7 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	c.registerRequest(sub.id, cancel)
 	defer func() {
-		c.unregisterRequest(sub.id)
+		c.unregisterRequest(sub.id, cancel)
 		cancel(nil)
 	}()
 
