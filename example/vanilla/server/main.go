@@ -38,9 +38,12 @@ func main() {
 	// can read it without re-loading from the store on every request.
 	// server.OnConnect(api.ConnectHookAuth(tokenStore))
 
-	// Add server-level middleware (applies to all handlers)
+	// Add server-level middleware (applies to all handlers).
+	// DefaultLoggingOptions enables param logging with redaction of common
+	// sensitive keys (password, token, secret, …) and skips the Login
+	// handler entirely so credentials don't reach the log file.
 	server.Use(
-		api.LoggingMiddleware(),
+		api.LoggingMiddleware(api.DefaultLoggingOptions()),
 	)
 
 	// Serve static files

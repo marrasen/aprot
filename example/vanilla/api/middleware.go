@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/marrasen/aprot"
 )
 
@@ -52,8 +55,63 @@ func (ts *TokenStore) UserByID(id string) *AuthUser {
 	return ts.users[id]
 }
 
-// LoggingMiddleware logs all requests with timing information.
-func LoggingMiddleware() aprot.Middleware {
+// LoggingOptions configures [LoggingMiddleware].
+//
+// The zero value disables param logging entirely, matching the original
+// LoggingMiddleware behavior.
+type LoggingOptions struct {
+	// LogParams enables logging the JSON params alongside method/duration.
+	LogParams bool
+
+	// RedactKeys lists JSON object keys whose values are replaced with
+	// "[REDACTED]" before logging. Comparison is case-insensitive and the
+	// walk recurses into nested objects and arrays. Required reading: aprot
+	// params are positional, so for handlers like Login(username, password)
+	// the wire payload is a top-level JSON array — the field names that
+	// would trigger redaction don't appear. Use SkipMethods for those.
+	RedactKeys []string
+
+	// SkipMethods lists fully-qualified method names ("Struct.Method") to
+	// omit params for entirely. The log line shows params=[REDACTED] for
+	// methods in this list. Use this for handlers whose entire input is
+	// sensitive (e.g. "PublicHandlers.Login") or for very chatty methods
+	// you don't want polluting logs.
+	SkipMethods []string
+
+	// MaxParamLen truncates JSON params longer than this many bytes,
+	// appending "...(truncated)". A value <= 0 disables truncation.
+	MaxParamLen int
+}
+
+// DefaultLoggingOptions returns sensible defaults for production logging:
+// params enabled, common sensitive keys redacted, Login skipped, params
+// truncated at 1 KiB.
+func DefaultLoggingOptions() LoggingOptions {
+	return LoggingOptions{
+		LogParams:   true,
+		RedactKeys:  []string{"password", "passwd", "token", "secret", "api_key", "apiKey", "authorization"},
+		SkipMethods: []string{"PublicHandlers.Login"},
+		MaxParamLen: 1024,
+	}
+}
+
+// LoggingMiddleware logs all requests with timing information. Pass a
+// [LoggingOptions] to also log the JSON params (with redaction and
+// truncation). The zero-arg form preserves the original method/duration
+// log line.
+//
+// Example:
+//
+//	server.Use(api.LoggingMiddleware(api.DefaultLoggingOptions()))
+func LoggingMiddleware(opts ...LoggingOptions) aprot.Middleware {
+	var o LoggingOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	skipSet := make(map[string]struct{}, len(o.SkipMethods))
+	for _, m := range o.SkipMethods {
+		skipSet[m] = struct{}{}
+	}
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
 			start := time.Now()
@@ -69,15 +127,84 @@ func LoggingMiddleware() aprot.Middleware {
 				remoteAddr = conn.RemoteAddr()
 			}
 
+			paramsField := ""
+			if o.LogParams {
+				paramsField = " params=" + formatParamsForLog(req, o, skipSet)
+			}
+
 			if err != nil {
-				log.Printf("[conn:%d %s] %s %s - ERROR: %v (%s)", connID, remoteAddr, req.ID, req.Method, err, duration)
+				log.Printf("[conn:%d %s] %s %s%s - ERROR: %v (%s)", connID, remoteAddr, req.ID, req.Method, paramsField, err, duration)
 			} else {
-				log.Printf("[conn:%d %s] %s %s - OK (%s)", connID, remoteAddr, req.ID, req.Method, duration)
+				log.Printf("[conn:%d %s] %s %s%s - OK (%s)", connID, remoteAddr, req.ID, req.Method, paramsField, duration)
 			}
 
 			return result, err
 		}
 	}
+}
+
+func formatParamsForLog(req *aprot.Request, o LoggingOptions, skipSet map[string]struct{}) string {
+	if _, skip := skipSet[req.Method]; skip {
+		return "[REDACTED]"
+	}
+	if len(req.Params) == 0 {
+		return "[]"
+	}
+	v := redactJSON(req.Params, o.RedactKeys)
+	return truncateForLog(string(v), o.MaxParamLen)
+}
+
+// redactJSON walks raw JSON and replaces values for any object key whose
+// name matches a key in keys (case-insensitive) with "[REDACTED]". Recurses
+// into nested objects and arrays. Returns the input unchanged when keys is
+// empty or the input is not valid JSON. Output uses deterministic key
+// ordering so log lines are stable and greppable.
+func redactJSON(raw jsontext.Value, keys []string) jsontext.Value {
+	if len(keys) == 0 || len(raw) == 0 {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	keySet := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		keySet[strings.ToLower(k)] = struct{}{}
+	}
+	walked := redactWalk(v, keySet)
+	out, err := json.Marshal(walked, json.Deterministic(true))
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func redactWalk(v any, keys map[string]struct{}) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, vv := range t {
+			if _, ok := keys[strings.ToLower(k)]; ok {
+				t[k] = "[REDACTED]"
+			} else {
+				t[k] = redactWalk(vv, keys)
+			}
+		}
+		return t
+	case []any:
+		for i, vv := range t {
+			t[i] = redactWalk(vv, keys)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+func truncateForLog(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "...(truncated)"
 }
 
 // AuthMiddleware checks that the connection is authenticated and sets up the

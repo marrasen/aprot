@@ -192,6 +192,27 @@
 // the same middleware can log both streaming and unary handlers without
 // branching on handler kind.
 //
+// # Logging Request Params
+//
+// [Request.Params] is the raw JSON payload (a [jsontext.Value]) and is
+// available to middleware verbatim — log it with "%s" or convert with
+// string(req.Params). Two caveats apply when logging params:
+//
+//   - Secrets leak easily. Login / token / API-key handlers will dump
+//     plaintext credentials to your log file unless you redact them.
+//   - Params are positional. The wire payload is a JSON array whose
+//     elements are the handler arguments in source order; for a handler
+//     like Login(username, password string), the wire is
+//     `["alice", "hunter2"]` — there are no `password` keys to key-match
+//     on. Use a method-name skip list for those.
+//
+// The example/vanilla/api package ships a reference implementation
+// (LoggingMiddleware + LoggingOptions + DefaultLoggingOptions) that
+// applies both strategies: recursive object-key redaction for struct
+// params, plus a per-method skip list for handlers whose entire input
+// is sensitive. Use it as a starting point rather than copying
+// `log.Printf("%s", req.Params)` verbatim.
+//
 // # Server
 //
 // A [Server] handles WebSocket upgrades, SSE streams, and HTTP POST dispatch.
