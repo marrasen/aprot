@@ -135,6 +135,76 @@ func TestUnmarshalJSON_SQLNull(t *testing.T) {
 	})
 }
 
+func TestMarshalJSON_GenericNull(t *testing.T) {
+	// Generic sql.Null[T] for the common instantiations should marshal as the
+	// unwrapped value-or-null (matching the codegen `T | null`), not the
+	// default {"V":…,"Valid":…} object.
+	type Response struct {
+		Name  sql.Null[string]    `json:"name"`
+		Age   sql.Null[int64]     `json:"age"`
+		Count sql.Null[int]       `json:"count"`
+		Score sql.Null[float64]   `json:"score"`
+		OK    sql.Null[bool]      `json:"ok"`
+		Born  sql.Null[time.Time] `json:"born"`
+	}
+	now := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	t.Run("marshal valid", func(t *testing.T) {
+		got, err := marshalJSON(Response{
+			Name:  sql.Null[string]{V: "Alice", Valid: true},
+			Age:   sql.Null[int64]{V: 30, Valid: true},
+			Count: sql.Null[int]{V: 7, Valid: true},
+			Score: sql.Null[float64]{V: 9.5, Valid: true},
+			OK:    sql.Null[bool]{V: true, Valid: true},
+			Born:  sql.Null[time.Time]{V: now, Valid: true},
+		})
+		if err != nil {
+			t.Fatalf("marshalJSON error: %v", err)
+		}
+		want := `{"name":"Alice","age":30,"count":7,"score":9.5,"ok":true,"born":"2025-06-15T12:00:00Z"}`
+		if string(got) != want {
+			t.Errorf("marshalJSON =\n  %s\nwant\n  %s", got, want)
+		}
+	})
+
+	t.Run("marshal null", func(t *testing.T) {
+		got, err := marshalJSON(Response{})
+		if err != nil {
+			t.Fatalf("marshalJSON error: %v", err)
+		}
+		want := `{"name":null,"age":null,"count":null,"score":null,"ok":null,"born":null}`
+		if string(got) != want {
+			t.Errorf("marshalJSON =\n  %s\nwant\n  %s", got, want)
+		}
+	})
+
+	t.Run("unmarshal unwrapped value", func(t *testing.T) {
+		var r Response
+		if err := unmarshalJSON([]byte(`{"name":"Bob","age":5,"count":3,"score":1.5,"ok":true,"born":"2025-06-15T12:00:00Z"}`), &r); err != nil {
+			t.Fatalf("unmarshalJSON error: %v", err)
+		}
+		if !r.Name.Valid || r.Name.V != "Bob" {
+			t.Errorf("Name = %+v, want {Bob true}", r.Name)
+		}
+		if !r.Count.Valid || r.Count.V != 3 {
+			t.Errorf("Count = %+v, want {3 true}", r.Count)
+		}
+		if !r.Born.Valid || !r.Born.V.Equal(now) {
+			t.Errorf("Born = %+v, want %v", r.Born, now)
+		}
+	})
+
+	t.Run("unmarshal null", func(t *testing.T) {
+		var r Response
+		if err := unmarshalJSON([]byte(`{"name":null,"age":null,"count":null,"score":null,"ok":null,"born":null}`), &r); err != nil {
+			t.Fatalf("unmarshalJSON error: %v", err)
+		}
+		if r.Name.Valid || r.Count.Valid || r.Born.Valid {
+			t.Errorf("expected all invalid, got %+v", r)
+		}
+	})
+}
+
 func TestMarshalJSON_RoundTrip(t *testing.T) {
 	// Verify that marshalJSON output can be round-tripped through unmarshalJSON.
 	type Data struct {
