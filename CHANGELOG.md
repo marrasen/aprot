@@ -10,8 +10,29 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-07-01
+
 ### Added
 
+- First-message authentication: `Server.OnAuth` validates a token the client
+  sends over the connection — a WebSocket `auth` frame or the SSE `POST /rpc`
+  body — instead of the URL, so secrets stay out of access/proxy/CDN logs.
+  Includes a pending-auth state, a configurable `ServerOptions.AuthTimeout`
+  (default 10s), and mid-session token refresh; the generated TS client gains a
+  `getAuthToken` option and a `refreshAuth()` method (#153).
+- Observability: an opt-in `Observer` (via `ServerOptions.Observer`) reporting
+  connection open/close, request completion (method, duration, error code),
+  subscription register/unregister, refresh fan-out, send-buffer pressure, and
+  write timeouts, plus a pull-based `Server.Stats()` snapshot. No hot-path cost
+  when unset; embed `NoopObserver` for forward-compatibility (#223).
+- CORS support for the SSE and REST HTTP transports: `aprot.CORS(CORSOptions)`
+  returns a closed-by-default `func(http.Handler) http.Handler` wrapper with
+  `OPTIONS` preflight handling and credentials-safe origin echoing (#224).
+- Per-connection and server-wide concurrency caps on `ServerOptions` —
+  `MaxConcurrentRequests` (256), `MaxServerConcurrentRequests` (10000), and
+  `MaxSubscriptions` (1024); a frame over a cap is rejected with the new
+  `CodeTooManyRequests` (`-32004`) rather than spawning unbounded goroutines,
+  each `-1` to disable (#222).
 - Task lifecycle middleware: `tasks.Enable(registry, tasks.WithTaskMiddleware(mw))`,
   with `TaskMiddleware` / `TaskInfo` and ctx propagation through nested subtasks (#205, #211).
 - Configurable request-param logging in the vanilla `LoggingMiddleware` (#212).
@@ -36,6 +57,10 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- TS codegen: a shared per-package enum/type file whose name collided with a
+  same-named handler file was silently overwritten — dropping the enum/type
+  definition and leaving dangling (self-)imports that failed `tsc`. Colliding
+  shared files are now emitted as `{pkg}.types.ts` (#206).
 - Stalled-client deadlock (per-frame write timeout; sends snapshotted outside the
   server lock), handler panic recovery on request/subscribe/refresh paths, and
   inbound size limits for WebSocket and SSE (#208).
@@ -58,6 +83,13 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Security
 
+- First-message auth keeps tokens out of URLs (and therefore out of access,
+  reverse-proxy, and CDN logs); auth-hook errors are redacted to a generic
+  message so internal detail isn't leaked to unauthenticated callers, and a
+  mid-session refresh can't leak a prior identity's pushes (#153).
+- Per-connection / server-wide concurrency and subscription caps bound the
+  resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/marrasen/aprot/compare/v0.44.0...v0.45.0
