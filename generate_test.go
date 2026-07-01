@@ -3388,6 +3388,85 @@ func TestGenerateSharedFileCrossPackageImports(t *testing.T) {
 	}
 }
 
+// --- Shared enum file vs. handler file name collision (aprot issue #206) ---
+//
+// When an enum lives in a Go package whose short name matches a handler's
+// generated TypeScript file name, the shared per-package file ("gentestpkg.ts")
+// collides with the handler file for group "Gentestpkg". The handler phase runs
+// last and silently overwrites the shared file, dropping the enum definition and
+// leaving every referencing file importing a type nobody defines.
+
+// Gentestpkg is a handler group whose name kebab-cases to "gentestpkg", the same
+// base name as the shared file emitted for package internal/gentestpkg.
+type Gentestpkg struct{}
+
+func (h *Gentestpkg) GetColor(ctx context.Context) (gentestpkg.Color, error) { return "", nil }
+
+// GentestpkgWriter is a second group using the same enum, so Color is promoted
+// to the shared per-package file rather than staying handler-local.
+type GentestpkgWriter struct{}
+
+func (h *GentestpkgWriter) SetColor(ctx context.Context, c gentestpkg.Color) error { return nil }
+
+func TestGenerateSharedEnumFileHandlerNameCollision(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&Gentestpkg{})
+	registry.Register(&GentestpkgWriter{})
+	registry.RegisterEnum(gentestpkg.ColorValues())
+
+	gen := NewGenerator(registry)
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// The Color enum must be defined exactly once. The bug silently drops it
+	// because the shared file (gentestpkg.ts) is overwritten by the handler file
+	// for group "Gentestpkg".
+	defFiles := make([]string, 0)
+	for name, content := range files {
+		if strings.Contains(content, "export type ColorType") {
+			defFiles = append(defFiles, name)
+		}
+	}
+	if len(defFiles) != 1 {
+		t.Fatalf("expected ColorType defined in exactly one file, found in %v\nfiles: %v", defFiles, mapKeys(files))
+	}
+	defModule := "./" + strings.TrimSuffix(defFiles[0], ".ts")
+
+	// Every import of ColorType must resolve to the defining file, and no file
+	// may import ColorType from itself.
+	for name, content := range files {
+		selfModule := "./" + strings.TrimSuffix(name, ".ts")
+		for _, line := range strings.Split(content, "\n") {
+			if !strings.HasPrefix(line, "import") || !containsTypeName(line, "ColorType") {
+				continue
+			}
+			module := importModule(line)
+			if module == selfModule {
+				t.Errorf("%s imports ColorType from itself (%q):\n%s", name, module, content)
+			}
+			if module != defModule {
+				t.Errorf("%s imports ColorType from %q, but ColorType is defined in %q", name, module, defModule)
+			}
+		}
+	}
+}
+
+// importModule extracts the single-quoted module specifier from a generated
+// TypeScript import line, e.g. `import type { X } from './api';` -> "./api".
+func importModule(line string) string {
+	i := strings.LastIndex(line, "from '")
+	if i < 0 {
+		return ""
+	}
+	rest := line[i+len("from '"):]
+	if j := strings.IndexByte(rest, '\''); j >= 0 {
+		return rest[:j]
+	}
+	return ""
+}
+
 // TrickyStatus exercises enum values whose capitalized forms are not valid
 // TypeScript identifiers: empty string, a hyphenated value, and a
 // leading-digit value. The codegen must still produce syntactically valid TS.

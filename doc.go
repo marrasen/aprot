@@ -431,6 +431,10 @@
 //
 // The generator creates split files: client.ts (base client), one file per
 // handler group, and optional shared type files for types used across groups.
+// A shared file is named after its Go package (e.g. api.ts); if that name
+// would collide with a handler file (package "settings" and handler "Settings"
+// both map to settings.ts), the shared file is emitted as {pkg}.types.ts
+// instead so neither overwrites the other.
 // Use [NamingPlugin] to customize TypeScript name conventions.
 //
 // Setting [GeneratorOptions.Zod] emits a companion `.schema.ts` file for
