@@ -286,6 +286,19 @@
 //	    return r.Header.Get("Origin") == "https://app.example.com"
 //	})
 //
+// The SSE and REST transports are plain HTTP, so cross-origin browser clients
+// need CORS response headers and OPTIONS preflight handling instead. [CORS]
+// returns a standard func(http.Handler) http.Handler wrapper for that, closed
+// by default and mirroring the SetCheckOrigin guidance above — list exact
+// origins (never "*") whenever AllowCredentials is set for cookie auth:
+//
+//	cors := aprot.CORS(aprot.CORSOptions{
+//	    AllowedOrigins:   []string{"https://app.example.com"},
+//	    AllowCredentials: true,
+//	})
+//	http.Handle("/api/", http.StripPrefix("/api", cors(rest)))
+//	http.Handle("/sse", cors(server.HTTPTransport()))
+//
 // # Connection Lifecycle
 //
 // [Server.OnConnect] and [Server.OnDisconnect] hooks react to connection

@@ -148,6 +148,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
+- **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -765,6 +766,25 @@ server.SetCheckOrigin(func(r *http.Request) bool {
 ```
 
 Token-based auth (e.g. a token passed via the connection URL) is not affected by this, but setting an origin check is still good hygiene for browser-facing deployments.
+
+### CORS for SSE & REST (cross-origin browser clients)
+
+The SSE and REST endpoints are plain HTTP, so a cross-origin browser app calling them needs CORS response headers and `OPTIONS` preflight handling — the HTTP-transport counterpart to WebSocket origin checking. `aprot.CORS` returns a standard `func(http.Handler) http.Handler` wrapper you can put in front of any transport:
+
+```go
+cors := aprot.CORS(aprot.CORSOptions{
+    AllowedOrigins:   []string{"https://app.example.com"},
+    AllowCredentials: true, // required for cookie-authenticated browsers
+    // AllowedMethods / AllowedHeaders / ExposedHeaders / MaxAge optional
+})
+
+http.Handle("/api/", http.StripPrefix("/api", cors(rest)))   // REST adapter
+http.Handle("/sse", cors(server.HTTPTransport()))            // SSE handler
+```
+
+- **Closed by default** — construct the wrapper only where you want cross-origin access; nothing is loosened otherwise. An `Origin` that isn't allowed receives no CORS headers, so the browser blocks the response while same-origin and non-browser clients are unaffected.
+- **Credentials caveat** — cookie/`Authorization` requests need `AllowCredentials: true` **paired with explicit origins**. The browser rejects `Access-Control-Allow-Origin: *` alongside credentials, so `CORS` echoes the exact matched origin instead of `*` in that case (same class of concern as the CSWSH note above).
+- **Preflight** — `OPTIONS` requests carrying `Access-Control-Request-Method` are answered directly (`204`) with the allowed methods/headers and `Access-Control-Max-Age`; they never reach your handlers.
 
 ## REST Adapter
 
