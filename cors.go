@@ -62,9 +62,15 @@ var defaultCORSMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTI
 // for non-preflight requests.
 //
 // For cookie-authenticated deployments, set AllowCredentials and list the exact
-// origins — never rely on "*", which browsers reject alongside credentials.
-// This is the HTTP-transport analogue of restricting WebSocket origins with
-// [Server.SetCheckOrigin].
+// origins. Avoid combining AllowCredentials with AllowedOrigins ["*"]: browsers
+// forbid a literal "*" alongside credentials, so the wrapper instead reflects
+// whichever origin is calling — effectively allow-any-origin *with* credentials,
+// which is rarely intended. An explicit allowlist is the HTTP-transport analogue
+// of restricting WebSocket origins with [Server.SetCheckOrigin].
+//
+// Wrapping [Server.WebSocket] is harmless but usually unnecessary: a WS upgrade
+// isn't subject to CORS, and its origin control is [Server.SetCheckOrigin]. CORS
+// belongs on the SSE and REST HTTP transports.
 func CORS(opts CORSOptions) func(http.Handler) http.Handler {
 	methods := opts.AllowedMethods
 	if len(methods) == 0 {

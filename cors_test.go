@@ -176,3 +176,66 @@ func TestCORS_NonPreflightOptions(t *testing.T) {
 	}
 	_ = rec
 }
+
+// The zero value allows no origin: every cross-origin request is fully closed
+// (no CORS headers) yet still passes through to the wrapped handler.
+func TestCORS_ZeroValueClosed(t *testing.T) {
+	next := &okHandler{}
+	h := CORS(CORSOptions{})(next)
+
+	rec := doReq(t, h, http.MethodGet, "https://app.example.com", nil)
+
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want empty for the zero-value (closed) config", got)
+	}
+	if !next.called {
+		t.Error("wrapped handler should still run under the closed config")
+	}
+}
+
+// A preflight from a disallowed origin is short-circuited (204) but must carry
+// no Allow-* headers, so the browser blocks the actual request. Guards against
+// leaking allow-methods/headers to origins that were never permitted.
+func TestCORS_DisallowedOriginPreflight(t *testing.T) {
+	next := &okHandler{}
+	h := CORS(CORSOptions{AllowedOrigins: []string{"https://app.example.com"}})(next)
+
+	rec := doReq(t, h, http.MethodOptions, "https://evil.example.com", map[string]string{
+		"Access-Control-Request-Method": "POST",
+	})
+
+	if next.called {
+		t.Error("preflight must not reach the wrapped handler even for a disallowed origin")
+	}
+	for _, header := range []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Allow-Credentials",
+	} {
+		if got := rec.Header().Get(header); got != "" {
+			t.Errorf("%s = %q, want empty for a disallowed-origin preflight", header, got)
+		}
+	}
+}
+
+// With wildcard AllowedHeaders and credentials, the preflight must echo the
+// browser's requested headers rather than the literal "*" (which the Fetch
+// standard does not honor alongside credentials).
+func TestCORS_WildcardHeadersWithCredentials(t *testing.T) {
+	next := &okHandler{}
+	h := CORS(CORSOptions{
+		AllowedOrigins:   []string{"https://app.example.com"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: true,
+	})(next)
+
+	rec := doReq(t, h, http.MethodOptions, "https://app.example.com", map[string]string{
+		"Access-Control-Request-Method":  "POST",
+		"Access-Control-Request-Headers": "X-Custom, Content-Type",
+	})
+
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "X-Custom, Content-Type" {
+		t.Errorf("Access-Control-Allow-Headers = %q, want the echoed request headers (not \"*\") with credentials", got)
+	}
+}
