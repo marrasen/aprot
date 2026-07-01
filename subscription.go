@@ -37,22 +37,41 @@ func newSubscriptionManager() *subscriptionManager {
 	}
 }
 
-// register adds a subscription to the indexes. It reports whether the
-// subscription was added; it refuses connections that have already been
-// closed, so a subscribe handler that races a disconnect cannot leave a
-// subscription that outlives its connection (re-executing forever and
-// writing to a dead transport). The closed check holds sm.mu while reading
-// the conn's lock; this never nests against close(), which releases the
-// conn lock before calling unregisterConn.
-func (sm *subscriptionManager) register(sub *subscription) bool {
+// register adds a subscription to the indexes. The ok result reports whether
+// the subscription was added; limited reports that it was refused because the
+// connection is already at its MaxSubscriptions cap (so the caller can reply
+// with CodeTooManyRequests rather than treating it as a closed connection).
+//
+// It refuses connections that have already been closed, so a subscribe handler
+// that races a disconnect cannot leave a subscription that outlives its
+// connection (re-executing forever and writing to a dead transport). The closed
+// check holds sm.mu while reading the conn's lock; this never nests against
+// close(), which releases the conn lock before calling unregisterConn.
+//
+// The per-connection cap is enforced here, under sm.mu, so concurrent subscribe
+// handlers on the same connection cannot race past the limit.
+func (sm *subscriptionManager) register(sub *subscription) (ok bool, limited bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sub.conn.isClosed() {
-		return false
+		return false, false
 	}
 
 	connID := sub.conn.id
+
+	// Enforce the per-connection subscription cap. A test conn may have no
+	// server; that path is uncapped. Only a brand-new subscription ID counts —
+	// re-registering an existing ID (the caller's update path) is never
+	// rejected.
+	if sub.conn.server != nil {
+		if max := sub.conn.server.options.MaxSubscriptions; max > 0 {
+			existing := sm.byConn[connID]
+			if _, isReReg := existing[sub.id]; !isReReg && len(existing) >= max {
+				return false, true
+			}
+		}
+	}
 
 	// Add to conn index
 	if sm.byConn[connID] == nil {
@@ -67,7 +86,7 @@ func (sm *subscriptionManager) register(sub *subscription) bool {
 		}
 		sm.byKey[key][sub] = struct{}{}
 	}
-	return true
+	return true, false
 }
 
 func (sm *subscriptionManager) unregister(connID uint64, subID string) {

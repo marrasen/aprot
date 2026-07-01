@@ -147,7 +147,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
-- **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, and WebSocket keepalive pings — all configurable via `ServerOptions`
+- **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -739,6 +739,10 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
     WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
     PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
     PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+
+    MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
+    MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
+    MaxSubscriptions:            1024,  // active subscriptions per connection (default 1024)
 })
 ```
 
@@ -748,6 +752,7 @@ Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 - **Message size limits** — oversized WebSocket frames close the connection; oversized SSE RPC bodies get HTTP 413.
 - **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
 - **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
+- **Concurrency caps** — a single connection can otherwise pin unbounded work: every inbound frame runs on its own goroutine and a connection can register unlimited subscriptions (each amplifying server-side `TriggerRefresh` fan-out). `MaxConcurrentRequests` bounds in-flight requests per connection, `MaxServerConcurrentRequests` bounds them across the whole server, and `MaxSubscriptions` bounds active subscriptions per connection. A frame over a cap is rejected with `CodeTooManyRequests` (`-32004`; the TS client exposes `err.isTooManyRequests()`) rather than spawning more goroutines. A streaming handler holds its request slot until the stream ends.
 
 ### Origin checking (cross-site WebSocket hijacking)
 

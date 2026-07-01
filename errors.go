@@ -14,6 +14,7 @@ const (
 	CodeUnauthorized       = -32001
 	CodeConnectionRejected = -32002
 	CodeForbidden          = -32003
+	CodeTooManyRequests    = -32004
 )
 
 // ProtocolError represents an error that can be sent to the client.
@@ -78,6 +79,14 @@ func ErrForbidden(message string) *ProtocolError {
 // ErrConnectionRejected returns a connection rejected error.
 func ErrConnectionRejected(message string) *ProtocolError {
 	return NewError(CodeConnectionRejected, message)
+}
+
+// ErrTooManyRequests returns a rate/concurrency-limit error. The server sends
+// this when a connection exceeds its in-flight request or subscription cap
+// (see [ServerOptions.MaxConcurrentRequests], [ServerOptions.MaxSubscriptions],
+// and [ServerOptions.MaxServerConcurrentRequests]).
+func ErrTooManyRequests(message string) *ProtocolError {
+	return NewError(CodeTooManyRequests, message)
 }
 
 // CancelReason represents why a request context was canceled.
