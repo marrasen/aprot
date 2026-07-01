@@ -37,6 +37,8 @@ Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{Max
 
 **Cookie-auth deployments must set an origin check** (default allows all origins — CSWSH risk): `server.SetCheckOrigin(func(r *http.Request) bool { return r.Header.Get("Origin") == "https://app.example.com" })`.
 
+**CORS for SSE/REST** (plain HTTP, so origin check doesn't apply): wrap the transport with `aprot.CORS(aprot.CORSOptions{AllowedOrigins, AllowedMethods, AllowedHeaders, ExposedHeaders, AllowCredentials, MaxAge})` — a `func(http.Handler) http.Handler` closed by default. Handles `OPTIONS` preflight (204). `AllowCredentials: true` must pair with explicit (non-`*`) origins; with `*`+credentials it echoes the concrete origin. E.g. `http.Handle("/api/", http.StripPrefix("/api", cors(rest)))`, `http.Handle("/sse", cors(server.HTTPTransport()))`.
+
 ### 3. TypeScript Generation
 ```go
 gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
