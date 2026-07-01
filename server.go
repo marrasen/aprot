@@ -71,6 +71,10 @@ type ServerOptions struct {
 	// a server-side TriggerRefresh re-executes every matching subscription on a
 	// connection. Set to -1 to disable. Default: 1024.
 	MaxSubscriptions int
+	// Observer receives connection, request, subscription, refresh, and
+	// send-buffer events for metrics/observability. Nil (the default) disables
+	// all observation with no hot-path cost. See [Observer].
+	Observer Observer
 }
 
 func defaultServerOptions() ServerOptions {
@@ -114,6 +118,8 @@ type Server struct {
 	// a counting semaphore (one buffer slot per allowed request); nil when
 	// MaxServerConcurrentRequests disables the server-wide cap.
 	reqSem chan struct{}
+	// observer receives lifecycle/metrics events; nil disables observation.
+	observer Observer
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -154,6 +160,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.MaxSubscriptions != 0 {
 			options.MaxSubscriptions = opt.MaxSubscriptions
 		}
+		if opt.Observer != nil {
+			options.Observer = opt.Observer
+		}
 	}
 
 	// PongTimeout is the inbound read deadline; pings fire every PingInterval.
@@ -185,6 +194,7 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 	if options.MaxServerConcurrentRequests > 0 {
 		s.reqSem = make(chan struct{}, options.MaxServerConcurrentRequests)
 	}
+	s.observer = options.Observer
 	// Run OnServerInit hooks (used by tasks/ to set up taskManager, middleware, etc.)
 	for _, hook := range registry.serverInitHooks {
 		hook(s)
@@ -382,6 +392,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	wst := newWSTransport(ws, s.options)
 	conn := newConn(wst, s, connID, r, ctx)
+	// Give the transport a back-reference so it can report send-buffer pressure
+	// and write timeouts to the observer. Set before the pumps start.
+	wst.conn = conn
 
 	// Bound the direct writes below (rejection/config) the same way the
 	// write pump bounds its writes; the pump refreshes the deadline per
@@ -449,6 +462,20 @@ func (s *Server) ConnectionCount() int {
 	return len(s.conns)
 }
 
+// Stats returns a point-in-time snapshot of gauge-style server metrics
+// (active connections and subscriptions). It is safe for concurrent use and is
+// the pull-based companion to the push-based [Observer]; scrape it periodically
+// for gauges rather than tracking those counts from events yourself.
+func (s *Server) Stats() ServerStats {
+	s.mu.RLock()
+	conns := len(s.conns)
+	s.mu.RUnlock()
+	return ServerStats{
+		Connections:   conns,
+		Subscriptions: s.subscriptions.count(),
+	}
+}
+
 func (s *Server) run() {
 	defer close(s.done)
 
@@ -467,6 +494,9 @@ func (s *Server) run() {
 			s.mu.Lock()
 			s.conns[conn] = struct{}{}
 			s.mu.Unlock()
+			if s.observer != nil {
+				s.observer.ConnectionOpened(conn)
+			}
 		case conn := <-s.unregister:
 			s.mu.Lock()
 			_, existed := s.conns[conn]
@@ -480,6 +510,9 @@ func (s *Server) run() {
 				s.runDisconnectHooks(conn) // Before disassociate so UserID() works
 				s.disassociateUser(conn)
 				conn.close()
+				if s.observer != nil {
+					s.observer.ConnectionClosed(conn)
+				}
 			}
 
 			if s.stopping.Load() && empty {

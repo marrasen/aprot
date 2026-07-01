@@ -322,6 +322,25 @@
 // targeting ([Server.PushToUser]). It is not a security boundary — use the
 // stored principal for authorization decisions.
 //
+// # Observability
+//
+// Register an [Observer] via [ServerOptions.Observer] to receive connection,
+// request, subscription, refresh-fan-out, and send-buffer-pressure events, and
+// map them onto Prometheus, OpenTelemetry, or structured logs — aprot takes no
+// dependency on a metrics library. Observation is opt-in: with no observer the
+// hot path allocates nothing. Embed [NoopObserver] to implement only the events
+// you need and stay forward-compatible:
+//
+//	type metrics struct{ aprot.NoopObserver }
+//	func (metrics) RequestCompleted(e aprot.RequestEvent) {
+//	    requestDuration.WithLabelValues(e.Method, strconv.Itoa(e.Code)).Observe(e.Duration.Seconds())
+//	}
+//	server := aprot.NewServer(registry, aprot.ServerOptions{Observer: metrics{}})
+//
+// Observer methods run synchronously on hot paths, so implementations must be
+// fast and non-blocking. For gauge-style values, [Server.Stats] returns a
+// pull-based snapshot of active connection and subscription counts.
+//
 // # Push Events
 //
 // Push events are server-to-client messages broadcast to all connected clients

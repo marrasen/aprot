@@ -2,6 +2,9 @@ package aprot
 
 import (
 	"context"
+	"errors"
+	"net"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,6 +16,19 @@ type wsTransport struct {
 	send chan []byte
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 	opts ServerOptions // read limit, write timeout, and keepalive settings
+	// conn is a back-reference used only to report send-buffer pressure and
+	// write timeouts to the server's observer. Set after construction, before
+	// the pumps start; nil in transports created without a connection.
+	conn *Conn
+}
+
+// observer returns the server's observer via the connection back-reference, or
+// nil when there is no connection or no observer registered.
+func (t *wsTransport) observer() Observer {
+	if t.conn == nil || t.conn.server == nil {
+		return nil
+	}
+	return t.conn.server.observer
 }
 
 func newWSTransport(ws *websocket.Conn, opts ServerOptions) *wsTransport {
@@ -36,6 +52,14 @@ func (t *wsTransport) Send(data []byte) error {
 		return ErrConnectionClosed
 	case t.send <- data:
 		return nil
+	default:
+		t.reportBufferFull()
+	}
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- data:
+		return nil
 	}
 }
 
@@ -47,6 +71,25 @@ func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		t.reportBufferFull()
+	}
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- data:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// reportBufferFull signals send-buffer backpressure to the observer. Called on
+// the enqueue path when the buffer has no free slot; the frame is not dropped,
+// the caller falls back to a blocking send.
+func (t *wsTransport) reportBufferFull() {
+	if o := t.observer(); o != nil {
+		o.SendBufferFull(t.conn)
 	}
 }
 
@@ -134,5 +177,21 @@ func (t *wsTransport) writeMessage(messageType int, data []byte) error {
 	if t.opts.WriteTimeout > 0 {
 		_ = t.ws.SetWriteDeadline(time.Now().Add(t.opts.WriteTimeout))
 	}
-	return t.ws.WriteMessage(messageType, data)
+	err := t.ws.WriteMessage(messageType, data)
+	if err != nil && isTimeoutError(err) {
+		if o := t.observer(); o != nil {
+			o.WriteTimedOut(t.conn)
+		}
+	}
+	return err
+}
+
+// isTimeoutError reports whether err is (or wraps) an I/O deadline timeout,
+// which for a write means the peer stopped reading and WriteTimeout elapsed.
+func isTimeoutError(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
