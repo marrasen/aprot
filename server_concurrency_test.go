@@ -91,14 +91,29 @@ func TestMaxConcurrentRequestsRejectsOverCap(t *testing.T) {
 		t.Fatalf("expected CodeTooManyRequests error for over-cap request, got type=%q code=%d", over.Type, over.Code)
 	}
 
-	// Releasing the blocked handlers frees slots; a new request now succeeds.
+	// Releasing the blocked handlers frees their slots, after which a new
+	// request succeeds. The slot is returned in the dispatch goroutine just
+	// after the handler sends its response, so poll for reuse rather than
+	// racing that window (a request sent before the slot frees is legitimately
+	// rejected).
 	close(h.release)
-	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "after", Method: "gateHandlers.Block"}); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	after := readUntilID(t, ws, "after", 3*time.Second)
-	if after.Type != TypeResponse {
-		t.Fatalf("expected successful response after a slot freed, got type=%q code=%d", after.Type, after.Code)
+	deadline := time.Now().Add(3 * time.Second)
+	for attempt := 0; ; attempt++ {
+		id := fmt.Sprintf("after-%d", attempt)
+		if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: id, Method: "gateHandlers.Block"}); err != nil {
+			t.Fatalf("write failed: %v", err)
+		}
+		reply := readUntilID(t, ws, id, 3*time.Second)
+		if reply.Type == TypeResponse {
+			break // a slot freed and was reused
+		}
+		if reply.Code != CodeTooManyRequests {
+			t.Fatalf("unexpected reply for %s: type=%q code=%d", id, reply.Type, reply.Code)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no slot freed within timeout after releasing blocked handlers")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
