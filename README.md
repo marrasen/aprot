@@ -149,6 +149,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
+- **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout and mid-session token refresh; works over WebSocket and SSE
 - **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
@@ -786,6 +787,34 @@ http.Handle("/sse", cors(server.HTTPTransport()))            // SSE handler
 - **Closed by default** — construct the wrapper only where you want cross-origin access; nothing is loosened otherwise. An `Origin` that isn't allowed receives no CORS headers, so the browser blocks the response while same-origin and non-browser clients are unaffected.
 - **Credentials caveat** — cookie/`Authorization` requests need `AllowCredentials: true` **paired with explicit origins**. The browser rejects `Access-Control-Allow-Origin: *` alongside credentials, so `CORS` echoes the exact matched origin instead of `*` in that case (same class of concern as the CSWSH note above).
 - **Preflight** — `OPTIONS` requests carrying `Access-Control-Request-Method` are answered directly (`204`) with the allowed methods/headers and `Access-Control-Max-Age`; they never reach your handlers.
+
+### First-message authentication
+
+Instead of putting a token in the WebSocket URL (`ws://…/ws?token=<jwt>`) — where it leaks into access/proxy/CDN logs — the client can send it *over the connection* as its first message. Register an `OnAuth` hook to validate it:
+
+```go
+server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
+    claims, err := verify(token)
+    if err != nil {
+        return aprot.ErrAuthFailed("invalid token")
+    }
+    conn.SetUserID(claims.Subject)
+    return nil
+})
+```
+
+On the client, supply a token callback — the generated client sends `{type:'auth',token}` and waits for `auth_ok` before flushing any requests:
+
+```typescript
+const client = new ApiClient(getWebSocketUrl(), { getAuthToken: () => getToken() });
+// mid-session refresh, no reconnect:
+await client.refreshAuth(freshToken);
+```
+
+- **Pending-auth state** — with a hook registered, a new connection must authenticate before any request/subscribe runs; earlier frames are rejected with `auth_error`, and a connection that doesn't authenticate within `ServerOptions.AuthTimeout` (default 10s, `-1` disables) is closed.
+- **Mid-session refresh** — the same `auth` frame on a live connection updates the token/identity without reconnecting. A *failed* refresh keeps the existing session (a live connection is never downgraded).
+- **Both transports** — WebSocket sends the `auth` frame directly; SSE sends it in the first `POST /rpc` body (the `EventSource` GET can't set headers). `auth_ok`/`auth_error` arrive over the stream either way.
+- **Backward compatible** — with no `OnAuth` hook, connections behave exactly as before (URL-token via `OnConnect` still works). `ErrAuthFailed` uses code `-32005`; the TS client exposes `err.isAuthFailed()`.
 
 ## Observability
 

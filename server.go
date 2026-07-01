@@ -25,6 +25,18 @@ type ConnectHook func(ctx context.Context, conn *Conn) error
 // DisconnectHook is called when a connection is closed.
 type DisconnectHook func(ctx context.Context, conn *Conn)
 
+// AuthHook validates a token sent by the client in an auth frame (first-message
+// authentication and mid-session refresh). Return nil to accept — typically
+// after calling conn.SetUserID with the authenticated identity — or an error to
+// reject; the error's message is relayed to the client in an auth_error frame.
+// Return [ErrAuthFailed] for a clean, client-facing failure message.
+//
+// Registering a hook (via [Server.OnAuth]) puts every new connection into a
+// pending-auth state: it is rejected (auth_error) for any frame other than auth
+// until a token is accepted, and closed if none arrives within
+// [ServerOptions.AuthTimeout].
+type AuthHook func(ctx context.Context, conn *Conn, token string) error
+
 // ServerOptions configures the server behavior.
 type ServerOptions struct {
 	// ReconnectInterval is the initial reconnect delay in milliseconds. Default: 1000
@@ -75,6 +87,12 @@ type ServerOptions struct {
 	// send-buffer events for metrics/observability. Nil (the default) disables
 	// all observation with no hot-path cost. See [Observer].
 	Observer Observer
+	// AuthTimeout is how long a connection may stay unauthenticated after
+	// connecting when an [AuthHook] is registered via [Server.OnAuth]. A
+	// connection that has not sent a valid auth frame within this window is
+	// closed. Ignored when no auth hook is set. Set to -1 to disable the
+	// timeout. Default: 10s.
+	AuthTimeout time.Duration
 }
 
 func defaultServerOptions() ServerOptions {
@@ -90,6 +108,8 @@ func defaultServerOptions() ServerOptions {
 		MaxConcurrentRequests:       256,
 		MaxServerConcurrentRequests: 10000,
 		MaxSubscriptions:            1024,
+
+		AuthTimeout: 10 * time.Second,
 	}
 }
 
@@ -107,6 +127,7 @@ type Server struct {
 	options         ServerOptions
 	connectHooks    []ConnectHook
 	disconnectHooks []DisconnectHook
+	authHook        AuthHook // nil disables first-message auth (no pending state)
 	stopHooks       []func()
 	stopping        atomic.Bool   // reject new connections when set
 	stopCh          chan struct{} // closed by Stop() to signal run() to drain and exit
@@ -162,6 +183,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		}
 		if opt.Observer != nil {
 			options.Observer = opt.Observer
+		}
+		if opt.AuthTimeout != 0 {
+			options.AuthTimeout = opt.AuthTimeout
 		}
 	}
 
@@ -228,6 +252,33 @@ func (s *Server) OnDisconnect(hook DisconnectHook) {
 // drain. Used by the tasks package to shut down the taskManager.
 func (s *Server) OnStop(hook func()) {
 	s.stopHooks = append(s.stopHooks, hook)
+}
+
+// OnAuth registers the hook that validates client auth tokens for first-message
+// authentication. Registering a hook enables the pending-auth flow: a new
+// connection must send an auth frame ({"type":"auth","token":"..."}) with a
+// token the hook accepts before any request or subscribe is processed; frames
+// sent before then are rejected with auth_error, and a connection that does not
+// authenticate within [ServerOptions.AuthTimeout] is closed. The same auth frame
+// on a live connection refreshes the token. Calling OnAuth again replaces the
+// hook. With no hook registered, connections behave as before (authenticate via
+// [Server.OnConnect] / URL token if desired).
+//
+//	server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
+//	    claims, err := verify(token)
+//	    if err != nil {
+//	        return aprot.ErrAuthFailed("invalid token")
+//	    }
+//	    conn.SetUserID(claims.Subject)
+//	    return nil
+//	})
+func (s *Server) OnAuth(hook AuthHook) {
+	s.authHook = hook
+}
+
+// authRequired reports whether an auth hook is registered (pending-auth enabled).
+func (s *Server) authRequired() bool {
+	return s.authHook != nil
 }
 
 // ForEachConn iterates over a snapshot of the active connections. The
@@ -426,6 +477,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.disassociateUser(conn)
 		_ = ws.Close()
 		return
+	}
+
+	// When an auth hook is registered, the connection is pending until it sends
+	// a valid auth frame; close it if that doesn't happen within AuthTimeout.
+	if s.authRequired() {
+		conn.armAuthTimeout(s.options.AuthTimeout)
 	}
 
 	go wst.writePump()
