@@ -39,6 +39,8 @@ Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{Max
 
 **CORS for SSE/REST** (plain HTTP, so origin check doesn't apply): wrap the transport with `aprot.CORS(aprot.CORSOptions{AllowedOrigins, AllowedMethods, AllowedHeaders, ExposedHeaders, AllowCredentials, MaxAge})` — a `func(http.Handler) http.Handler` closed by default. Handles `OPTIONS` preflight (204). `AllowCredentials: true` must pair with explicit (non-`*`) origins; with `*`+credentials it echoes the concrete origin. E.g. `http.Handle("/api/", http.StripPrefix("/api", cors(rest)))`, `http.Handle("/sse", cors(server.HTTPTransport()))`.
 
+**Observability**: set `ServerOptions.Observer` to an `aprot.Observer` (embed `aprot.NoopObserver`, override what you need) — nil disables it with zero hot-path cost. Events: `ConnectionOpened/Closed(*Conn)`, `RequestCompleted(RequestEvent{Method, Subscribe, Duration, Code})` (Code 0 = success; fires for client requests/subscribes, not server refreshes), `SubscriptionRegistered/Unregistered(*Conn, method, id)`, `RefreshFanout(key, matched)`, `SendBufferFull(*Conn)` (backpressure; frame not dropped), `WriteTimedOut(*Conn)`. Callbacks are synchronous on hot paths + may run concurrently — keep them fast/non-blocking. Pull-based gauges: `server.Stats()` → `ServerStats{Connections, Subscriptions}`. Streaming handlers hold their slot until stream end; `RequestCompleted.Duration` spans the full iteration.
+
 ### 3. TypeScript Generation
 ```go
 gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{

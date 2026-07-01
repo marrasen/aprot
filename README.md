@@ -149,6 +149,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
+- **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
 - **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -785,6 +786,28 @@ http.Handle("/sse", cors(server.HTTPTransport()))            // SSE handler
 - **Closed by default** — construct the wrapper only where you want cross-origin access; nothing is loosened otherwise. An `Origin` that isn't allowed receives no CORS headers, so the browser blocks the response while same-origin and non-browser clients are unaffected.
 - **Credentials caveat** — cookie/`Authorization` requests need `AllowCredentials: true` **paired with explicit origins**. The browser rejects `Access-Control-Allow-Origin: *` alongside credentials, so `CORS` echoes the exact matched origin instead of `*` in that case (same class of concern as the CSWSH note above).
 - **Preflight** — `OPTIONS` requests carrying `Access-Control-Request-Method` are answered directly (`204`) with the allowed methods/headers and `Access-Control-Max-Age`; they never reach your handlers.
+
+## Observability
+
+Wire aprot into Prometheus, OpenTelemetry, or structured logs by registering an `Observer` — aprot takes no dependency on a metrics library, it just calls your callbacks on key events. Observation is **opt-in**: with no observer the hot path allocates nothing.
+
+```go
+type metrics struct{ aprot.NoopObserver } // embed NoopObserver, override what you need
+
+func (metrics) RequestCompleted(e aprot.RequestEvent) {
+    requestDuration.WithLabelValues(e.Method, strconv.Itoa(e.Code)).Observe(e.Duration.Seconds())
+}
+func (metrics) SendBufferFull(*aprot.Conn) { sendBufferFull.Inc() } // early backpressure signal
+
+server := aprot.NewServer(registry, aprot.ServerOptions{Observer: metrics{}})
+```
+
+Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), and `WriteTimedOut`.
+
+- **Embed `NoopObserver`** so you implement only the events you care about and stay forward-compatible as new ones are added.
+- **Hot-path discipline** — callbacks run synchronously on the server's hot paths and may fire concurrently, so keep them fast and non-blocking; offload heavy work to a goroutine.
+- **Cardinality** — `Method` is bounded by your handler set, but per-user / per-connection labels can explode a metrics backend; aggregate those.
+- **Gauges** — `server.Stats()` returns a pull-based snapshot (`Connections`, `Subscriptions`) for periodic scraping, rather than tracking those from events.
 
 ## REST Adapter
 

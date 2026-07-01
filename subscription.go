@@ -91,14 +91,15 @@ func (sm *subscriptionManager) register(sub *subscription) (ok bool, limited boo
 
 func (sm *subscriptionManager) unregister(connID uint64, subID string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	connSubs, ok := sm.byConn[connID]
 	if !ok {
+		sm.mu.Unlock()
 		return
 	}
 	sub, ok := connSubs[subID]
 	if !ok {
+		sm.mu.Unlock()
 		return
 	}
 
@@ -117,18 +118,37 @@ func (sm *subscriptionManager) unregister(connID uint64, subID string) {
 	if len(connSubs) == 0 {
 		delete(sm.byConn, connID)
 	}
+	sm.mu.Unlock()
+
+	// Notify outside the lock so a slow observer can't stall subscription
+	// bookkeeping for other connections.
+	notifySubscriptionUnregistered(sub)
+}
+
+// notifySubscriptionUnregistered fires the observer's SubscriptionUnregistered
+// event for sub, if an observer is registered. Safe to call with a subscription
+// whose connection has no server (unit-test conns).
+func notifySubscriptionUnregistered(sub *subscription) {
+	if sub.conn == nil || sub.conn.server == nil {
+		return
+	}
+	if o := sub.conn.server.observer; o != nil {
+		o.SubscriptionUnregistered(sub.conn, sub.method, sub.id)
+	}
 }
 
 func (sm *subscriptionManager) unregisterConn(connID uint64) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	connSubs, ok := sm.byConn[connID]
 	if !ok {
+		sm.mu.Unlock()
 		return
 	}
 
+	removed := make([]*subscription, 0, len(connSubs))
 	for _, sub := range connSubs {
+		removed = append(removed, sub)
 		for key := range sub.keys {
 			if subs, ok := sm.byKey[key]; ok {
 				delete(subs, sub)
@@ -140,6 +160,12 @@ func (sm *subscriptionManager) unregisterConn(connID uint64) {
 	}
 
 	delete(sm.byConn, connID)
+	sm.mu.Unlock()
+
+	// Notify outside the lock, once per subscription that was still active.
+	for _, sub := range removed {
+		notifySubscriptionUnregistered(sub)
+	}
 }
 
 func (sm *subscriptionManager) updateKeys(connID uint64, subID string, newKeys map[string]struct{}) {
@@ -202,6 +228,18 @@ func (sm *subscriptionManager) has(connID uint64, subID string) bool {
 	return false
 }
 
+// count returns the total number of active subscriptions across all
+// connections. Used by Server.Stats for gauge-style metrics.
+func (sm *subscriptionManager) count() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	n := 0
+	for _, subs := range sm.byConn {
+		n += len(subs)
+	}
+	return n
+}
+
 // getSubscriptionsForKey returns all subscriptions for a trigger key.
 func (sm *subscriptionManager) getSubscriptionsForKey(key string) []*subscription {
 	sm.mu.RLock()
@@ -251,7 +289,11 @@ func (s *Server) processRefreshQueue(rq *refreshQueue) {
 	seen := make(map[*subscription]struct{})
 	var toRefresh []*subscription
 	for _, key := range keys {
-		for _, sub := range s.subscriptions.getSubscriptionsForKey(key) {
+		subs := s.subscriptions.getSubscriptionsForKey(key)
+		if s.observer != nil {
+			s.observer.RefreshFanout(key, len(subs))
+		}
+		for _, sub := range subs {
 			if _, ok := seen[sub]; !ok {
 				seen[sub] = struct{}{}
 				toRefresh = append(toRefresh, sub)

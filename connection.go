@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/go-json-experiment/json"
 )
@@ -300,6 +301,22 @@ func (c *Conn) sendResponse(id string, result any) {
 	_ = c.sendJSON(msg)
 }
 
+// errorCode maps a handler error to the protocol code that sendError /
+// sendProtocolError / sendStreamEnd would send for it, so the observer can
+// report the same code the client receives. Returns 0 for a nil error.
+func (c *Conn) errorCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	if perr, ok := err.(*ProtocolError); ok {
+		return perr.Code
+	}
+	if code, found := c.server.registry.LookupError(err); found {
+		return code
+	}
+	return CodeInternalError
+}
+
 func (c *Conn) sendError(id string, code int, message string) {
 	msg := ErrorMessage{
 		Type:    TypeError,
@@ -405,16 +422,35 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 
 func (c *Conn) handleRequest(msg IncomingMessage) {
 	defer c.server.requestsWg.Done()
+
+	// Report the completed request to the observer (if any). reqCode is updated
+	// at each terminal branch; this defer runs after the panic-recovery defer
+	// below, so a panicking handler is still reported as CodeInternalError.
+	observer := c.server.observer
+	reqCode := 0
+	if observer != nil {
+		start := time.Now()
+		defer func() {
+			observer.RequestCompleted(RequestEvent{
+				Method:   msg.Method,
+				Duration: time.Since(start),
+				Code:     reqCode,
+			})
+		}()
+	}
+
 	// Each request runs on its own goroutine, so an unrecovered panic would
 	// kill the whole process, not just this request (unlike net/http).
 	defer func() {
 		if r := recover(); r != nil {
+			reqCode = CodeInternalError
 			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
 		}
 	}()
 
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
+		reqCode = CodeMethodNotFound
 		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
 		return
 	}
@@ -462,11 +498,13 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {
+		reqCode = CodeCanceled
 		c.sendError(msg.ID, CodeCanceled, "request canceled")
 		return
 	}
 
 	if err != nil {
+		reqCode = c.errorCode(err)
 		if perr, ok := err.(*ProtocolError); ok {
 			c.sendProtocolError(msg.ID, perr)
 		} else if code, found := c.server.registry.LookupError(err); found {
@@ -481,7 +519,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	// iter.Seq / iter.Seq2. Drive iteration now that middleware has returned.
 	if info.Kind == HandlerKindStream || info.Kind == HandlerKindStream2 {
 		seqVal, _ := result.(reflect.Value)
-		c.streamIterator(ctx, msg.ID, seqVal, info, sHooks)
+		reqCode = c.errorCode(c.streamIterator(ctx, msg.ID, seqVal, info, sHooks))
 		c.server.processRefreshQueue(rq)
 		return
 	}
@@ -505,13 +543,16 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 // as the sentinel the context carries (ErrClientCanceled,
 // ErrConnectionClosed, or ErrServerShutdown), so logging middleware
 // can distinguish client disconnect from server shutdown.
-func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Value, info *HandlerInfo, hooks *streamHooks) {
+// streamIterator returns the terminal error sent on the StreamEndMessage (nil
+// for a clean end or client cancellation), so the caller can report the stream's
+// outcome code to the observer.
+func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Value, info *HandlerInfo, hooks *streamHooks) error {
 	if !seq.IsValid() || seq.Kind() == reflect.Func && seq.IsNil() {
 		c.sendStreamEnd(reqID, nil)
 		if hooks != nil {
 			hooks.run(nil, 0)
 		}
-		return
+		return nil
 	}
 
 	yieldType := seq.Type().In(0)
@@ -571,9 +612,10 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 	// the client's point of view — no error payload on the end message.
 	if streamErr != nil && ctx.Err() == nil && streamErr != ErrConnectionClosed {
 		c.sendStreamEnd(reqID, streamErr)
-	} else {
-		c.sendStreamEnd(reqID, nil)
+		return streamErr
 	}
+	c.sendStreamEnd(reqID, nil)
+	return nil
 }
 
 // sendStreamEnd sends a terminal StreamEndMessage for the given request ID.
@@ -598,14 +640,33 @@ func (c *Conn) sendStreamEnd(reqID string, err error) {
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	defer c.server.requestsWg.Done()
+
+	// Report the completed subscribe to the observer (if any). See handleRequest
+	// for the defer-ordering rationale.
+	observer := c.server.observer
+	reqCode := 0
+	if observer != nil {
+		start := time.Now()
+		defer func() {
+			observer.RequestCompleted(RequestEvent{
+				Method:    msg.Method,
+				Subscribe: true,
+				Duration:  time.Since(start),
+				Code:      reqCode,
+			})
+		}()
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
+			reqCode = CodeInternalError
 			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
 		}
 	}()
 
 	info, ok := c.server.registry.Get(msg.Method)
 	if !ok {
+		reqCode = CodeMethodNotFound
 		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
 		return
 	}
@@ -613,6 +674,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	// Subscriptions require a reproducible unary result to re-send on refresh;
 	// streaming handlers can't satisfy that contract.
 	if info.Kind != HandlerKindUnary {
+		reqCode = CodeInvalidRequest
 		c.sendError(msg.ID, CodeInvalidRequest, "streaming handlers cannot be subscribed: "+msg.Method)
 		return
 	}
@@ -651,11 +713,13 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	result, err := handler(ctx, req)
 
 	if ctx.Err() == context.Canceled {
+		reqCode = CodeCanceled
 		c.sendError(msg.ID, CodeCanceled, "request canceled")
 		return
 	}
 
 	if err != nil {
+		reqCode = c.errorCode(err)
 		if perr, ok := err.(*ProtocolError); ok {
 			c.sendProtocolError(msg.ID, perr)
 		} else if code, found := c.server.registry.LookupError(err); found {
@@ -692,12 +756,15 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 			if limited {
 				// The connection is at its subscription cap; tell the client so
 				// it can back off rather than silently dropping the subscribe.
+				reqCode = CodeTooManyRequests
 				c.sendError(msg.ID, CodeTooManyRequests, "subscription limit reached")
 			}
 			// Otherwise the connection closed while the handler was running; the
 			// subscription was refused so it can't outlive the conn. Either way,
 			// don't send a success response.
 			return
+		} else if observer != nil {
+			observer.SubscriptionRegistered(c, msg.Method, msg.ID)
 		}
 	}
 
