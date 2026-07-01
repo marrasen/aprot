@@ -90,8 +90,10 @@ type ServerOptions struct {
 	// AuthTimeout is how long a connection may stay unauthenticated after
 	// connecting when an [AuthHook] is registered via [Server.OnAuth]. A
 	// connection that has not sent a valid auth frame within this window is
-	// closed. Ignored when no auth hook is set. Set to -1 to disable the
-	// timeout. Default: 10s.
+	// closed. Ignored when no auth hook is set. Default: 10s. Set to -1 to
+	// disable the timeout — but note that a disabled timeout lets unauthenticated
+	// connections linger indefinitely, which is a DoS vector on public endpoints;
+	// keep a bounded timeout there.
 	AuthTimeout time.Duration
 }
 
@@ -363,6 +365,14 @@ func (s *Server) PushToUser(userID string, data any) {
 	s.mu.RUnlock()
 
 	for _, conn := range conns {
+		// A mid-session auth refresh can change a connection's identity between
+		// the snapshot above and this send (SetUserID updates c.userID and the
+		// userConns index in separate steps). Re-check the current identity so a
+		// push for one user is never delivered to a connection that has since
+		// re-authenticated as a different user.
+		if conn.UserID() != userID {
+			continue
+		}
 		_ = conn.push(event, data)
 	}
 }

@@ -483,7 +483,11 @@ func (c *Conn) handleAuth(token string) {
 		return
 	}
 
-	message := err.Error()
+	// Only a ProtocolError message (e.g. from ErrAuthFailed) is treated as
+	// client-safe. Any other error from the hook — a raw DB/JWT/network failure —
+	// is redacted to a generic message so internal detail can't leak to an
+	// unauthenticated caller at the auth boundary.
+	message := "authentication failed"
 	if perr, ok := err.(*ProtocolError); ok {
 		message = perr.Message
 	}

@@ -2,10 +2,12 @@ package aprot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,6 +190,63 @@ func TestAuth_RefreshUpdatesIdentity(t *testing.T) {
 	}
 }
 
+// A raw (non-ProtocolError) error from the auth hook is redacted before being
+// sent to the client, so internal detail can't leak at the auth boundary.
+func TestAuth_RawHookErrorRedacted(t *testing.T) {
+	secret := "pq: password authentication failed for host internal-db:5432"
+	hook := func(ctx context.Context, conn *Conn, token string) error {
+		return errors.New(secret)
+	}
+	ts := newAuthServer(t, ServerOptions{}, hook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	sendAuth(t, ws, "whatever")
+	f := readFrame(t, ws, 3*time.Second)
+	if f.Type != string(TypeAuthError) {
+		t.Fatalf("expected auth_error, got type=%q", f.Type)
+	}
+	if strings.Contains(f.Message, "internal-db") || f.Message != "authentication failed" {
+		t.Errorf("raw hook error leaked to client: %q", f.Message)
+	}
+}
+
+// PushToUser must not deliver a user's push to a connection that has since
+// re-authenticated as a different user (the SetUserID / userConns transition is
+// not atomic, so the snapshot can be momentarily stale). Regression for the
+// identity race flagged in review.
+func TestPushToUser_SkipsReauthenticatedConnection(t *testing.T) {
+	registry := NewRegistry()
+	h := &IntegrationHandlers{}
+	registry.Register(h)
+	registry.RegisterPushEventFor(h, NotificationEvent{})
+	server := NewServer(registry)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+
+	var sends int32
+	conn := &Conn{
+		id:        1,
+		server:    server,
+		transport: &mockTransport{onSend: func([]byte) { atomic.AddInt32(&sends, 1) }},
+	}
+	conn.userID = "bob" // already re-authenticated as bob
+
+	// Momentarily-stale index: conn is still listed under alice.
+	server.userConns["alice"] = map[*Conn]struct{}{conn: {}}
+
+	server.PushToUser("alice", NotificationEvent{Message: "for-alice"})
+	if n := atomic.LoadInt32(&sends); n != 0 {
+		t.Fatalf("alice's push was delivered to a connection now identified as bob (%d sends)", n)
+	}
+
+	// Sanity: a matching identity still receives the push.
+	conn.userID = "alice"
+	server.PushToUser("alice", NotificationEvent{Message: "for-alice"})
+	if n := atomic.LoadInt32(&sends); n != 1 {
+		t.Fatalf("expected exactly one send to alice's connection, got %d", n)
+	}
+}
+
 // A failed refresh on a live connection reports auth_error but keeps the session.
 func TestAuth_FailedRefreshKeepsSession(t *testing.T) {
 	ts := newAuthServer(t, ServerOptions{}, tokenHook)
@@ -266,5 +325,38 @@ func TestAuthSSE_Flow(t *testing.T) {
 	}
 	if m, _ := msg.Result.(map[string]any); m == nil || m["message"] != "alice" {
 		t.Fatalf("expected WhoAmI=alice, got %v", msg.Result)
+	}
+
+	// Mid-session refresh over SSE updates the identity.
+	postAuthSSE(t, ts, connID, "good:bob")
+	if ev, err = reader.readEvent(); err != nil || ev.Event != string(TypeAuthOK) {
+		t.Fatalf("expected auth_ok on SSE refresh, got %q err=%v", ev.Event, err)
+	}
+	postRPC(t, ts, connID, "3", "authHandlers.WhoAmI", "[]")
+	if ev, err = reader.readEvent(); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	var msg2 ResponseMessage
+	if err := json.Unmarshal([]byte(ev.Data), &msg2); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if m, _ := msg2.Result.(map[string]any); m == nil || m["message"] != "bob" {
+		t.Fatalf("expected identity refreshed to bob over SSE, got %v", msg2.Result)
+	}
+}
+
+// SSE: a connection that never authenticates is closed after AuthTimeout, with
+// an auth_error delivered over the stream first.
+func TestAuthSSE_Timeout(t *testing.T) {
+	ts := newAuthServer(t, ServerOptions{AuthTimeout: 150 * time.Millisecond}, tokenHook)
+	resp, reader, _ := connectSSE(t, ts)
+	defer resp.Body.Close()
+
+	ev, err := reader.readEvent()
+	if err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if ev.Event != string(TypeAuthError) {
+		t.Fatalf("expected auth_error on SSE timeout, got %q", ev.Event)
 	}
 }
