@@ -255,12 +255,23 @@
 //	    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
 //	    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
 //	    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+//
+//	    MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
+//	    MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
+//	    MaxSubscriptions:            1024,  // active subscriptions per connection (default 1024)
 //	})
 //
 // Set a field to -1 to disable that limit; zero applies the default.
 // Handler panics are recovered per request and surfaced to the client as
 // internal errors, mirroring net/http — one buggy handler cannot take down
 // the process.
+//
+// The concurrency caps bound the work a single connection (or the whole
+// fleet) can pin at once: each inbound request or subscribe frame takes one
+// in-flight slot for the duration of its handler, and each connection may hold
+// only MaxSubscriptions active subscriptions (which also bounds refresh
+// fan-out). A frame that would exceed a cap is rejected with
+// [CodeTooManyRequests] rather than spawning unbounded goroutines.
 //
 // # Security
 //

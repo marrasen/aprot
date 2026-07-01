@@ -53,6 +53,24 @@ type ServerOptions struct {
 	// it up to 2*PingInterval so healthy connections aren't dropped. Only
 	// effective while pings are enabled. Set to -1 to disable. Default: 60s.
 	PongTimeout time.Duration
+	// MaxConcurrentRequests caps the number of in-flight requests a single
+	// connection may run at once. Each inbound request/subscribe frame occupies
+	// one slot for the duration of its handler (a streaming handler holds its
+	// slot until the stream ends). When a connection is at the cap, further
+	// requests are rejected with CodeTooManyRequests instead of spawning an
+	// unbounded number of goroutines. Set to -1 to disable. Default: 256.
+	MaxConcurrentRequests int
+	// MaxServerConcurrentRequests caps the total number of in-flight requests
+	// across all connections, bounding server-wide goroutine and memory growth
+	// from a fleet of connections. Requests over the cap are rejected with
+	// CodeTooManyRequests. Set to -1 to disable. Default: 10000.
+	MaxServerConcurrentRequests int
+	// MaxSubscriptions caps the number of active subscriptions a single
+	// connection may hold. A subscribe beyond the cap is rejected with
+	// CodeTooManyRequests. This also bounds refresh fan-out amplification, since
+	// a server-side TriggerRefresh re-executes every matching subscription on a
+	// connection. Set to -1 to disable. Default: 1024.
+	MaxSubscriptions int
 }
 
 func defaultServerOptions() ServerOptions {
@@ -64,6 +82,10 @@ func defaultServerOptions() ServerOptions {
 		WriteTimeout:         30 * time.Second,
 		PingInterval:         30 * time.Second,
 		PongTimeout:          60 * time.Second,
+
+		MaxConcurrentRequests:       256,
+		MaxServerConcurrentRequests: 10000,
+		MaxSubscriptions:            1024,
 	}
 }
 
@@ -88,6 +110,10 @@ type Server struct {
 	done            chan struct{} // closed by run() when it finishes
 	requestsWg      sync.WaitGroup
 	subscriptions   *subscriptionManager
+	// reqSem bounds the total in-flight requests across all connections. It is
+	// a counting semaphore (one buffer slot per allowed request); nil when
+	// MaxServerConcurrentRequests disables the server-wide cap.
+	reqSem chan struct{}
 }
 
 // NewServer creates a new WebSocket server with the given registry.
@@ -119,6 +145,15 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.PongTimeout != 0 {
 			options.PongTimeout = opt.PongTimeout
 		}
+		if opt.MaxConcurrentRequests != 0 {
+			options.MaxConcurrentRequests = opt.MaxConcurrentRequests
+		}
+		if opt.MaxServerConcurrentRequests != 0 {
+			options.MaxServerConcurrentRequests = opt.MaxServerConcurrentRequests
+		}
+		if opt.MaxSubscriptions != 0 {
+			options.MaxSubscriptions = opt.MaxSubscriptions
+		}
 	}
 
 	// PongTimeout is the inbound read deadline; pings fire every PingInterval.
@@ -146,6 +181,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		stopCh:        make(chan struct{}),
 		done:          make(chan struct{}),
 		subscriptions: newSubscriptionManager(),
+	}
+	if options.MaxServerConcurrentRequests > 0 {
+		s.reqSem = make(chan struct{}, options.MaxServerConcurrentRequests)
 	}
 	// Run OnServerInit hooks (used by tasks/ to set up taskManager, middleware, etc.)
 	for _, hook := range registry.serverInitHooks {

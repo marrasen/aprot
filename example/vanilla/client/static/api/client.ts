@@ -13,6 +13,7 @@ export const ErrorCode = {
     Unauthorized: -32001,
     ConnectionRejected: -32002,
     Forbidden: -32003,
+    TooManyRequests: -32004,
 } as const;
 
 export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
@@ -54,6 +55,7 @@ export class ApiError extends Error {
     isValidationFailed(): boolean { return this.code === ErrorCode.ValidationFailed; }
     isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
     isConnectionRejected(): boolean { return this.code === ErrorCode.ConnectionRejected; }
+    isTooManyRequests(): boolean { return this.code === ErrorCode.TooManyRequests; }
 }
 
 // getValidationErrors returns the structured FieldError list when err is a

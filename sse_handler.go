@@ -205,28 +205,27 @@ func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dispatch based on message type
+	// Dispatch based on message type. dispatchRequest/dispatchSubscribe reserve
+	// an in-flight slot (rejecting with CodeTooManyRequests over the SSE stream
+	// when a concurrency cap is exceeded) and manage requestsWg, so the acquire
+	// stays paired with the release in the handler.
 	switch req.Type {
 	case "subscribe":
-		msg := IncomingMessage{
+		conn.dispatchSubscribe(IncomingMessage{
 			Type:   TypeSubscribe,
 			ID:     req.ID,
 			Method: req.Method,
 			Params: req.Params,
-		}
-		h.server.requestsWg.Add(1)
-		go conn.handleSubscribe(msg)
+		})
 	case "unsubscribe":
 		conn.handleUnsubscribe(req.ID)
 	default:
-		msg := IncomingMessage{
+		conn.dispatchRequest(IncomingMessage{
 			Type:   TypeRequest,
 			ID:     req.ID,
 			Method: req.Method,
 			Params: req.Params,
-		}
-		h.server.requestsWg.Add(1)
-		go conn.handleRequest(msg)
+		})
 	}
 
 	w.WriteHeader(http.StatusAccepted)

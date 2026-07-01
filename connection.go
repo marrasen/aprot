@@ -32,6 +32,10 @@ type Conn struct {
 	valuesMu  sync.RWMutex    // guards values map (separate from mu to avoid contention with sendJSON/requests)
 	values    map[any]any     // connection-scoped key-value store (lazy init)
 	ctx       context.Context // Context from HTTP request
+	// reqSem bounds the number of in-flight requests this connection may run
+	// concurrently. It is a counting semaphore (one buffer slot per allowed
+	// request); nil when MaxConcurrentRequests disables the per-connection cap.
+	reqSem chan struct{}
 }
 
 // SetUserID associates this connection with a user ID.
@@ -140,7 +144,7 @@ func (c *Conn) RemoteAddr() string {
 }
 
 func newConn(t transport, server *Server, id uint64, r *http.Request, ctx context.Context) *Conn {
-	return &Conn{
+	c := &Conn{
 		transport: t,
 		server:    server,
 		requests:  make(map[string]context.CancelCauseFunc),
@@ -154,6 +158,79 @@ func newConn(t transport, server *Server, id uint64, r *http.Request, ctx contex
 			Host:       r.Host,
 		},
 	}
+	if server.options.MaxConcurrentRequests > 0 {
+		c.reqSem = make(chan struct{}, server.options.MaxConcurrentRequests)
+	}
+	return c
+}
+
+// acquireRequestSlot reserves one in-flight-request slot against both the
+// per-connection and server-wide caps. It never blocks: if either cap is at
+// capacity it rolls back any slot already taken and returns false, so the
+// caller can reject the request with CodeTooManyRequests. A nil semaphore means
+// that cap is disabled. Each successful acquire must be paired with exactly one
+// releaseRequestSlot once the request finishes.
+func (c *Conn) acquireRequestSlot() bool {
+	if c.reqSem != nil {
+		select {
+		case c.reqSem <- struct{}{}:
+		default:
+			return false
+		}
+	}
+	if c.server.reqSem != nil {
+		select {
+		case c.server.reqSem <- struct{}{}:
+		default:
+			// Roll back the per-connection slot taken above.
+			if c.reqSem != nil {
+				<-c.reqSem
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// releaseRequestSlot returns the slots reserved by acquireRequestSlot.
+func (c *Conn) releaseRequestSlot() {
+	if c.reqSem != nil {
+		<-c.reqSem
+	}
+	if c.server.reqSem != nil {
+		<-c.server.reqSem
+	}
+}
+
+// dispatchRequest reserves an in-flight slot and runs handleRequest on its own
+// goroutine, or rejects the request with CodeTooManyRequests when the
+// connection or server is at capacity. The acquire and its paired release both
+// live here (the release fires when the handler goroutine returns), so the
+// handlers stay callable in isolation and both transports share one correct
+// path.
+func (c *Conn) dispatchRequest(msg IncomingMessage) {
+	if !c.acquireRequestSlot() {
+		c.sendError(msg.ID, CodeTooManyRequests, "too many concurrent requests")
+		return
+	}
+	c.server.requestsWg.Add(1)
+	go func() {
+		defer c.releaseRequestSlot()
+		c.handleRequest(msg)
+	}()
+}
+
+// dispatchSubscribe is dispatchRequest's counterpart for subscribe frames.
+func (c *Conn) dispatchSubscribe(msg IncomingMessage) {
+	if !c.acquireRequestSlot() {
+		c.sendError(msg.ID, CodeTooManyRequests, "too many concurrent requests")
+		return
+	}
+	c.server.requestsWg.Add(1)
+	go func() {
+		defer c.releaseRequestSlot()
+		c.handleSubscribe(msg)
+	}()
 }
 
 // ServerBroadcaster returns the server as a Broadcaster.
@@ -313,11 +390,9 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 
 	switch msg.Type {
 	case TypeRequest:
-		c.server.requestsWg.Add(1)
-		go c.handleRequest(msg)
+		c.dispatchRequest(msg)
 	case TypeSubscribe:
-		c.server.requestsWg.Add(1)
-		go c.handleSubscribe(msg)
+		c.dispatchSubscribe(msg)
 	case TypeUnsubscribe:
 		c.cancelRequest(msg.ID)
 		c.handleUnsubscribe(msg.ID)
@@ -607,16 +682,21 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 			// Re-subscribe with the same ID may carry new params; refresh them
 			// so server-driven re-execution doesn't replay the stale ones.
 			c.server.subscriptions.updateParams(c.id, msg.ID, msg.Params)
-		} else if !c.server.subscriptions.register(&subscription{
+		} else if ok, limited := c.server.subscriptions.register(&subscription{
 			conn:   c,
 			id:     msg.ID,
 			method: msg.Method,
 			keys:   keys,
 			params: msg.Params,
-		}) {
-			// The connection closed while the handler was running; the
-			// subscription was refused so it can't outlive the conn. Don't
-			// send a response — the transport is gone.
+		}); !ok {
+			if limited {
+				// The connection is at its subscription cap; tell the client so
+				// it can back off rather than silently dropping the subscribe.
+				c.sendError(msg.ID, CodeTooManyRequests, "subscription limit reached")
+			}
+			// Otherwise the connection closed while the handler was running; the
+			// subscription was refused so it can't outlive the conn. Either way,
+			// don't send a success response.
 			return
 		}
 	}

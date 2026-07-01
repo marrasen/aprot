@@ -33,7 +33,7 @@ http.Handle("/sse/", server.HTTPTransport())
 http.Handle("/api/", aprot.NewRESTAdapter(registry)) // optional REST
 ```
 
-Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{MaxMessageSize, WriteTimeout, PingInterval, PongTimeout}` — inbound size limit (default 4 MiB), stalled-peer write timeout (30s), WS keepalive ping (30s) and pong timeout (60s). Handler panics are recovered per request and returned as internal errors.
+Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{MaxMessageSize, WriteTimeout, PingInterval, PongTimeout, MaxConcurrentRequests, MaxServerConcurrentRequests, MaxSubscriptions}` — inbound size limit (default 4 MiB), stalled-peer write timeout (30s), WS keepalive ping (30s) and pong timeout (60s), in-flight requests per connection (256) and server-wide (10000), and active subscriptions per connection (1024). Exceeding a concurrency cap rejects the frame with `CodeTooManyRequests` (-32004; client `err.isTooManyRequests()`) instead of spawning unbounded goroutines; a streaming handler holds its request slot until the stream ends. Handler panics are recovered per request and returned as internal errors.
 
 **Cookie-auth deployments must set an origin check** (default allows all origins — CSWSH risk): `server.SetCheckOrigin(func(r *http.Request) bool { return r.Header.Get("Origin") == "https://app.example.com" })`.
 
