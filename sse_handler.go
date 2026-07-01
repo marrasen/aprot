@@ -148,6 +148,12 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// When an auth hook is registered, the client must authenticate over a
+	// POST /rpc auth frame; close the stream if it doesn't within AuthTimeout.
+	if h.server.authRequired() {
+		conn.armAuthTimeout(h.server.options.AuthTimeout)
+	}
+
 	// Keep-alive loop, blocks until client disconnects
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()
@@ -183,6 +189,9 @@ type rpcRequest struct {
 	ID           string         `json:"id"`
 	Method       string         `json:"method,omitempty"`
 	Params       jsontext.Value `json:"params,omitempty"`
+	// Token carries the auth token on a type:"auth" frame. The SSE EventSource
+	// GET cannot set custom headers, so first-message auth rides the POST body.
+	Token string `json:"token,omitempty"`
 }
 
 func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +211,23 @@ func (h *sseHandler) handleRPC(w http.ResponseWriter, r *http.Request) {
 
 	if !ok {
 		http.Error(w, "unknown connection ID", http.StatusBadRequest)
+		return
+	}
+
+	// Auth frame: validate the token (initial handshake or refresh). The result
+	// (auth_ok / auth_error) is delivered over the SSE stream, mirroring
+	// WebSocket; the POST itself is accepted.
+	if req.Type == string(TypeAuth) {
+		conn.handleAuth(req.Token)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// While pending authentication, reject non-auth frames over the stream
+	// rather than dispatching a handler (symmetric with WebSocket).
+	if h.server.authRequired() && !conn.isAuthenticated() {
+		conn.sendAuthError("authentication required")
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 

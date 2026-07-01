@@ -18,6 +18,12 @@ const (
 	TypeUnsubscribe MessageType = "unsubscribe"
 	TypeStreamItem  MessageType = "stream_item"
 	TypeStreamEnd   MessageType = "stream_end"
+	// TypeAuth is a client->server frame carrying a token for first-message
+	// authentication (and mid-session token refresh). TypeAuthOK / TypeAuthError
+	// are the server's responses.
+	TypeAuth      MessageType = "auth"
+	TypeAuthOK    MessageType = "auth_ok"
+	TypeAuthError MessageType = "auth_error"
 )
 
 // ConnectedMessage is sent as the first SSE event to provide the connection ID.
@@ -33,6 +39,16 @@ type IncomingMessage struct {
 	ID     string         `json:"id,omitempty"`
 	Method string         `json:"method,omitempty"`
 	Params jsontext.Value `json:"params,omitempty"`
+	// Token carries the auth token on a TypeAuth frame (first-message auth and
+	// mid-session refresh). Empty for all other message types.
+	Token string `json:"token,omitempty"`
+}
+
+// AuthResultMessage is the server's response to a TypeAuth frame: TypeAuthOK on
+// success, or TypeAuthError (with a Message) on failure.
+type AuthResultMessage struct {
+	Type    MessageType `json:"type"`
+	Message string      `json:"message,omitempty"`
 }
 
 // ResponseMessage represents a successful response from server to client.

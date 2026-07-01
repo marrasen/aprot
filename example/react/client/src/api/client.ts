@@ -21,6 +21,7 @@ export const ErrorCode = {
     ConnectionRejected: -32002,
     Forbidden: -32003,
     TooManyRequests: -32004,
+    AuthFailed: -32005,
 } as const;
 
 export type ErrorCodeType = typeof ErrorCode[keyof typeof ErrorCode];
@@ -63,6 +64,7 @@ export class ApiError extends Error {
     isCanceled(): boolean { return this.code === ErrorCode.Canceled; }
     isConnectionRejected(): boolean { return this.code === ErrorCode.ConnectionRejected; }
     isTooManyRequests(): boolean { return this.code === ErrorCode.TooManyRequests; }
+    isAuthFailed(): boolean { return this.code === ErrorCode.AuthFailed; }
 }
 
 // getValidationErrors returns the structured FieldError list when err is a
@@ -166,9 +168,20 @@ export interface ApiClientOptions {
     reconnectMaxAttempts?: number;
     /** Called when the server rejects the connection (e.g. invalid session). Connection will not auto-reconnect. */
     onConnectionRejected?: (error: ApiError) => void;
+    /**
+     * Returns an auth token for first-message authentication. Called on the
+     * initial connect and on every reconnect. When set, the client sends the
+     * token as its first message ({type:'auth'}) and waits for the server's
+     * auth_ok before flushing requests/subscriptions. An auth_error is treated
+     * as a connection rejection (no auto-reconnect). Use refreshAuth() to update
+     * the token mid-session without reconnecting.
+     */
+    getAuthToken?: () => string | Promise<string>;
 }
 
-type ResolvedOptions = Required<Omit<ApiClientOptions, 'onConnectionRejected'>> & Pick<ApiClientOptions, 'onConnectionRejected'>;
+type ResolvedOptions =
+    Required<Omit<ApiClientOptions, 'onConnectionRejected' | 'getAuthToken'>>
+    & Pick<ApiClientOptions, 'onConnectionRejected' | 'getAuthToken'>;
 
 const defaultOptions: ResolvedOptions = {
     transport: 'websocket',
@@ -281,7 +294,8 @@ type ClientMessage =
     | { type: 'request'; id: string; method: string; params: unknown[] }
     | { type: 'subscribe'; id: string; method: string; params: unknown[] }
     | { type: 'unsubscribe'; id: string }
-    | { type: 'cancel'; id: string };
+    | { type: 'cancel'; id: string }
+    | { type: 'auth'; token: string };
 
 class SSETransport implements ClientTransport {
     private eventSource: EventSource | null = null;
@@ -303,6 +317,14 @@ class SSETransport implements ClientTransport {
             });
 
             this.eventSource.addEventListener('config', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('auth_ok', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
+            this.eventSource.addEventListener('auth_error', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
@@ -347,6 +369,21 @@ class SSETransport implements ClientTransport {
     send(message: object): void {
         if (!this.connectionId) return;
         const msg = message as ClientMessage;
+
+        if (msg.type === 'auth') {
+            // First-message auth rides the POST body (EventSource GET can't set
+            // headers). The auth_ok / auth_error result arrives over the stream.
+            fetch(this.baseUrl + '/rpc', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'auth',
+                    connectionId: this.connectionId,
+                    token: msg.token,
+                }),
+            }).catch(() => {});
+            return;
+        }
 
         if (msg.type === 'request' || msg.type === 'subscribe') {
             fetch(this.baseUrl + '/rpc', {
@@ -451,6 +488,9 @@ export class ApiClient {
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     private manualDisconnect = false;
+    // authWaiter resolves/rejects the in-flight auth handshake (initial connect
+    // or refreshAuth) when the server's auth_ok / auth_error arrives.
+    private authWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
     // pendingRejection is set when the server sends a ConnectionRejected
     // ApiError just before tearing down the transport. handleClose() reads
     // it so the resulting ConnectionError carries reason 'server-rejected'
@@ -490,13 +530,69 @@ export class ApiClient {
             url,
             (data) => this.handleMessage(data),
             (info) => this.handleClose(info),
-        ).then(() => {
+        ).then(async () => {
             this.reconnectAttempts = 0;
+            // First-message auth: authenticate before the connection is
+            // considered ready, so buffered requests/subscriptions only flush
+            // after auth_ok. Runs again automatically on every reconnect.
+            if (this.options.getAuthToken) {
+                try {
+                    await this.authenticate();
+                } catch (err) {
+                    // The server rejected the token: classify like a connection
+                    // rejection (no auto-reconnect), carrying the auth error.
+                    const apiError = err instanceof ApiError
+                        ? err
+                        : new ApiError(ErrorCode.AuthFailed, 'authentication failed');
+                    this.manualDisconnect = true;
+                    this.pendingRejection = apiError;
+                    this.options.onConnectionRejected?.(apiError);
+                    this.transport.disconnect();
+                    return;
+                }
+            }
             this.setState('connected');
         }).catch(() => {
             // The transport's promise rejected before opening — treat as a
             // pre-upgrade close with no diagnostic info available.
             this.handleClose({ wasClean: false });
+        });
+    }
+
+    // authenticate resolves the token via getAuthToken, sends the auth frame,
+    // and resolves on auth_ok / rejects on auth_error (handled in handleMessage).
+    private authenticate(): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            // A newer handshake supersedes any in-flight one.
+            this.authWaiter?.reject(new Error('superseded by a newer auth'));
+            this.authWaiter = { resolve, reject };
+            Promise.resolve(this.options.getAuthToken!())
+                .then((token) => this.transport.send({ type: 'auth', token }))
+                .catch((e) => {
+                    if (this.authWaiter?.reject === reject) this.authWaiter = null;
+                    reject(e instanceof Error ? e : new Error(String(e)));
+                });
+        });
+    }
+
+    /**
+     * Refresh the auth token on the live connection without reconnecting. Sends
+     * an auth frame with the given token (or getAuthToken() when omitted) and
+     * resolves on auth_ok. On auth_error the promise rejects but the existing
+     * session is kept — the server does not downgrade a live connection.
+     */
+    async refreshAuth(token?: string): Promise<void> {
+        let t = token;
+        if (t === undefined) {
+            if (!this.options.getAuthToken) {
+                throw new Error('refreshAuth requires a token argument or a getAuthToken option');
+            }
+            t = await this.options.getAuthToken();
+        }
+        return new Promise<void>((resolve, reject) => {
+            this.authWaiter?.reject(new Error('superseded by a newer auth'));
+            this.authWaiter = { resolve, reject };
+            this.transport.send({ type: 'auth', token: t as string });
         });
     }
 
@@ -799,6 +895,18 @@ export class ApiClient {
             case 'config':
                 this.applyConfig(msg);
                 break;
+            case 'auth_ok': {
+                const waiter = this.authWaiter;
+                this.authWaiter = null;
+                waiter?.resolve();
+                break;
+            }
+            case 'auth_error': {
+                const waiter = this.authWaiter;
+                this.authWaiter = null;
+                waiter?.reject(new ApiError(ErrorCode.AuthFailed, msg.message ?? 'authentication failed'));
+                break;
+            }
             case 'response': {
                 const p = this.pending.get(msg.id);
                 if (p) {

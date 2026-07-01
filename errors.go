@@ -15,6 +15,7 @@ const (
 	CodeConnectionRejected = -32002
 	CodeForbidden          = -32003
 	CodeTooManyRequests    = -32004
+	CodeAuthFailed         = -32005
 )
 
 // ProtocolError represents an error that can be sent to the client.
@@ -87,6 +88,13 @@ func ErrConnectionRejected(message string) *ProtocolError {
 // and [ServerOptions.MaxServerConcurrentRequests]).
 func ErrTooManyRequests(message string) *ProtocolError {
 	return NewError(CodeTooManyRequests, message)
+}
+
+// ErrAuthFailed returns an authentication failure error. Return it from a
+// [Server.OnAuth] hook to reject a token; the server relays the message to the
+// client in an auth_error frame (see [Server.OnAuth]).
+func ErrAuthFailed(message string) *ProtocolError {
+	return NewError(CodeAuthFailed, message)
 }
 
 // CancelReason represents why a request context was canceled.

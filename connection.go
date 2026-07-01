@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-json-experiment/json"
@@ -37,6 +38,19 @@ type Conn struct {
 	// concurrently. It is a counting semaphore (one buffer slot per allowed
 	// request); nil when MaxConcurrentRequests disables the per-connection cap.
 	reqSem chan struct{}
+	// authenticated is false while a connection with an auth hook registered is
+	// pending authentication, and flips true once a token is accepted. When no
+	// auth hook is registered the gate is not consulted, so its value is unused.
+	authenticated atomic.Bool
+	// authTimer closes the connection if it stays unauthenticated past
+	// AuthTimeout; stopped once authenticated. Guarded by mu.
+	authTimer *time.Timer
+}
+
+// isAuthenticated reports whether the connection has passed first-message auth.
+// Only meaningful when the server has an auth hook registered.
+func (c *Conn) isAuthenticated() bool {
+	return c.authenticated.Load()
 }
 
 // SetUserID associates this connection with a user ID.
@@ -405,6 +419,21 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 		return
 	}
 
+	// An auth frame is always handled — for the initial handshake and for
+	// mid-session token refresh — and runs synchronously (it is the gate, and
+	// must not count against the concurrency cap or race identity updates).
+	if msg.Type == TypeAuth {
+		c.handleAuth(msg.Token)
+		return
+	}
+
+	// While a connection with an auth hook is still pending authentication,
+	// reject every non-auth frame rather than run any handler.
+	if c.server.authRequired() && !c.isAuthenticated() {
+		c.sendAuthError("authentication required")
+		return
+	}
+
 	switch msg.Type {
 	case TypeRequest:
 		c.dispatchRequest(msg)
@@ -418,6 +447,87 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 	default:
 		c.sendError(msg.ID, CodeInvalidRequest, "unknown message type")
 	}
+}
+
+// sendAuthOK / sendAuthError emit the server's response to an auth frame.
+func (c *Conn) sendAuthOK() {
+	_ = c.sendJSON(AuthResultMessage{Type: TypeAuthOK})
+}
+
+func (c *Conn) sendAuthError(message string) {
+	_ = c.sendJSON(AuthResultMessage{Type: TypeAuthError, Message: message})
+}
+
+// handleAuth validates a token via the server's auth hook. It serves both the
+// initial handshake and mid-session refresh:
+//   - success: mark authenticated, stop the pending-auth timeout, send auth_ok;
+//   - failure while pending: send auth_error and close the connection;
+//   - failure while already authenticated (a bad refresh): send auth_error but
+//     keep the existing session — a live connection is not downgraded.
+//
+// With no auth hook registered, an auth frame is accepted as a no-op auth_ok so
+// clients configured with getAuthToken still get a clean handshake.
+func (c *Conn) handleAuth(token string) {
+	if !c.server.authRequired() {
+		c.sendAuthOK()
+		return
+	}
+
+	err := c.server.authHook(c.ctx, c, token)
+	if err == nil {
+		firstAuth := c.authenticated.CompareAndSwap(false, true)
+		if firstAuth {
+			c.stopAuthTimer()
+		}
+		c.sendAuthOK()
+		return
+	}
+
+	// Only a ProtocolError message (e.g. from ErrAuthFailed) is treated as
+	// client-safe. Any other error from the hook — a raw DB/JWT/network failure —
+	// is redacted to a generic message so internal detail can't leak to an
+	// unauthenticated caller at the auth boundary.
+	message := "authentication failed"
+	if perr, ok := err.(*ProtocolError); ok {
+		message = perr.Message
+	}
+	c.sendAuthError(message)
+
+	// A failed refresh on an already-authenticated connection keeps the live
+	// session; a failure while still pending rejects the connection.
+	if !c.isAuthenticated() {
+		c.close()
+	}
+}
+
+// stopAuthTimer cancels the pending-auth timeout, if armed.
+func (c *Conn) stopAuthTimer() {
+	c.mu.Lock()
+	t := c.authTimer
+	c.authTimer = nil
+	c.mu.Unlock()
+	if t != nil {
+		t.Stop()
+	}
+}
+
+// armAuthTimeout starts the pending-auth timeout: if the connection has not
+// authenticated within d, it is sent an auth_error and closed. A non-positive d
+// disables the timeout. Called once, after the connection is registered.
+func (c *Conn) armAuthTimeout(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.AfterFunc(d, func() {
+		if c.isAuthenticated() {
+			return
+		}
+		c.sendAuthError("authentication timeout")
+		c.close()
+	})
+	c.mu.Lock()
+	c.authTimer = t
+	c.mu.Unlock()
 }
 
 func (c *Conn) handleRequest(msg IncomingMessage) {

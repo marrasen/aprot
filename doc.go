@@ -299,6 +299,31 @@
 //	http.Handle("/api/", http.StripPrefix("/api", cors(rest)))
 //	http.Handle("/sse", cors(server.HTTPTransport()))
 //
+// # Authentication
+//
+// [Server.OnAuth] registers a hook that authenticates a token the client sends
+// over the connection itself, so secrets stay out of the URL (and out of access
+// / proxy / CDN logs). Registering a hook puts every new connection into a
+// pending-auth state: it must send an auth frame
+// ({"type":"auth","token":"..."}) with a token the hook accepts before any
+// request or subscribe runs; frames sent earlier get an auth_error, and a
+// connection that does not authenticate within [ServerOptions.AuthTimeout]
+// (default 10s) is closed. The same auth frame on a live connection refreshes
+// the token without reconnecting. Works over both WebSocket and SSE.
+//
+//	server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
+//	    claims, err := verify(token)
+//	    if err != nil {
+//	        return aprot.ErrAuthFailed("invalid token")
+//	    }
+//	    conn.SetUserID(claims.Subject)
+//	    return nil
+//	})
+//
+// With no hook registered the flow is unchanged (authenticate via [Server.OnConnect]
+// / a URL token if desired). The generated TypeScript client drives this with a
+// getAuthToken option and a refreshAuth(token) method.
+//
 // # Connection Lifecycle
 //
 // [Server.OnConnect] and [Server.OnDisconnect] hooks react to connection
