@@ -117,6 +117,12 @@ func (obsHandlers) Slow(ctx context.Context) (*EchoResponse, error) {
 	return &EchoResponse{Message: "slow"}, nil
 }
 
+// Panic exercises the panic-recovery path so the observer must report
+// CodeInternalError (the recovery defer runs before the observer defer).
+func (obsHandlers) Panic(ctx context.Context) (*EchoResponse, error) {
+	panic("boom")
+}
+
 // Watch registers a trigger key so a subscription is created for it.
 func (obsHandlers) Watch(ctx context.Context) (*EchoResponse, error) {
 	RegisterRefreshTrigger(ctx, "watched")
@@ -244,6 +250,51 @@ func TestObserver_SubscriptionLifecycleAndFanout(t *testing.T) {
 		defer obs.mu.Unlock()
 		return len(obs.subUnreg) == 1 && obs.subUnreg[0] == "obsHandlers.Watch/s1"
 	})
+}
+
+// A panicking handler is recovered and reported to the observer as
+// CodeInternalError — verifies the panic-recovery defer runs before (and sets
+// the code seen by) the observer defer.
+func TestObserver_PanicReportsInternalError(t *testing.T) {
+	obs := newRecordingObserver()
+	ts, _ := setupObserverServer(t, obs)
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "p", Method: "obsHandlers.Panic"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	readMessageOfType(t, ws, TypeError, 3*time.Second)
+
+	eventually(t, 3*time.Second, func() bool { return len(obs.snapshotRequests()) == 1 })
+	if e := obs.snapshotRequests()[0]; e.Code != CodeInternalError {
+		t.Errorf("panicking handler reported Code=%d, want CodeInternalError(%d)", e.Code, CodeInternalError)
+	}
+}
+
+// Re-subscribing with the same ID goes through the update path, so
+// SubscriptionRegistered must fire only once (not once per subscribe frame).
+func TestObserver_ResubscribeFiresRegisteredOnce(t *testing.T) {
+	obs := newRecordingObserver()
+	ts, _ := setupObserverServer(t, obs)
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	// The register event fires inside the handler before its response is sent,
+	// so once both responses are read both subscribe attempts have completed.
+	for i := 0; i < 2; i++ {
+		if err := ws.WriteJSON(IncomingMessage{Type: TypeSubscribe, ID: "s1", Method: "obsHandlers.Watch"}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		readMessageOfType(t, ws, TypeResponse, 3*time.Second)
+	}
+
+	obs.mu.Lock()
+	n := len(obs.subReg)
+	obs.mu.Unlock()
+	if n != 1 {
+		t.Errorf("SubscriptionRegistered fired %d times for resubscribe with same ID, want 1", n)
+	}
 }
 
 // Disconnecting with an active subscription fires SubscriptionUnregistered for

@@ -731,7 +731,11 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	}
 
 	// If the client unsubscribed while the handler was running, don't register.
+	// The context can be canceled in the window after the check above, so report
+	// this as canceled (not the default success) to match that sibling branch;
+	// no response is sent because the subscriber is already gone.
 	if ctx.Err() != nil {
+		reqCode = CodeCanceled
 		return
 	}
 
