@@ -449,6 +449,22 @@ class SSETransport implements ClientTransport {
  */
 export type ApiClientUrl = string | (() => string | Promise<string>);
 
+/**
+ * ApiClient never connects automatically. Constructing it (and, in React,
+ * mounting <ApiClientProvider>) only configures it — you must call
+ * client.connect() once yourself, or no request, hook, or subscription will
+ * ever reach the server:
+ *
+ *     const client = new ApiClient(getWebSocketUrl());
+ *     await client.connect();
+ *
+ * connect() may also be called without awaiting (e.g. at module scope in a
+ * React app): it synchronously moves the client into 'connecting', and
+ * requests issued while connecting are buffered and flushed once the
+ * connection is ready. Requests issued while fully disconnected reject with
+ * a ConnectionError. After the first successful connect(), auto-reconnect
+ * (when enabled) handles drops — connect() never needs to be called again.
+ */
 export class ApiClient {
     private transport: ClientTransport;
     private url: ApiClientUrl;
@@ -511,6 +527,13 @@ export class ApiClient {
             : new WebSocketTransport();
     }
 
+    /**
+     * Opens the connection to the server. This is a required manual step:
+     * it is never called automatically — not by the constructor, not by
+     * <ApiClientProvider>, not by the generated hooks/functions. Call it
+     * once after constructing the client. No-op when already connected or
+     * connecting; auto-reconnect takes over after the first successful call.
+     */
     connect(): Promise<void> {
         if (this.state === 'connected' || this.state === 'connecting') {
             return Promise.resolve();
@@ -1056,7 +1079,7 @@ export class ApiClient {
                 if (typeof navigator !== 'undefined' && navigator.onLine === false) {
                     err = new ConnectionError('offline', 'Offline: no network connection');
                 } else {
-                    err = new ConnectionError('manual', 'Not connected');
+                    err = new ConnectionError('manual', 'Not connected: call client.connect() first — the client never connects automatically');
                 }
             }
             reject(err);
@@ -1237,7 +1260,7 @@ export class ApiClient {
                         const err = this.lastConnectionError ?? (
                             typeof navigator !== 'undefined' && navigator.onLine === false
                                 ? new ConnectionError('offline', 'Offline: no network connection')
-                                : new ConnectionError('manual', 'Not connected')
+                                : new ConnectionError('manual', 'Not connected: call client.connect() first — the client never connects automatically')
                         );
                         end(err);
                         return;
@@ -1316,6 +1339,11 @@ export interface {{.Name}} {
 // React Context
 const ApiClientContext = createContext<ApiClient | null>(null);
 
+// ApiClientProvider only distributes the client to the generated hooks — it
+// is a plain context provider and does NOT call client.connect(). The
+// connection must be opened explicitly (client.connect() at module scope or
+// in a useEffect); otherwise every hook fails with a 'Not connected'
+// ConnectionError.
 export const ApiClientProvider = ApiClientContext.Provider;
 
 // ApiClientErrorSource identifies which generated call produced an error. The
