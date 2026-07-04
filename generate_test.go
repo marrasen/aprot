@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -3633,6 +3635,70 @@ func TestGenerateConnectionError(t *testing.T) {
 		}
 		if strings.Contains(reactContent, banned) {
 			t.Errorf("GenerateTo react client.ts still uses bare %q — should be ConnectionError", banned)
+		}
+	}
+}
+
+// A .ts file left behind by a previous generation (e.g. a renamed or removed
+// handler group) must be deleted on the next Generate, or it keeps referencing
+// types that no longer exist and silently breaks the TypeScript build. Only
+// top-level .ts files that start with the generated-code marker are removed;
+// hand-written files, non-.ts files, and subdirectories are untouched.
+func TestGenerateRemovesStaleGeneratedFiles(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+
+	dir := t.TempDir()
+	write := func(relPath, content string) string {
+		t.Helper()
+		path := filepath.Join(dir, relPath)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", relPath, err)
+		}
+		return path
+	}
+
+	stale := write("removed-handlers.ts", generatedFileMarker+"\n// Handler: RemovedHandlers\nexport interface Gone {}\n")
+	handWritten := write("helpers.ts", "export const answer = 42;\n")
+	// Marker anywhere but the first line does not mark a file as generated.
+	markerInBody := write("wrapper.ts", "// my wrapper\n"+generatedFileMarker+"\n")
+	nonTS := write("openapi.json", "{}\n")
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("creating subdir: %v", err)
+	}
+	inSubdir := filepath.Join(dir, "sub", "old.ts")
+	if err := os.WriteFile(inSubdir, []byte(generatedFileMarker+"\n"), 0o644); err != nil {
+		t.Fatalf("writing sub/old.ts: %v", err)
+	}
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{OutputDir: dir})
+	files, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale generated file %s should have been removed (stat err: %v)", stale, err)
+	}
+	for _, kept := range []string{handWritten, markerInBody, nonTS, inSubdir} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("file %s should have been kept: %v", kept, err)
+		}
+	}
+	for filename := range files {
+		if _, err := os.Stat(filepath.Join(dir, filename)); err != nil {
+			t.Errorf("generated file %s missing after cleanup: %v", filename, err)
+		}
+	}
+
+	// Regenerating into the same directory must not delete anything it just
+	// wrote (same file set → no stale files).
+	if _, err := gen.Generate(); err != nil {
+		t.Fatalf("second Generate failed: %v", err)
+	}
+	for filename := range files {
+		if _, err := os.Stat(filepath.Join(dir, filename)); err != nil {
+			t.Errorf("generated file %s missing after regeneration: %v", filename, err)
 		}
 	}
 }
