@@ -10,6 +10,22 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `Server.ServeStream(ctx, rw io.ReadWriteCloser, info ConnInfo)`: a
+  transport-agnostic entry point that serves one connection over any byte
+  stream using newline-delimited JSON framing — the stdio pipes of a child
+  process (e.g. a Go backend embedded in an Electron app), a Unix domain
+  socket, or a Windows named pipe. Stream connections participate fully in
+  connect/disconnect hooks, first-message auth, middleware, subscriptions,
+  streaming, and push. `MaxMessageSize` bounds inbound line length; the
+  WebSocket keepalive/write-timeout options do not apply to raw streams.
+- The generated TypeScript client's `ClientTransport` interface (and
+  `TransportCloseInfo`) is now exported, and `ApiClientOptions.transport`
+  accepts a custom `ClientTransport` instance in addition to
+  `'websocket' | 'sse'` — so the protocol can ride any message channel, such
+  as an Electron preload/MessagePort bridge to a Go child process.
+
 ### Changed
 
 - `Generator.Generate()` now removes stale generated files: top-level `.ts`

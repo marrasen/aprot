@@ -10,22 +10,7 @@
 
 {{template "get-websocket-url" .}}
 
-// TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
-// transport up to the client's classification logic.
-interface TransportCloseInfo {
-    code?: number;
-    reason?: string;
-    wasClean?: boolean;
-    serverRejected?: boolean;
-}
-
-// Internal transport interface
-interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
-    send(message: object): void;
-    disconnect(): void;
-    isConnected(): boolean;
-}
+// TransportCloseInfo and ClientTransport are defined in the types section above.
 
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
@@ -200,9 +185,11 @@ export class ApiClient {
     constructor(url: string, options?: ApiClientOptions) {
         this.url = url;
         this.options = { ...defaultOptions, ...options };
-        this.transport = this.options.transport === 'sse'
-            ? new SSETransport()
-            : new WebSocketTransport();
+        this.transport = typeof this.options.transport === 'object'
+            ? this.options.transport
+            : this.options.transport === 'sse'
+                ? new SSETransport()
+                : new WebSocketTransport();
     }
 
     /**

@@ -83,7 +83,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Create transport and connection
 	sseT := newSSETransport(w, flusher)
 	connID := atomic.AddUint64(&h.server.nextConnID, 1)
-	conn := newConn(sseT, h.server, connID, r, r.Context())
+	conn := newConn(sseT, h.server, connID, connInfoFromRequest(r), r.Context())
 
 	// Run connect hooks
 	if err := h.server.runConnectHooks(r.Context(), conn); err != nil {
@@ -91,23 +91,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		// connection; undo that association so a dead conn can't linger in
 		// userConns and have a later PushToUser block on its send buffer.
 		h.server.disassociateUser(conn)
-		code := CodeConnectionRejected
-		var message string
-		var errData any
-		if perr, ok := err.(*ProtocolError); ok {
-			code = perr.Code
-			message = perr.Message
-			errData = perr.Data
-		} else {
-			message = err.Error()
-		}
-		errMsg := ErrorMessage{
-			Type:    TypeError,
-			Code:    code,
-			Message: message,
-			Data:    errData,
-		}
-		data, _ := json.Marshal(errMsg)
+		data, _ := json.Marshal(connectionRejectedMessage(err))
 		sseT.sendEvent("error", data)
 		return
 	}
@@ -121,13 +105,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	sseT.sendEvent("connected", connData)
 
 	// Send config
-	configMsg := ConfigMessage{
-		Type:                 TypeConfig,
-		ReconnectInterval:    h.server.options.ReconnectInterval,
-		ReconnectMaxInterval: h.server.options.ReconnectMaxInterval,
-		ReconnectMaxAttempts: h.server.options.ReconnectMaxAttempts,
-	}
-	configData, _ := json.Marshal(configMsg)
+	configData, _ := json.Marshal(configMessage(h.server.options))
 	sseT.sendEvent("config", configData)
 
 	// Register connection

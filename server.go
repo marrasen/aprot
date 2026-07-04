@@ -452,7 +452,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	connID := atomic.AddUint64(&s.nextConnID, 1)
 	ctx := r.Context()
 	wst := newWSTransport(ws, s.options)
-	conn := newConn(wst, s, connID, r, ctx)
+	conn := newConn(wst, s, connID, connInfoFromRequest(r), ctx)
 	// Give the transport a back-reference so it can report send-buffer pressure
 	// and write timeouts to the observer. Set before the pumps start.
 	wst.conn = conn
@@ -655,7 +655,9 @@ func (s *Server) Registry() *Registry {
 
 // sendConnectionRejectedWS sends an error message directly to a WebSocket connection.
 // Used when a connect hook rejects the connection before pumps are started.
-func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
+// connectionRejectedMessage builds the error frame sent to a client whose
+// connection was refused by a connect hook. Shared by all transports.
+func connectionRejectedMessage(err error) ErrorMessage {
 	code := CodeConnectionRejected
 	message := "connection rejected"
 	var errData any
@@ -667,26 +669,34 @@ func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
 		message = err.Error()
 	}
 
-	msg := ErrorMessage{
+	return ErrorMessage{
 		Type:    TypeError,
 		ID:      "",
 		Code:    code,
 		Message: message,
 		Data:    errData,
 	}
-	data, _ := json.Marshal(msg)
+}
+
+// configMessage builds the server-pushed configuration frame sent to every
+// new connection before message processing starts. Shared by all transports.
+func configMessage(opts ServerOptions) ConfigMessage {
+	return ConfigMessage{
+		Type:                 TypeConfig,
+		ReconnectInterval:    opts.ReconnectInterval,
+		ReconnectMaxInterval: opts.ReconnectMaxInterval,
+		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
+	}
+}
+
+func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
+	data, _ := json.Marshal(connectionRejectedMessage(err))
 	_ = ws.WriteMessage(websocket.TextMessage, data)
 }
 
 // sendConfigWS sends the server configuration directly to a WebSocket connection.
 // Called before the pumps are started.
 func sendConfigWS(ws *websocket.Conn, opts ServerOptions) {
-	msg := ConfigMessage{
-		Type:                 TypeConfig,
-		ReconnectInterval:    opts.ReconnectInterval,
-		ReconnectMaxInterval: opts.ReconnectMaxInterval,
-		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
-	}
-	data, _ := json.Marshal(msg)
+	data, _ := json.Marshal(configMessage(opts))
 	_ = ws.WriteMessage(websocket.TextMessage, data)
 }

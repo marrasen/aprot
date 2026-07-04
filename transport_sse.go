@@ -75,7 +75,7 @@ func (t *sseTransport) sendEvent(event string, data []byte) {
 		return
 	}
 	fmt.Fprintf(t.w, "event: %s\n", event)
-	fmt.Fprintf(t.w, "data: %s\n\n", data)
+	fmt.Fprintf(t.w, "data: %s\n\n", data) // #nosec G705 -- data is JSON-marshaled protocol frames in a text/event-stream response; no HTML context, so XSS does not apply
 	t.flusher.Flush()
 }
 

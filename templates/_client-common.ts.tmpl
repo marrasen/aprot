@@ -154,9 +154,52 @@ export type PushHandler<T> = (data: T) => void;
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
 
+/**
+ * TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
+ * transport up to the client's classification logic. Transports without an
+ * equivalent (SSE, custom transports) may pass an empty object or nothing.
+ */
+export interface TransportCloseInfo {
+    /** WebSocket CloseEvent.code, when available. 1006 = abnormal (pre-upgrade) closure. */
+    code?: number;
+    /** WebSocket CloseEvent.reason, when non-empty. */
+    reason?: string;
+    /** WebSocket CloseEvent.wasClean — true only if a close handshake completed. */
+    wasClean?: boolean;
+    /** True when the close was already classified as a server-rejected protocol error. */
+    serverRejected?: boolean;
+}
+
+/**
+ * ClientTransport is the connection layer under ApiClient. Two built-in
+ * implementations exist (WebSocket and SSE, selected via
+ * ApiClientOptions.transport as a string), but an instance implementing this
+ * interface can be passed instead to carry the protocol over any message
+ * channel — for example an Electron preload/MessagePort bridge to a Go
+ * child process, where the renderer cannot open pipes itself.
+ *
+ * Contract:
+ * - connect() resolves once the channel is ready; deliver every inbound
+ *   protocol message to onMessage as a JSON string, and call onClose exactly
+ *   once when the channel ends (after a successful connect).
+ * - send() receives a protocol message object; serialize it (e.g.
+ *   JSON.stringify) onto the channel.
+ * - The client calls connect() again for reconnects; a transport instance
+ *   must be reusable after disconnect()/onClose.
+ */
+export interface ClientTransport {
+    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
+    send(message: object): void;
+    disconnect(): void;
+    isConnected(): boolean;
+}
+
 export interface ApiClientOptions {
-    /** Transport type. Default: 'websocket' */
-    transport?: 'websocket' | 'sse';
+    /**
+     * Transport: 'websocket', 'sse', or a custom ClientTransport instance
+     * (e.g. an Electron IPC/MessagePort bridge). Default: 'websocket'
+     */
+    transport?: 'websocket' | 'sse' | ClientTransport;
     /** Enable auto-reconnect on connection loss. Default: true */
     reconnect?: boolean;
     /** Initial reconnect delay in ms. Default: 1000 */
@@ -212,30 +255,11 @@ export function getSSEUrl(path: string = '/sse'): string {
 {{end}}
 
 {{define "api-client-class"}}
-// TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
-// transport up to the client's classification logic. SSE has no equivalent
-// (the EventSource error event exposes nothing structured), so the SSE
-// transport synthesizes an empty info object — it lands as 'network-error'
-// after offline/manual checks, which is the most accurate bucket browsers
-// will let us name.
-interface TransportCloseInfo {
-    /** WebSocket CloseEvent.code, when available. 1006 = abnormal (pre-upgrade) closure. */
-    code?: number;
-    /** WebSocket CloseEvent.reason, when non-empty. */
-    reason?: string;
-    /** WebSocket CloseEvent.wasClean — true only if a close handshake completed. */
-    wasClean?: boolean;
-    /** True when the close was already classified as a server-rejected protocol error. */
-    serverRejected?: boolean;
-}
-
-// Internal transport interface
-interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
-    send(message: object): void;
-    disconnect(): void;
-    isConnected(): boolean;
-}
+// TransportCloseInfo and ClientTransport are defined in the "types" section
+// above. SSE note: the EventSource error event exposes nothing structured,
+// so the SSE transport synthesizes an empty close info — it lands as
+// 'network-error' after offline/manual checks, which is the most accurate
+// bucket browsers will let us name.
 
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
@@ -522,9 +546,11 @@ export class ApiClient {
     constructor(url: ApiClientUrl, options?: ApiClientOptions) {
         this.url = url;
         this.options = { ...defaultOptions, ...options };
-        this.transport = this.options.transport === 'sse'
-            ? new SSETransport()
-            : new WebSocketTransport();
+        this.transport = typeof this.options.transport === 'object'
+            ? this.options.transport
+            : this.options.transport === 'sse'
+                ? new SSETransport()
+                : new WebSocketTransport();
     }
 
     /**
