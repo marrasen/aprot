@@ -219,6 +219,8 @@ func (h *Handlers) CreateUser(ctx context.Context, req *CreateUserRequest) (*Cre
 
 Parameters are positional — each Go parameter becomes a separate TypeScript argument. Names are extracted from Go source via AST parsing.
 
+Results are serialized as JSON. A result that can't be encoded (e.g. a `NaN`/`Inf` float) is reported to the client as an internal error response rather than silently dropped, so the request never hangs.
+
 ### 2. Create the server
 
 ```go

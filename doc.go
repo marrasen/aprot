@@ -436,6 +436,12 @@
 //	registry.RegisterError(sql.ErrNoRows, "NotFound")
 //	// In TypeScript: err.isNotFound(), ErrorCode.NotFound
 //
+// A handler result that cannot be encoded as JSON (for example a float
+// carrying NaN or Inf, which JSON rejects) is surfaced to the client as an
+// internal error (-32603) rather than leaving the request pending. Likewise,
+// an error or stream-end frame whose Data payload cannot be encoded is resent
+// without the payload so the terminal frame always reaches the client.
+//
 // # Connection Errors (TypeScript Client)
 //
 // Connection-level failures surface as a structured ConnectionError on the

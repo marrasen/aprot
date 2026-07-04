@@ -273,6 +273,8 @@ return aprot.ErrInternal(err)                     // -32603
 registry.RegisterError(sql.ErrNoRows, "NotFound") // → ApiError.isNotFound() in TS
 ```
 
+A handler result that can't be JSON-encoded (e.g. `NaN`/`Inf` floats) becomes a `-32603` internal error response instead of a silently dropped frame; error/stream-end frames with an unencodable `Data` payload are resent without the payload.
+
 ### Client-side: `ApiError` vs `ConnectionError`
 Two distinct error types on the generated TS client:
 
