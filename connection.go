@@ -278,6 +278,11 @@ func (c *Conn) sendJSON(v any) error {
 	if err != nil {
 		return err
 	}
+	return c.sendRaw(data)
+}
+
+// sendRaw sends pre-marshaled bytes on the transport.
+func (c *Conn) sendRaw(data []byte) error {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -312,7 +317,14 @@ func (c *Conn) sendResponse(id string, result any) {
 		ID:     id,
 		Result: result,
 	}
-	_ = c.sendJSON(msg)
+	data, err := marshalJSON(msg)
+	if err != nil {
+		// A result that cannot be marshaled (e.g. a NaN float) must not leave
+		// the request pending forever: surface it as an internal error instead.
+		c.sendError(id, CodeInternalError, "failed to encode response: "+err.Error())
+		return
+	}
+	_ = c.sendRaw(data)
 }
 
 // errorCode maps a handler error to the protocol code that sendError /
@@ -349,7 +361,15 @@ func (c *Conn) sendProtocolError(id string, perr *ProtocolError) {
 		Message: perr.Message,
 		Data:    perr.Data,
 	}
-	_ = c.sendJSON(msg)
+	data, err := marshalJSON(msg)
+	if err != nil {
+		// An unmarshalable Data payload must not swallow the error frame:
+		// resend without it. The remaining fields are plain strings and ints,
+		// so this marshal cannot fail.
+		msg.Data = nil
+		data, _ = marshalJSON(msg)
+	}
+	_ = c.sendRaw(data)
 }
 
 func (c *Conn) sendProgress(id string, current, total int, message string) {
@@ -745,7 +765,14 @@ func (c *Conn) sendStreamEnd(reqID string, err error) {
 			msg.Message = err.Error()
 		}
 	}
-	_ = c.sendJSON(msg)
+	data, merr := marshalJSON(msg)
+	if merr != nil {
+		// An unmarshalable Data payload must not swallow the terminal frame:
+		// resend without it (see sendProtocolError).
+		msg.Data = nil
+		data, _ = marshalJSON(msg)
+	}
+	_ = c.sendRaw(data)
 }
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
