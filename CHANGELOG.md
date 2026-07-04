@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-07-04
+
 ### Added
 
 - `Server.ServeStream(ctx, rw io.ReadWriteCloser, info ConnInfo)`: a
@@ -19,12 +21,12 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   socket, or a Windows named pipe. Stream connections participate fully in
   connect/disconnect hooks, first-message auth, middleware, subscriptions,
   streaming, and push. `MaxMessageSize` bounds inbound line length; the
-  WebSocket keepalive/write-timeout options do not apply to raw streams.
+  WebSocket keepalive/write-timeout options do not apply to raw streams (#234).
 - The generated TypeScript client's `ClientTransport` interface (and
   `TransportCloseInfo`) is now exported, and `ApiClientOptions.transport`
   accepts a custom `ClientTransport` instance in addition to
   `'websocket' | 'sse'` — so the protocol can ride any message channel, such
-  as an Electron preload/MessagePort bridge to a Go child process.
+  as an Electron preload/MessagePort bridge to a Go child process (#234).
 
 ### Changed
 
@@ -33,13 +35,23 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   EDIT.` marker but were not produced by the current run (leftovers from
   renamed or removed handler groups) are deleted so they cannot break the
   TypeScript build. Hand-written files, non-`.ts` files, and subdirectories
-  are never touched.
+  are never touched (#233).
 - The generated client's "never connected" rejection message now explains the
   fix: `Not connected: call client.connect() first — the client never connects
   automatically` (the `ConnectionError.reason` is unchanged). Docs and
   generated-code comments now state explicitly that `new ApiClient(...)` and
   `<ApiClientProvider>` do not open a connection — `client.connect()` is a
-  required manual step.
+  required manual step (#233).
+
+### Fixed
+
+- A handler result that could not be marshaled (e.g. a `NaN` float, rejected
+  by JSON) was silently dropped — the client received neither a response nor
+  an error frame and the request hung forever. `sendResponse` now marshals up
+  front and falls back to a `CodeInternalError` error frame on failure;
+  `sendProtocolError` and `sendStreamEnd` resend without their `Data` payload
+  when the payload is what fails to marshal, so terminal frames always reach
+  the client (#235).
 
 ## [0.45.0] - 2026-07-01
 
@@ -122,5 +134,6 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/marrasen/aprot/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/marrasen/aprot/compare/v0.44.0...v0.45.0
