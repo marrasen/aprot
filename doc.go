@@ -227,6 +227,28 @@
 // [Server.Broadcast], [Server.PushToUser], and [Server.ConnectionCount] work
 // across all connections regardless of transport.
 //
+// For byte streams HTTP can't reach, [Server.ServeStream] serves one
+// connection over any io.ReadWriteCloser using newline-delimited JSON
+// framing (one protocol message per line) — the stdio pipes of a child
+// process, a Unix domain socket, or a Windows named pipe. This is the entry
+// point for embedding a Go backend in a desktop app (e.g. an Electron main
+// process spawning the Go binary and bridging to the renderer):
+//
+//	// stdio: the parent process is the single client.
+//	server.ServeStream(ctx, struct {
+//	    io.Reader
+//	    io.WriteCloser
+//	}{os.Stdin, os.Stdout}, aprot.ConnInfo{})
+//
+//	// or one connection per accepted socket:
+//	go server.ServeStream(ctx, c, aprot.ConnInfo{RemoteAddr: c.RemoteAddr().String()})
+//
+// Stream connections participate fully in hooks, auth, middleware,
+// subscriptions, streaming, and push. On the TypeScript side, the generated
+// client's ApiClientOptions.transport accepts a custom ClientTransport
+// instance to carry the same protocol over any message channel (an Electron
+// preload/MessagePort bridge, for example).
+//
 // Handlers can additionally be exposed over REST/HTTP alongside (or instead
 // of) WebSocket. Use [Registry.RegisterREST] for REST-only handlers, or
 // [Registry.EnableREST] to mark an existing WebSocket handler for REST as

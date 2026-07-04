@@ -12,13 +12,27 @@ import (
 	"github.com/go-json-experiment/json"
 )
 
-// ConnInfo contains HTTP request information captured at connection time.
+// ConnInfo contains connection metadata captured at connection time. For the
+// HTTP transports (WebSocket, SSE) it is populated from the HTTP request; for
+// [Server.ServeStream] connections the caller supplies it, and any or all
+// fields may be zero.
 type ConnInfo struct {
 	RemoteAddr string
 	Header     http.Header
 	Cookies    []*http.Cookie
 	URL        string
 	Host       string
+}
+
+// connInfoFromRequest captures HTTP request information for ConnInfo.
+func connInfoFromRequest(r *http.Request) ConnInfo {
+	return ConnInfo{
+		RemoteAddr: r.RemoteAddr,
+		Header:     r.Header.Clone(),
+		Cookies:    r.Cookies(),
+		URL:        r.URL.String(),
+		Host:       r.Host,
+	}
 }
 
 // Conn represents a single client connection.
@@ -104,8 +118,10 @@ func (c *Conn) Info() ConnInfo {
 	return c.info
 }
 
-// Context returns the context from the HTTP request.
-// This is useful for accessing request-scoped values like zerolog loggers.
+// Context returns the connection's base context: the HTTP request context
+// for WebSocket/SSE connections, or the context passed to
+// [Server.ServeStream]. This is useful for accessing request-scoped values
+// like zerolog loggers.
 func (c *Conn) Context() context.Context {
 	return c.ctx
 }
@@ -158,20 +174,14 @@ func (c *Conn) RemoteAddr() string {
 	return c.info.RemoteAddr
 }
 
-func newConn(t transport, server *Server, id uint64, r *http.Request, ctx context.Context) *Conn {
+func newConn(t transport, server *Server, id uint64, info ConnInfo, ctx context.Context) *Conn {
 	c := &Conn{
 		transport: t,
 		server:    server,
 		requests:  make(map[string]context.CancelCauseFunc),
 		id:        id,
 		ctx:       ctx,
-		info: ConnInfo{
-			RemoteAddr: r.RemoteAddr,
-			Header:     r.Header.Clone(),
-			Cookies:    r.Cookies(),
-			URL:        r.URL.String(),
-			Host:       r.Host,
-		},
+		info:      info,
 	}
 	if server.options.MaxConcurrentRequests > 0 {
 		c.reqSem = make(chan struct{}, server.options.MaxConcurrentRequests)

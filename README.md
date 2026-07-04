@@ -888,6 +888,47 @@ oag := aprot.NewOpenAPIGenerator(registry, "My API", "1.0.0").
 
 Validation tags flow into the spec: `validate:"gte=12,lte=110"` → `minimum: 12, maximum: 110`, `validate:"email"` → `format: "email"`.
 
+## Byte-Stream Transport (Electron, stdio, sockets)
+
+`Server.ServeStream` serves a single connection over any `io.ReadWriteCloser` using newline-delimited JSON framing — one protocol message per line, in both directions. It reaches byte streams the HTTP handlers can't: the stdio pipes of a child process, a Unix domain socket, or a Windows named pipe. Stream connections participate fully in hooks, first-message auth, middleware, subscriptions, streaming, and push.
+
+```go
+// stdio: the parent process (e.g. an Electron main process that spawned
+// this binary) is the single client.
+server.ServeStream(ctx, struct {
+    io.Reader
+    io.WriteCloser
+}{os.Stdin, os.Stdout}, aprot.ConnInfo{})
+
+// or one connection per accepted socket (Unix domain socket, named pipe, TCP):
+for {
+    c, err := ln.Accept()
+    if err != nil {
+        break
+    }
+    go server.ServeStream(ctx, c, aprot.ConnInfo{RemoteAddr: c.RemoteAddr().String()})
+}
+```
+
+`ServeStream` blocks until the connection ends: it returns `nil` on a normal close (peer EOF, `ctx` canceled, server `Stop`), or the rejection error when a connect hook refused the connection. `MaxMessageSize` bounds inbound line length, but the WebSocket keepalive/write-timeout options don't apply — a raw byte stream has no ping frames or deadlines, so liveness is the stream's own lifetime (manage the peer process or socket, and cancel `ctx` to end the connection).
+
+On the client side, the generated `ApiClientOptions.transport` accepts a custom `ClientTransport` instance in addition to the `'websocket' | 'sse'` strings, so the same protocol can ride any message channel:
+
+```ts
+import { ApiClient, type ClientTransport } from './api/client';
+
+class BridgeTransport implements ClientTransport {
+    // e.g. forward over an Electron preload/MessagePort bridge to the
+    // Go child process; deliver inbound lines to onMessage as strings.
+    ...
+}
+
+const client = new ApiClient('bridge:', { transport: new BridgeTransport() });
+client.connect();
+```
+
+**Electron note:** a renderer can open `ws://127.0.0.1:<port>` directly, so for most Electron apps the simplest wiring is still a loopback WebSocket to the spawned Go process — pair it with `OnAuth` (a spawn-time random token) and `SetCheckOrigin` so other local processes and browser tabs can't connect. Use `ServeStream` + a custom `ClientTransport` when you want no listening port at all: Go child speaks NDJSON on stdio to the main process, which relays to the renderer over a `MessagePort`.
+
 ## Project Structure
 
 ```

@@ -8,7 +8,7 @@ This guide is a fast-reference for agents. The authoritative overview is `doc.go
 
 - **Registry** — collects handler groups, push events, enums, custom errors, and a validator.
 - **Handlers** — methods on a struct; one TypeScript file per group.
-- **Transports** — WebSocket (`/ws`), SSE+HTTP (`/sse`), and optional REST (`NewRESTAdapter`).
+- **Transports** — WebSocket (`/ws`), SSE+HTTP (`/sse`), byte streams (`server.ServeStream` — stdio/pipes/sockets, NDJSON framing), and optional REST (`NewRESTAdapter`).
 - **Middleware** — `func(next) Handler` wrappers; server-level or per-handler-group.
 - **Tasks** — hierarchical progress and output streaming (request-scoped or shared).
 - **Subscription Refresh** — query handlers register trigger keys; mutations fire them to push fresh results.
@@ -41,6 +41,8 @@ Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{Max
 
 **First-message auth** (token over the connection, not the URL): `server.OnAuth(func(ctx, conn *aprot.Conn, token string) error { ...; conn.SetUserID(id); return nil })` — return `aprot.ErrAuthFailed(msg)` (code -32005) to reject. Registering a hook makes every new connection **pending**: it must send `{"type":"auth","token":"..."}` and get `auth_ok` before any request/subscribe runs; earlier frames get `auth_error`; a connection unauthenticated within `ServerOptions.AuthTimeout` (default 10s, `-1` disables) is closed. The same auth frame on a live connection refreshes identity (a failed refresh keeps the session — no downgrade). WebSocket sends the frame directly; SSE sends it in the first `POST /rpc` body (`{type:"auth",connectionId,token}`), with `auth_ok`/`auth_error` over the stream. No hook → unchanged (URL-token via `OnConnect` still works). TS client: `new ApiClient(url, {getAuthToken: () => token})` and `client.refreshAuth(token)`; `err.isAuthFailed()`.
 
+**Byte-stream transport** (Electron/desktop embedding, stdio, Unix sockets, named pipes): `server.ServeStream(ctx, rw io.ReadWriteCloser, aprot.ConnInfo{...})` serves one connection over any byte stream using newline-delimited JSON (one protocol message per line, both directions). Blocks until the connection ends; returns nil on normal close (EOF/ctx cancel/Stop), or the rejection error (connect hook / `ErrServerShutdown`). Full feature parity: hooks, first-message auth, middleware, subscriptions, streaming, push. Caller supplies `ConnInfo` (all fields optional — no HTTP request exists). `MaxMessageSize` bounds line length; `PingInterval`/`PongTimeout`/`WriteTimeout` do NOT apply (no ping frames or write deadlines on raw streams — liveness is the stream's lifetime). stdio: `server.ServeStream(ctx, struct{io.Reader; io.WriteCloser}{os.Stdin, os.Stdout}, aprot.ConnInfo{})`; listener: `go server.ServeStream(ctx, c, aprot.ConnInfo{RemoteAddr: c.RemoteAddr().String()})` per `Accept()`. TS side: `ApiClientOptions.transport` accepts a custom `ClientTransport` instance (exported interface) in addition to `'websocket' | 'sse'` — implement it to bridge e.g. an Electron MessagePort to the Go child's stdio.
+
 **Observability**: set `ServerOptions.Observer` to an `aprot.Observer` (embed `aprot.NoopObserver`, override what you need) — nil disables it with zero hot-path cost. Events: `ConnectionOpened/Closed(*Conn)`, `RequestCompleted(RequestEvent{Method, Subscribe, Duration, Code})` (Code 0 = success; fires for client requests/subscribes, not server refreshes), `SubscriptionRegistered/Unregistered(*Conn, method, id)`, `RefreshFanout(key, matched)`, `SendBufferFull(*Conn)` (backpressure; frame not dropped), `WriteTimedOut(*Conn)`. Callbacks are synchronous on hot paths + may run concurrently — keep them fast/non-blocking. Pull-based gauges: `server.Stats()` → `ServerStats{Connections, Subscriptions}`. Streaming handlers hold their slot until stream end; `RequestCompleted.Duration` spans the full iteration.
 
 ### 3. TypeScript Generation
@@ -69,6 +71,8 @@ client.connect(); // REQUIRED once. `await` optional: requests issued while conn
 ```
 
 React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. `connect()` is a no-op when already connected/connecting; after the first successful call, auto-reconnect handles drops — never call it again for reconnection.
+
+Custom transport: `new ApiClient('bridge:', { transport: myClientTransport })` — any object implementing the exported `ClientTransport` interface (`connect(url, onMessage, onClose)`, `send(message)`, `disconnect()`, `isConnected()`). Deliver inbound protocol messages to `onMessage` as JSON strings; call `onClose` exactly once per established connection; instances must be reusable across reconnects.
 
 ### 5. Progress & Tasks
 - Simple: `aprot.Progress(ctx).Update(current, total, message)`.
