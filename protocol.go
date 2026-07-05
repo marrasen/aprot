@@ -17,6 +17,7 @@ const (
 	TypeSubscribe   MessageType = "subscribe"
 	TypeUnsubscribe MessageType = "unsubscribe"
 	TypeStreamItem  MessageType = "stream_item"
+	TypeStreamChunk MessageType = "stream_chunk"
 	TypeStreamEnd   MessageType = "stream_end"
 	// TypeAuth is a client->server frame carrying a token for first-message
 	// authentication (and mid-session token refresh). TypeAuthOK / TypeAuthError
@@ -91,6 +92,19 @@ type StreamItemMessage struct {
 	Type MessageType `json:"type"`
 	ID   string      `json:"id"`
 	Item any         `json:"item"`
+}
+
+// StreamChunkMessage carries a batch of consecutive elements of a
+// server-streamed iterator in a single frame. It is sent instead of per-item
+// [StreamItemMessage] frames when the server enables
+// [ServerOptions.StreamChunking]. Each element of Items has the same shape a
+// StreamItemMessage.Item would have (the element value, or a 2-element
+// [K, V] array for HandlerKindStream2 handlers); items are pre-marshaled so
+// a chunk is assembled without re-encoding them.
+type StreamChunkMessage struct {
+	Type  MessageType      `json:"type"`
+	ID    string           `json:"id"`
+	Items []jsontext.Value `json:"items"`
 }
 
 // StreamEndMessage terminates a server-streamed iterator for a request.

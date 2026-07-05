@@ -10,6 +10,21 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `ServerOptions.StreamChunking`: opt-in batching of streamed items. Instead
+  of one wire frame per yielded item, consecutive items are batched into
+  `stream_chunk` frames, flushed when any of three thresholds is reached —
+  `MaxItems` (default 128), `MaxBytes` of marshaled items (default 64 KiB),
+  or `MaxDelay` after the first buffered item (default 20ms), so a slow
+  producer never holds delivered items back. This makes streaming viable for
+  large collections (thousands of small records) where per-item framing and
+  syscall overhead dominate. Batching is transparent to the generated
+  TypeScript client's `AsyncIterable`, which still yields one item at a time,
+  but enabling it requires a client generated from this aprot version — older
+  generated clients do not understand `stream_chunk` frames. Nil (the
+  default) keeps the existing per-item `stream_item` frames (#239).
+
 ### Fixed
 
 - Fixed-size array fields (`[N]T`) no longer degrade to `any` in the generated

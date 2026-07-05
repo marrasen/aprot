@@ -66,6 +66,12 @@
 // request. See [OnStreamComplete] in the Middleware section for observing
 // the real end of a stream from logging / metrics middleware.
 //
+// For large streams, [ServerOptions.StreamChunking] batches consecutive
+// items into single stream_chunk frames (flushed on an item count, byte
+// size, or max-delay threshold — see [StreamChunking]) instead of sending
+// one frame per item. Batching is transparent to the generated client's
+// AsyncIterable but requires a client generated from the same aprot version.
+//
 // # Input Transformation
 //
 // Request struct fields can be normalized before handler dispatch using

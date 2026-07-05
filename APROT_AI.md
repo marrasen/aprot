@@ -111,6 +111,8 @@ func (h *H) ListUsers(ctx context.Context) (iter.Seq[*User], error) {
 ```
 Streaming handlers cannot be exposed via REST (panics at registration). For SSE/WS only. To observe real stream end from middleware, use `aprot.OnStreamComplete(ctx, fn)` — it fires once with `(err, items)`.
 
+**Chunked delivery (#239):** by default each yielded item is one wire frame. `aprot.ServerOptions{StreamChunking: &aprot.StreamChunking{MaxItems: 128, MaxBytes: 64 << 10, MaxDelay: 20 * time.Millisecond}}` batches consecutive items into `stream_chunk` frames — flushed when *any* threshold is hit; `MaxDelay` bounds added latency for slow producers. `&aprot.StreamChunking{}` = all defaults; nil = disabled (per-item frames). Transparent to the generated `AsyncIterable`, but requires a client generated from the same aprot version (older clients don't know `stream_chunk`). Server-wide, applies to all streaming handlers.
+
 ## Input Transformation
 
 `transform:"…"` ops run after JSON decoding, before validation. Statically checked at `Register` time.

@@ -698,6 +698,10 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 	yieldType := seq.Type().In(0)
 	var streamErr error
 	itemCount := 0
+	var chunker *streamChunker
+	if cfg := c.server.options.StreamChunking; cfg != nil {
+		chunker = newStreamChunker(ctx, c, reqID, *cfg)
+	}
 	yieldFn := reflect.MakeFunc(yieldType, func(args []reflect.Value) []reflect.Value {
 		if ctx.Err() != nil {
 			return []reflect.Value{reflect.ValueOf(false)}
@@ -708,11 +712,17 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 		} else {
 			item = args[0].Interface()
 		}
-		if err := c.sendJSONCtx(ctx, StreamItemMessage{
-			Type: TypeStreamItem,
-			ID:   reqID,
-			Item: item,
-		}); err != nil {
+		var err error
+		if chunker != nil {
+			err = chunker.add(item)
+		} else {
+			err = c.sendJSONCtx(ctx, StreamItemMessage{
+				Type: TypeStreamItem,
+				ID:   reqID,
+				Item: item,
+			})
+		}
+		if err != nil {
 			streamErr = err
 			return []reflect.Value{reflect.ValueOf(false)}
 		}
@@ -728,6 +738,16 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 		}()
 		seq.Call([]reflect.Value{yieldFn})
 	}()
+
+	// Flush any partial chunk before the terminal frame. Items already
+	// yielded by the handler must reach the client even when the stream ends
+	// abnormally (panic), so flush regardless of streamErr; a flush failure
+	// only becomes the stream's error when nothing worse happened first.
+	if chunker != nil {
+		if err := chunker.close(); err != nil && streamErr == nil {
+			streamErr = err
+		}
+	}
 
 	// Compute the final cause for the completion hooks. Cancellation
 	// wins over a late transport error because the cancel is the root

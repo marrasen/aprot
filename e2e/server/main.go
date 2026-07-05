@@ -21,7 +21,13 @@ func main() {
 	// Add REST + validation handlers for e2e coverage of those surfaces.
 	e2eapi.Register(registry)
 
-	server := aprot.NewServer(registry)
+	// Chunking enabled with a small MaxItems so the existing stream tests
+	// exercise stream_chunk frames end-to-end: they assert only item order and
+	// values, so their staying green proves chunking is transparent to the
+	// generated AsyncIterable (#239).
+	server := aprot.NewServer(registry, aprot.ServerOptions{
+		StreamChunking: &aprot.StreamChunking{MaxItems: 3},
+	})
 
 	state.Broadcaster = server
 	state.UserPusher = server

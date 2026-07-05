@@ -547,6 +547,22 @@ Cancellation works exactly like any other request: break out of the `for await` 
 
 Streaming handlers are WebSocket/SSE only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
 
+### Chunked delivery for large streams
+
+By default every yielded item is its own wire frame, which is wasteful when a handler streams thousands of small records (framing and syscall overhead dwarf the payload). Enable **stream chunking** to batch consecutive items into single `stream_chunk` frames:
+
+```go
+server := aprot.NewServer(registry, aprot.ServerOptions{
+    StreamChunking: &aprot.StreamChunking{
+        MaxItems: 128,       // flush after this many items (default 128)
+        MaxBytes: 64 << 10,  // ... or this many marshaled bytes (default 64 KiB)
+        MaxDelay: 20 * time.Millisecond, // ... or this long after the first buffered item (default 20ms)
+    },
+})
+```
+
+A chunk is flushed as soon as *any* threshold is reached, and `MaxDelay` bounds the extra latency for slow producers: a stalled iterator never holds already-yielded items back for more than that long. `&aprot.StreamChunking{}` enables chunking with all defaults. Batching is completely transparent to the generated client — the `AsyncIterable` still yields one item at a time — but it does require a client generated from the same aprot version, since older generated clients don't understand `stream_chunk` frames. Chunking applies to every streaming handler on the server; leave `StreamChunking` nil to keep per-item frames.
+
 ### Middleware and streaming handlers
 
 Middleware sees a streaming handler return as soon as the iterator value is in hand — *not* after every row has been streamed. For unary handlers that's the normal post-handler hook point; for streams, the duration and success you see at that moment reflect the time it took to produce the iterator, not the time to drain it. To observe the real end of a stream (duration, item count, cancellation cause, panic), register a callback via `aprot.OnStreamComplete(ctx, fn)`:
