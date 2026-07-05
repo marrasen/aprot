@@ -10,8 +10,37 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-07-05
+
 ### Added
 
+- Subscription patches: `aprot.PatchSubscription(ctx, patch, keys...)` (and
+  `Server.PatchSubscription` for out-of-request callers) lets a mutation push
+  a small typed payload to subscribed queries instead of re-running them and
+  re-sending the full result — O(patch) on the wire instead of O(list) for
+  in-place updates to large subscribed collections. Clients opt in per
+  subscription by registering a reducer: React hooks take
+  `applyPatch(data, patch)`, applied to the shared query-cache snapshot so
+  every component using the hook re-renders (patches racing ahead of the
+  initial response are queued and replayed); vanilla clients pass
+  `{ onPatch }` to the generated subscribe functions. The exported
+  `mergeByKey(key)` helper builds the common keyed-array reducer. Subscribers
+  without a reducer — older generated clients, `useQuerySuspense` — fall back
+  to a full refresh automatically, and the new `Observer.PatchFanout(key,
+  patched, refreshed)` event reports the split (embed `NoopObserver` to stay
+  forward-compatible; direct `Observer` implementors must add the method).
+  Patches deliver immediately (not batched with the request) and are meant
+  for in-place updates; keep `TriggerRefresh` for structural changes (#237).
+- Binary `Blob` responses: returning `aprot.Blob` (or `*aprot.Blob`) from a
+  unary handler opts the result into binary delivery. Over WebSocket the
+  payload is sent as a binary frame (4-byte header length + JSON header + raw
+  payload — no base64 inflation); transports without binary frames (SSE,
+  byte-stream) fall back to a `{"$blob": {contentType, data}}` JSON envelope.
+  Generated TypeScript clients resolve a DOM `Blob` on every transport —
+  methods are typed `Promise<Blob>`, and subscription refreshes deliver
+  `Blob`s the same way. Only the explicit `Blob` type opts in, and only as a
+  top-level result: plain `[]byte` results keep their base64 string encoding,
+  and nested/streamed/parameter `Blob`s travel as ordinary JSON (#238).
 - `ServerOptions.StreamChunking`: opt-in batching of streamed items. Instead
   of one wire frame per yielded item, consecutive items are batched into
   `stream_chunk` frames, flushed when any of three thresholds is reached —
@@ -162,6 +191,7 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/marrasen/aprot/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/marrasen/aprot/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/marrasen/aprot/compare/v0.44.0...v0.45.0
