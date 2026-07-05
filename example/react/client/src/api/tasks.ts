@@ -41,14 +41,37 @@ export function cancelSharedTask(client: ApiClient, taskId: string): Promise<voi
 
 
 // Shared task hooks
+
+function patchTaskNodes(nodes: TaskNode[], event: TaskUpdateEvent): TaskNode[] {
+    return nodes.map((n) => {
+        if (n.id === event.taskId) {
+            return { ...n, current: event.current ?? n.current, total: event.total ?? n.total };
+        }
+        return n.children ? { ...n, children: patchTaskNodes(n.children, event) } : n;
+    });
+}
+
 export function useSharedTasks(): SharedTaskState[] {
     const client = useApiClient();
     const [tasks, setTasks] = useState<SharedTaskState[]>([]);
 
     useEffect(() => {
-        return client.onPush<TaskStateEvent>('TaskStateEvent', (event) => {
+        const offState = client.onPush<TaskStateEvent>('TaskStateEvent', (event) => {
             setTasks(event.tasks);
         });
+        // Progress ticks travel as TaskUpdateEvent between full snapshots —
+        // full TaskStateEvent broadcasts only mark lifecycle changes. Fold
+        // them in so consumers see live current/total.
+        const offUpdate = client.onPush<TaskUpdateEvent>('TaskUpdateEvent', (event) => {
+            if (event.current == null && event.total == null) return;
+            setTasks((prev) => prev.map((t) => {
+                if (t.id === event.taskId) {
+                    return { ...t, current: event.current ?? t.current, total: event.total ?? t.total };
+                }
+                return t.children ? { ...t, children: patchTaskNodes(t.children, event) } : t;
+            }));
+        });
+        return () => { offState(); offUpdate(); };
     }, [client]);
 
     return tasks;
