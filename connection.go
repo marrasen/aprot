@@ -975,13 +975,14 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 			c.server.subscriptions.updateKeys(c.id, msg.ID, keys)
 			// Re-subscribe with the same ID may carry new params; refresh them
 			// so server-driven re-execution doesn't replay the stale ones.
-			c.server.subscriptions.updateParams(c.id, msg.ID, msg.Params)
+			c.server.subscriptions.updateParams(c.id, msg.ID, msg.Params, msg.Patch)
 		} else if ok, limited := c.server.subscriptions.register(&subscription{
-			conn:   c,
-			id:     msg.ID,
-			method: msg.Method,
-			keys:   keys,
-			params: msg.Params,
+			conn:       c,
+			id:         msg.ID,
+			method:     msg.Method,
+			keys:       keys,
+			params:     msg.Params,
+			wantsPatch: msg.Patch,
 		}); !ok {
 			if limited {
 				// The connection is at its subscription cap; tell the client so

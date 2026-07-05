@@ -48,8 +48,8 @@ export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{par
     return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
 }
 
-export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError);
+export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError, options);
 }
 
 {{end -}}

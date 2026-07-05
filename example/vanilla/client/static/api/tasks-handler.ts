@@ -70,8 +70,8 @@ export function cancelTask(client: ApiClient, taskId: string, options?: RequestO
     return client.request<void>('tasksHandler.CancelTask', [taskId], options);
 }
 
-export function subscribeCancelTask(client: ApiClient, taskId: string, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError);
+export function subscribeCancelTask(client: ApiClient, taskId: string, callback: (data: void) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError, options);
 }
 
 export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {

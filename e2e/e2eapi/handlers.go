@@ -115,6 +115,69 @@ func (h *BlobHandlers) SetBlob(ctx context.Context, data string) error {
 	return nil
 }
 
+// PatchHandlers exercises subscription patches (#237): a mutation pushes a
+// small typed patch to subscribers that declared patch support instead of
+// re-running the subscribed query, and falls back to a full refresh for
+// subscribers that did not. The execution counter lets tests assert which
+// path was taken.
+type PatchHandlers struct {
+	mu         sync.Mutex
+	ratings    map[string]int
+	executions int
+}
+
+// PatchItem is one entry of the subscribed list.
+type PatchItem struct {
+	ID     string `json:"id"`
+	Rating int    `json:"rating"`
+}
+
+// PatchItemList wraps the list so tests also cover reducers on non-array
+// result shapes.
+type PatchItemList struct {
+	Items []PatchItem `json:"items"`
+}
+
+// RatingPatch is the payload SetRating pushes to subscribers.
+type RatingPatch struct {
+	ID     string `json:"id"`
+	Rating int    `json:"rating"`
+}
+
+func NewPatchHandlers() *PatchHandlers {
+	return &PatchHandlers{ratings: map[string]int{"p1": 0, "p2": 0, "p3": 0}}
+}
+
+// ListPatchItems is the subscribed query; every execution increments the
+// counter so tests can distinguish a patch (no re-execution) from a full
+// refresh (one re-execution).
+func (h *PatchHandlers) ListPatchItems(ctx context.Context) (*PatchItemList, error) {
+	aprot.RegisterRefreshTrigger(ctx, "patch-items")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.executions++
+	items := make([]PatchItem, 0, len(h.ratings))
+	for _, id := range []string{"p1", "p2", "p3"} {
+		items = append(items, PatchItem{ID: id, Rating: h.ratings[id]})
+	}
+	return &PatchItemList{Items: items}, nil
+}
+
+// SetRating mutates one entry and pushes it as a patch.
+func (h *PatchHandlers) SetRating(ctx context.Context, id string, rating int) error {
+	h.mu.Lock()
+	h.ratings[id] = rating
+	h.mu.Unlock()
+	return aprot.PatchSubscription(ctx, RatingPatch{ID: id, Rating: rating}, "patch-items")
+}
+
+// GetListExecutions reports how many times ListPatchItems has run.
+func (h *PatchHandlers) GetListExecutions(ctx context.Context) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.executions, nil
+}
+
 // Register wires the e2e-only REST and validation handlers onto an existing
 // registry and turns on request validation. Existing handlers without validate
 // tags are unaffected (validation is a no-op for them).
@@ -123,5 +186,6 @@ func Register(registry *aprot.Registry) {
 	registry.Register(&SignupHandlers{})
 	registry.Register(&FixedArrayHandlers{})
 	registry.Register(NewBlobHandlers())
+	registry.Register(NewPatchHandlers())
 	registry.SetValidator(aprot.NewPlaygroundValidator())
 }

@@ -1307,8 +1307,12 @@ func TestGenerateNoRequestReact(t *testing.T) {
 		t.Error("Missing useCleanup hook")
 	}
 
-	// Query hook should not require params
-	if strings.Contains(output, "UseQueryOptions<ListItemsResponse>") {
+	// Query hook options are parametrized with the RESPONSE type (so
+	// applyPatch reducers are typed), never with a request type.
+	if !strings.Contains(output, "useListItems(options?: UseQueryOptions<ListItemsResponse>)") {
+		t.Error("Query hook should type its options as UseQueryOptions<ResponseType>")
+	}
+	if strings.Contains(output, "UseQueryOptions<ListItemsRequest>") {
 		t.Error("No-request query hook should not use UseQueryOptions with request type")
 	}
 

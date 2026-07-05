@@ -18,9 +18,13 @@ const (
 	TypeConnected   MessageType = "connected"
 	TypeSubscribe   MessageType = "subscribe"
 	TypeUnsubscribe MessageType = "unsubscribe"
-	TypeStreamItem  MessageType = "stream_item"
-	TypeStreamChunk MessageType = "stream_chunk"
-	TypeStreamEnd   MessageType = "stream_end"
+	// TypeSubscriptionPatch is a server->client frame carrying a partial
+	// update for an active subscription, pushed by [PatchSubscription]
+	// instead of re-running the query and re-sending the full result.
+	TypeSubscriptionPatch MessageType = "subscription_patch"
+	TypeStreamItem        MessageType = "stream_item"
+	TypeStreamChunk       MessageType = "stream_chunk"
+	TypeStreamEnd         MessageType = "stream_end"
 	// TypeAuth is a client->server frame carrying a token for first-message
 	// authentication (and mid-session token refresh). TypeAuthOK / TypeAuthError
 	// are the server's responses.
@@ -45,6 +49,20 @@ type IncomingMessage struct {
 	// Token carries the auth token on a TypeAuth frame (first-message auth and
 	// mid-session refresh). Empty for all other message types.
 	Token string `json:"token,omitempty"`
+	// Patch, on a TypeSubscribe frame, declares that the client can apply
+	// subscription_patch frames for this subscription. Servers fall back to a
+	// full refresh for subscriptions without it (see [PatchSubscription]).
+	Patch bool `json:"patch,omitempty"`
+}
+
+// SubscriptionPatchMessage carries a partial update for an active
+// subscription, sent by [PatchSubscription] to subscribers that declared
+// patch support at subscribe time. The patch payload is opaque to aprot;
+// the client applies it with the reducer registered for the subscription.
+type SubscriptionPatchMessage struct {
+	Type  MessageType    `json:"type"`
+	ID    string         `json:"id"`
+	Patch jsontext.Value `json:"patch"`
 }
 
 // AuthResultMessage is the server's response to a TypeAuth frame: TypeAuthOK on

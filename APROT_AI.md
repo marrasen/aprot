@@ -259,6 +259,34 @@ func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
 - `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
 - `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
 
+### Subscription patches (#237)
+
+`TriggerRefresh` re-sends the **full result** on every fire — O(list) per keystroke on big collections. `PatchSubscription` pushes O(patch) instead:
+
+```go
+func (h *H) SetRating(ctx context.Context, id string, rating int) error {
+    h.store.SetRating(id, rating)
+    return aprot.PatchSubscription(ctx, RatingPatch{ID: id, Rating: rating}, "photos") // patch first, then key parts
+}
+```
+
+Client opts in by providing a reducer — that's also what declares patch support to the server (without one, the server falls back to a full refresh automatically):
+
+```typescript
+// React (cached): patch is applied to the shared cache snapshot — every component sees it.
+const { data } = useListPhotos({ applyPatch: mergeByKey('id') });
+// Wrapped results:
+useListPhotos({ applyPatch: (data, patch) => ({ ...data, photos: mergeByKey('id')(data.photos, patch) }) });
+// Vanilla: 5th arg of generated subscribe functions.
+subscribeListPhotos(client, cb, onErr, { onPatch: (patch) => { /* fold into local state */ } });
+```
+
+- `mergeByKey('id')` = shallow-merge patches (`{id, ...fields}`, single or array) into a keyed array; unmatched keys ignored.
+- Reducers must be pure (return a new value). Patches are delivered immediately, not batched; a patch may arrive before the mutation's own response settles.
+- Patches are for in-place updates only — fire `TriggerRefresh` for structural changes (add/remove items).
+- `Server.PatchSubscription(patch, keys...)` for out-of-request callers; returns error only if the patch fails to marshal.
+- `useQuerySuspense` and clients without a reducer stay on the full-refresh path; `Observer.PatchFanout(key, patched, refreshed)` reports the split.
+
 ## REST + OpenAPI
 
 ```go

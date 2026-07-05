@@ -138,6 +138,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Streaming handlers** — return `iter.Seq[T]` / `iter.Seq2[K, V]` from Go and the generated client exposes `AsyncIterable<T>`, so UIs can populate lists item-by-item as results arrive
 - **Binary Blob responses** — return `aprot.Blob` from a handler and the client receives a DOM `Blob`; delivered as a raw WebSocket binary frame (no base64 overhead), with an automatic JSON fallback on SSE and stream transports
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
+- **Subscription patches** — mutations push O(patch) partial updates to subscribed queries instead of re-sending the full result; clients apply them to the shared query cache via an `applyPatch` reducer, with automatic full-refresh fallback for clients that don't opt in
 - **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
 - **Middleware** — server-level and per-handler middleware chains
 - **Push events** — broadcast to all clients or target specific users
@@ -637,6 +638,34 @@ imgEl.src = URL.createObjectURL(avatar); // avatar.type === 'image/png'
 Over WebSocket the payload travels as a binary frame (a 4-byte header length, a small JSON header, then the raw bytes). Transports without binary frames (SSE, byte-stream) fall back to a JSON envelope carrying base64 data, which the client converts back into a `Blob` automatically — the resolved type never depends on the transport. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) deliver `Blob`s the same way.
 
 Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
+
+## Subscription Patches
+
+`TriggerRefresh` re-runs the subscribed query and re-sends the **entire result** — on a several-thousand-row list, every small mutation costs a full re-serialization and a megabyte-scale frame. `PatchSubscription` pushes just the change instead:
+
+```go
+// Query handler — declares the trigger key as usual.
+func (h *PhotoHandlers) ListPhotos(ctx context.Context, folderID string) ([]Photo, error) {
+    aprot.RegisterRefreshTrigger(ctx, "photos", folderID)
+    return h.store.ListPhotos(folderID)
+}
+
+// Mutation — pushes an O(patch) update instead of re-sending the list.
+func (h *PhotoHandlers) SetRating(ctx context.Context, folderID, id string, rating int) error {
+    h.store.SetRating(id, rating)
+    return aprot.PatchSubscription(ctx, PhotoPatch{ID: id, Rating: rating}, "photos", folderID)
+}
+```
+
+React hooks opt in with an `applyPatch` reducer, applied to the shared query-cache snapshot so every component using the hook re-renders with the patched data — no refetch, no full-result frame:
+
+```typescript
+const { data } = useListPhotos(folderId, { applyPatch: mergeByKey('id') });
+```
+
+`mergeByKey('id')` covers the common case — a keyed array shallow-merged with `{id, ...partialFields}` patches (single or arrays). Wrapped results take a one-liner: `applyPatch: (data, patch) => ({ ...data, photos: mergeByKey('id')(data.photos, patch) })`. Vanilla clients receive patches through the generated subscribe functions: `subscribeListPhotos(client, folderId, cb, onErr, { onPatch })`.
+
+Providing a reducer is what declares patch support to the server. Subscribers without one — older generated clients, `useQuerySuspense`, or hooks that simply don't pass `applyPatch` — automatically fall back to the classic full refresh, so mixed fleets stay consistent, and `Observer.PatchFanout` reports how many subscribers took each path. Patches are delivered immediately (not batched with the surrounding request) and are meant for in-place updates to existing entries; keep firing `TriggerRefresh` for structural changes such as added or removed items.
 
 ## Validation
 
