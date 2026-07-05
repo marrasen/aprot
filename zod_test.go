@@ -195,6 +195,52 @@ func TestFieldToZod(t *testing.T) {
 			fieldData{GoType: "map", Type: "Record<string, StatusType>", ElemGoKind: "int", ElemEnum: intEnumFixture("Status", 0, 1)},
 			`z.record(z.string(), z.union([z.literal(0), z.literal(1)]))`,
 		},
+
+		// Issue #240: fixed-size arrays emit z.tuple([...]) below the tuple
+		// cap so z.infer matches the TS tuple type, and z.array(...).length(N)
+		// above it (where the TS type is T[]).
+		{
+			"fixed array of float",
+			fieldData{GoType: "array", Type: "[number, number, number, number]", ElemGoKind: "float", ArrayLen: 4},
+			"z.tuple([z.number(), z.number(), z.number(), z.number()])",
+		},
+		{
+			"fixed array of string",
+			fieldData{GoType: "array", Type: "[string, string]", ElemGoKind: "string", ArrayLen: 2},
+			"z.tuple([z.string(), z.string()])",
+		},
+		{
+			"fixed array above tuple cap",
+			fieldData{GoType: "array", Type: "number[]", ElemGoKind: "int", ArrayLen: 20},
+			"z.array(z.number().int()).length(20)",
+		},
+		{
+			"fixed array of known struct",
+			fieldData{GoType: "array", Type: "[EventLinkInput, EventLinkInput]", ElemGoKind: "struct", ElemTypeName: "EventLinkInput", ArrayLen: 2},
+			"z.tuple([EventLinkInputSchema, EventLinkInputSchema])",
+		},
+		{
+			"fixed array of string enum",
+			fieldData{GoType: "array", Type: "[TargetTypeType, TargetTypeType]", ElemGoKind: "string", ElemEnum: stringEnumFixture("TargetType", "event", "post"), ArrayLen: 2},
+			`z.tuple([z.enum(["event", "post"]), z.enum(["event", "post"])])`,
+		},
+		{
+			"fixed array no elem info",
+			fieldData{GoType: "array", Type: "[[number, number], [number, number]]", ArrayLen: 2},
+			"z.tuple([z.any(), z.any()])",
+		},
+		// Size constraints are meaningless on a fixed-length type and z.tuple
+		// has no .min()/.max(); they must be dropped, not emitted.
+		{
+			"fixed array drops size constraints",
+			fieldData{GoType: "array", Type: "[number, number]", ElemGoKind: "float", ArrayLen: 2, ValidateTag: "required,len=2"},
+			"z.tuple([z.number(), z.number()])",
+		},
+		{
+			"optional fixed array",
+			fieldData{GoType: "array", Type: "[number, number]", ElemGoKind: "float", ArrayLen: 2, Optional: true},
+			"z.tuple([z.number(), z.number()]).optional()",
+		},
 	}
 
 	for _, tt := range tests {

@@ -352,6 +352,19 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 			Type:  "array",
 			Items: g.goTypeToJSONSchema(t.Elem()),
 		}
+	case reflect.Array:
+		if isByteArray(t) {
+			// [N]byte (named or not) is base64-encoded as a string by
+			// go-json-experiment/json v2, same as unnamed []byte (#240).
+			return &JSONSchema{Type: "string", Format: "byte"}
+		}
+		n := t.Len()
+		return &JSONSchema{
+			Type:     "array",
+			Items:    g.goTypeToJSONSchema(t.Elem()),
+			MinItems: &n,
+			MaxItems: &n,
+		}
 	case reflect.Map:
 		return &JSONSchema{
 			Type:                 "object",
@@ -373,25 +386,33 @@ func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	}
 }
 
-// byteSliceFieldSchema returns the JSON Schema for a byte-slice field,
-// honoring the go-json-experiment/json v2 `format:` tag (issue #174).
-// Returns nil if the field type is not a byte slice — caller should fall
-// through to the default goTypeToJSONSchema path.
+// byteSliceFieldSchema returns the JSON Schema for a byte-slice or byte-array
+// field, honoring the go-json-experiment/json v2 `format:` tag (issue #174).
+// Returns nil if the field type is not a byte slice or array — caller should
+// fall through to the default goTypeToJSONSchema path.
 func byteSliceFieldSchema(field reflect.StructField) *JSONSchema {
-	if !isByteSlice(field.Type) {
+	if !isByteSlice(field.Type) && !isByteArray(field.Type) {
 		return nil
 	}
 	format := jsonFormatOption(field)
 	if format != "" {
 		if _, _, _, ok := byteSliceFormatShape(format); ok {
 			if format == "array" {
-				return &JSONSchema{Type: "array", Items: &JSONSchema{Type: "integer"}}
+				schema := &JSONSchema{Type: "array", Items: &JSONSchema{Type: "integer"}}
+				if isByteArray(field.Type) {
+					// A [N]byte forced onto the number-array wire shape keeps
+					// its fixed length (#240).
+					n := field.Type.Len()
+					schema.MinItems = &n
+					schema.MaxItems = &n
+				}
+				return schema
 			}
 			return &JSONSchema{Type: "string", Format: "byte"}
 		}
 		// Unrecognized format tag: fall through to the default shape.
 	}
-	if isUnnamedByteSlice(field.Type) {
+	if isUnnamedByteSlice(field.Type) || isByteArray(field.Type) {
 		return &JSONSchema{Type: "string", Format: "byte"}
 	}
 	// Named byte slice with no tag keeps the v2 number-array default.

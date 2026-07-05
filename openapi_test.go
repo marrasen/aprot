@@ -452,3 +452,83 @@ func TestOpenAPIByteSliceFormatTag(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenAPIGoTypeToJSONSchema_FixedSizeArray covers the [N]T mapping (issue
+// #240): fixed-size arrays become array schemas with minItems == maxItems ==
+// N, byte arrays become base64 strings (matching the jsonv2 wire shape).
+func TestOpenAPIGoTypeToJSONSchema_FixedSizeArray(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	t.Run("[4]float64 is fixed-length number array", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf([4]float64{}))
+		if schema.Type != "array" {
+			t.Errorf("Type = %q, want %q", schema.Type, "array")
+		}
+		if schema.Items == nil || schema.Items.Type != "number" {
+			t.Errorf("Items = %+v, want number element", schema.Items)
+		}
+		if schema.MinItems == nil || *schema.MinItems != 4 {
+			t.Errorf("MinItems = %v, want 4", schema.MinItems)
+		}
+		if schema.MaxItems == nil || *schema.MaxItems != 4 {
+			t.Errorf("MaxItems = %v, want 4", schema.MaxItems)
+		}
+	})
+
+	t.Run("[32]byte is string/byte", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf([32]byte{}))
+		if schema.Type != "string" || schema.Format != "byte" {
+			t.Errorf("schema = {Type: %q, Format: %q}, want {string, byte}", schema.Type, schema.Format)
+		}
+	})
+
+	t.Run("named byte array is string/byte", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf(namedByteArray{}))
+		if schema.Type != "string" || schema.Format != "byte" {
+			t.Errorf("schema = {Type: %q, Format: %q}, want {string, byte}", schema.Type, schema.Format)
+		}
+	})
+
+	t.Run("nested [2][2]int keeps inner fixed length", func(t *testing.T) {
+		schema := gen.goTypeToJSONSchema(reflect.TypeOf([2][2]int{}))
+		if schema.Type != "array" {
+			t.Fatalf("Type = %q, want %q", schema.Type, "array")
+		}
+		inner := schema.Items
+		if inner == nil || inner.Type != "array" || inner.Items == nil || inner.Items.Type != "integer" {
+			t.Errorf("Items = %+v, want fixed integer array element", inner)
+		}
+	})
+}
+
+// TestOpenAPIByteArrayFormatTag: a `format:array` tag on a [N]byte field
+// forces the number-array wire shape; the schema keeps the fixed length.
+func TestOpenAPIByteArrayFormatTag(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+
+	gen.buildStructSchema(reflect.TypeOf(FixedArrayStruct{}))
+	schema := gen.schemas[reflect.TypeOf(FixedArrayStruct{})]
+	if schema == nil {
+		t.Fatal("FixedArrayStruct schema not registered")
+	}
+
+	prop := schema.Properties["hashArr"]
+	if prop == nil {
+		t.Fatal("property hashArr missing")
+	}
+	if prop.Type != "array" {
+		t.Errorf("Type = %q, want %q", prop.Type, "array")
+	}
+	if prop.Items == nil || prop.Items.Type != "integer" {
+		t.Errorf("Items = %+v, want integer element", prop.Items)
+	}
+	if prop.MinItems == nil || *prop.MinItems != 4 || prop.MaxItems == nil || *prop.MaxItems != 4 {
+		t.Errorf("MinItems/MaxItems = %v/%v, want 4/4", prop.MinItems, prop.MaxItems)
+	}
+
+	// Default byte arrays stay base64 strings even through the struct path.
+	hash := schema.Properties["hash"]
+	if hash == nil || hash.Type != "string" || hash.Format != "byte" {
+		t.Errorf("hash = %+v, want {string, byte}", hash)
+	}
+}

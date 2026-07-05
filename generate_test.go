@@ -3702,3 +3702,180 @@ func TestGenerateRemovesStaleGeneratedFiles(t *testing.T) {
 		}
 	}
 }
+
+// --- Issue #240: fixed-size arrays ([N]T) must not degrade to `any` ---
+
+// namedByteArray documents that named byte arrays (unlike named byte slices)
+// are base64-encoded as strings by go-json-experiment/json v2, same as
+// unnamed [N]byte.
+type namedByteArray [3]byte
+
+// ArrayPoint is a struct element type for fixed-size array tests.
+type ArrayPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// FixedArrayStruct exercises every fixed-size array shape the generator maps:
+// primitive tuples, nested tuples, above-cap fallback, byte arrays (base64
+// string), and the v2 `format:array` override on a byte array.
+type FixedArrayStruct struct {
+	WBMul   [4]float64     `json:"wbMul" validate:"required"`
+	Grid    [2][2]int      `json:"grid"`
+	Big     [20]int        `json:"big"`
+	Hash    [32]byte       `json:"hash"`
+	Named   namedByteArray `json:"named"`
+	Pair    [2]ArrayPoint  `json:"pair"`
+	HashArr [4]byte        `json:"hashArr,format:array"`
+}
+
+func TestGoTypeToTSFixedSizeArrays(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want string
+	}{
+		{"[4]float64 → tuple", reflect.TypeOf([4]float64{}), "[number, number, number, number]"},
+		{"[2]string → tuple", reflect.TypeOf([2]string{}), "[string, string]"},
+		{"[2][2]int → nested tuple", reflect.TypeOf([2][2]int{}), "[[number, number], [number, number]]"},
+		{"[16]int at cap keeps tuple", reflect.TypeOf([16]int{}), "[number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number]"},
+		{"[17]int above cap falls back to array", reflect.TypeOf([17]int{}), "number[]"},
+		{"[20]int above cap falls back to array", reflect.TypeOf([20]int{}), "number[]"},
+		{"[32]byte is base64 string", reflect.TypeOf([32]byte{}), "string"},
+		{"named byte array is base64 string", reflect.TypeOf(namedByteArray{}), "string"},
+		{"[2]struct → tuple of type refs", reflect.TypeOf([2]ArrayPoint{}), "[ArrayPoint, ArrayPoint]"},
+		{"pointer to array unwraps", reflect.TypeOf(&[2]string{}), "[string, string]"},
+		{"[0]int → empty tuple", reflect.TypeOf([0]int{}), "[]"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := g.goTypeToTS(tc.typ)
+			if got != tc.want {
+				t.Errorf("goTypeToTS(%v) = %q, want %q", tc.typ, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollectInterfaceFieldsFixedSizeArrays(t *testing.T) {
+	registry := NewRegistry()
+	g := NewGenerator(registry)
+
+	fields := g.collectInterfaceFields(reflect.TypeOf(FixedArrayStruct{}))
+	byName := make(map[string]fieldData, len(fields))
+	for _, f := range fields {
+		byName[f.Name] = f
+	}
+
+	tests := []struct {
+		field        string
+		wantType     string
+		wantGoType   string
+		wantArrayLen int
+		wantElemKind string
+		wantElemName string
+	}{
+		{"wbMul", "[number, number, number, number]", "array", 4, "float", ""},
+		{"grid", "[[number, number], [number, number]]", "array", 2, "", ""},
+		{"big", "number[]", "array", 20, "int", ""},
+		// Byte arrays are base64 strings on the wire, so the whole field
+		// reports the string shape (like unnamed []byte).
+		{"hash", "string", "string", 0, "", ""},
+		{"named", "string", "string", 0, "", ""},
+		{"pair", "[ArrayPoint, ArrayPoint]", "array", 2, "struct", "ArrayPoint"},
+		// format:array forces the number-array wire shape; the fixed length
+		// is preserved as a tuple.
+		{"hashArr", "[number, number, number, number]", "array", 4, "uint", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.field, func(t *testing.T) {
+			f, ok := byName[tc.field]
+			if !ok {
+				t.Fatalf("field %q missing from collected fields", tc.field)
+			}
+			if f.Type != tc.wantType {
+				t.Errorf("Type = %q, want %q", f.Type, tc.wantType)
+			}
+			if f.GoType != tc.wantGoType {
+				t.Errorf("GoType = %q, want %q", f.GoType, tc.wantGoType)
+			}
+			if f.ArrayLen != tc.wantArrayLen {
+				t.Errorf("ArrayLen = %d, want %d", f.ArrayLen, tc.wantArrayLen)
+			}
+			if f.ElemGoKind != tc.wantElemKind {
+				t.Errorf("ElemGoKind = %q, want %q", f.ElemGoKind, tc.wantElemKind)
+			}
+			if f.ElemTypeName != tc.wantElemName {
+				t.Errorf("ElemTypeName = %q, want %q", f.ElemTypeName, tc.wantElemName)
+			}
+		})
+	}
+}
+
+type FixedArrayHandlers struct{}
+
+func (h *FixedArrayHandlers) SetWhiteBalance(ctx context.Context, req *FixedArrayStruct) error {
+	return nil
+}
+
+// TestGenerateFixedSizeArrayIntegration runs full generation over a handler
+// whose params struct contains fixed-size arrays and asserts the emitted TS:
+// the interface uses tuple types, struct element types get their own
+// interface declaration (nested type collection must descend into arrays),
+// and the Zod schema emits z.tuple for the validated field.
+func TestGenerateFixedSizeArrayIntegration(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&FixedArrayHandlers{})
+
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode: OutputVanilla,
+		Zod:  true,
+	})
+	results, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	var out, schemaFile string
+	for name, content := range results {
+		if strings.HasSuffix(name, ".schema.ts") {
+			schemaFile = content
+		} else {
+			out += content
+		}
+	}
+	if schemaFile == "" {
+		t.Fatal("expected a .schema.ts file to be generated")
+	}
+
+	mustContain := []struct {
+		label string
+		want  string
+	}{
+		{"tuple field", "wbMul: [number, number, number, number]"},
+		{"nested tuple field", "grid: [[number, number], [number, number]]"},
+		{"above-cap fallback field", "big: number[]"},
+		{"byte array as string", "hash: string"},
+		{"array element interface collected", "export interface ArrayPoint"},
+		{"struct tuple field", "pair: [ArrayPoint, ArrayPoint]"},
+	}
+	for _, tc := range mustContain {
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("missing %s: expected %q in output", tc.label, tc.want)
+		}
+	}
+
+	if strings.Contains(out, "wbMul: any") {
+		t.Error("wbMul still maps to any — fixed-size array mapping not applied")
+	}
+
+	wantZod := "wbMul: z.tuple([z.number(), z.number(), z.number(), z.number()])"
+	if !strings.Contains(schemaFile, wantZod) {
+		t.Errorf("missing zod tuple schema: expected %q in schema file\n---\n%s", wantZod, schemaFile)
+	}
+}

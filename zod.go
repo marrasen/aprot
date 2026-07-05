@@ -118,7 +118,7 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 	}
 
 	var chain []string
-	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, f.ElemEnum, f.ElemLazy, knownSchemas))
+	chain = append(chain, zodBaseType(effectiveKind, f.Type, f.ElemGoKind, f.ElemTypeName, f.ElemEnum, f.ElemLazy, f.ArrayLen, knownSchemas))
 
 	for _, r := range rules {
 		if r.Tag == "omitempty" {
@@ -149,13 +149,16 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 	return body
 }
 
-// zodBaseType returns the base Zod type for a Go kind. For slice and map
-// kinds, elemGoKind/elemTypeName provide the element's type info so the array
-// or record can substitute the element schema (#169) instead of falling
-// through to z.any(). elemEnum is non-nil when the slice/map element is a
+// zodBaseType returns the base Zod type for a Go kind. For slice, map, and
+// array kinds, elemGoKind/elemTypeName provide the element's type info so the
+// array, record, or tuple can substitute the element schema (#169) instead of
+// falling through to z.any(). elemEnum is non-nil when the element is a
 // registered enum; in that case zodElemExpr emits z.enum(...) / z.union(...)
-// for the element (#176).
-func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, elemEnum *EnumInfo, elemLazy bool, knownSchemas map[string]bool) string {
+// for the element (#176). arrayLen is the fixed length of a [N]T field
+// (#240): below the tuple cap it becomes z.tuple([...]) with N element
+// schemas so z.infer matches the TS tuple type, above it
+// z.array(...).length(N) matches the T[] fallback.
+func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName string, elemEnum *EnumInfo, elemLazy bool, arrayLen int, knownSchemas map[string]bool) string {
 	switch goKind {
 	case "string":
 		return "string()"
@@ -167,6 +170,16 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 		return "boolean()"
 	case "slice":
 		return "array(" + zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas) + ")"
+	case "array":
+		elem := zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas)
+		if arrayLen > maxTSTupleLen {
+			return "array(" + elem + ").length(" + strconv.Itoa(arrayLen) + ")"
+		}
+		parts := make([]string, arrayLen)
+		for i := range parts {
+			parts[i] = elem
+		}
+		return "tuple([" + strings.Join(parts, ", ") + "])"
 	case "map":
 		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas) + ")"
 	default:
@@ -265,7 +278,9 @@ func zodConstraint(goKind string, rule ValidateRule) string {
 	// z.record() exposes no length/size constraint methods, so a size rule on
 	// a map would otherwise emit invalid TS like z.record(...).min(...). Drop
 	// size constraints for maps rather than emit something that won't parse.
-	if goKind == "map" {
+	// Same for fixed-size arrays: z.tuple() has no .min()/.max(), and the
+	// length is already fixed by the type (#240).
+	if goKind == "map" || goKind == "array" {
 		return ""
 	}
 	// For strings and slices the go-playground validator's gt/lt operate on

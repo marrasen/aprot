@@ -10,6 +10,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed-size array fields (`[N]T`) no longer degrade to `any` in the generated
+  TypeScript client. They map to a tuple type (`[4]float64` →
+  `[number, number, number, number]`) for lengths up to 16 and to plain `T[]`
+  above that; nested arrays and arrays of structs are mapped recursively, and
+  struct element types get their own generated interface. Zod schemas emit
+  `z.tuple([...])` (or `z.array(...).length(N)` above the cap) and OpenAPI
+  schemas carry `minItems`/`maxItems`. `[N]byte` — named or not — maps to
+  `string`, matching the base64 encoding go-json-experiment/json uses on the
+  wire, and a `json:",format:array"` tag forces the fixed-length number-array
+  shape (#240).
+
 ## [0.46.0] - 2026-07-04
 
 ### Added

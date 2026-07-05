@@ -59,11 +59,31 @@ func (h *SignupHandlers) Signup(ctx context.Context, req *SignupRequest) (*Signu
 	return &SignupResult{OK: true}, nil
 }
 
+// FixedArrayHandlers exercises fixed-size array codegen (#240): [N]T fields
+// must be typed as TS tuples (plain arrays above the tuple cap) and round-trip
+// as JSON arrays, while [N]byte crosses the wire as a base64 string.
+type FixedArrayHandlers struct{}
+
+// FixedArrayPayload covers the [N]T shapes with distinct wire encodings:
+// primitive tuple, nested tuple, above-cap fallback, and base64 byte array.
+type FixedArrayPayload struct {
+	WBMul [4]float64 `json:"wbMul"`
+	Grid  [2][2]int  `json:"grid"`
+	Big   [20]int    `json:"big"`
+	Hash  [8]byte    `json:"hash"`
+}
+
+// EchoArrays echoes its payload so the test can assert a full round-trip.
+func (h *FixedArrayHandlers) EchoArrays(ctx context.Context, req *FixedArrayPayload) (*FixedArrayPayload, error) {
+	return req, nil
+}
+
 // Register wires the e2e-only REST and validation handlers onto an existing
 // registry and turns on request validation. Existing handlers without validate
 // tags are unaffected (validation is a no-op for them).
 func Register(registry *aprot.Registry) {
 	registry.RegisterREST(&EchoHandlers{})
 	registry.Register(&SignupHandlers{})
+	registry.Register(&FixedArrayHandlers{})
 	registry.SetValidator(aprot.NewPlaygroundValidator())
 }
