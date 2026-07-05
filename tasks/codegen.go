@@ -209,6 +209,32 @@ func goTypeToTS(t reflect.Type) string {
 			return "(" + elemType + ")[]"
 		}
 		return elemType + "[]"
+	case reflect.Array:
+		// [N]byte (named or not) is base64-encoded as a string by
+		// go-json-experiment/json v2, same as unnamed []byte (#240).
+		if t.Elem().Kind() == reflect.Uint8 {
+			return "string"
+		}
+		length := t.Len()
+		elemType := goTypeToTS(t.Elem())
+		// Above the tuple cap, fall back to the plain element-array form —
+		// mirrors aprot's maxTSTupleLen (#240).
+		if length > 16 {
+			if strings.Contains(elemType, " | ") {
+				return "(" + elemType + ")[]"
+			}
+			return elemType + "[]"
+		}
+		// For nested types containing |, wrap in parens. Otherwise generate tuple directly.
+		if strings.Contains(elemType, " | ") {
+			elemType = "(" + elemType + ")"
+		}
+		// Generate a tuple: [T, T, ..., T] with length repetitions
+		elements := make([]string, length)
+		for i := 0; i < length; i++ {
+			elements[i] = elemType
+		}
+		return "[" + strings.Join(elements, ", ") + "]"
 	case reflect.Map:
 		return fmt.Sprintf("Record<%s, %s>", goTypeToTS(t.Key()), goTypeToTS(t.Elem()))
 	case reflect.Struct:

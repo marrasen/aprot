@@ -482,3 +482,62 @@ func TestGenerateWithMetaSliceMarshalerWrapper(t *testing.T) {
 		t.Errorf("expected MetaWithWrappedSlice.requestId to be 'string', got:\n%s", metaBlock)
 	}
 }
+
+// MetaWithFixedArray uses fixed-size array fields in the task meta type.
+type MetaWithFixedArray struct {
+	WhiteBalance [4]float64 `json:"whiteBalance"`
+	Matrix       [2][2]int  `json:"matrix"`
+	Simple       [3]string  `json:"simple"`
+	Hash         [32]byte   `json:"hash"`
+	Big          [20]int    `json:"big"`
+}
+
+func TestGenerateWithMetaFixedArray(t *testing.T) {
+	registry := aprot.NewRegistry()
+	registry.Register(&genTestHandler{})
+	EnableWithMeta[MetaWithFixedArray](registry)
+
+	gen := aprot.NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	// Extract MetaWithFixedArray interface block
+	metaStart := strings.Index(out, "interface MetaWithFixedArray")
+	if metaStart == -1 {
+		t.Fatal("MetaWithFixedArray interface not found in output")
+	}
+	metaBlock := out[metaStart:]
+	braceEnd := strings.Index(metaBlock, "}")
+	if braceEnd == -1 {
+		t.Fatal("could not find closing brace for MetaWithFixedArray")
+	}
+	metaBlock = metaBlock[:braceEnd+1]
+
+	// whiteBalance: [4]float64 should resolve to [number, number, number, number] tuple
+	if !strings.Contains(metaBlock, "whiteBalance: [number, number, number, number]") {
+		t.Errorf("expected MetaWithFixedArray.whiteBalance to be '[number, number, number, number]' tuple, got:\n%s", metaBlock)
+	}
+
+	// matrix: [2][2]int should resolve to [[number, number], [number, number]] tuple
+	if !strings.Contains(metaBlock, "matrix: [[number, number], [number, number]]") {
+		t.Errorf("expected MetaWithFixedArray.matrix to be '[[number, number], [number, number]]' tuple, got:\n%s", metaBlock)
+	}
+
+	// simple: [3]string should resolve to [string, string, string] tuple
+	if !strings.Contains(metaBlock, "simple: [string, string, string]") {
+		t.Errorf("expected MetaWithFixedArray.simple to be '[string, string, string]' tuple, got:\n%s", metaBlock)
+	}
+
+	// hash: [32]byte is base64-encoded by jsonv2 → string, not a number tuple
+	if !strings.Contains(metaBlock, "hash: string") {
+		t.Errorf("expected MetaWithFixedArray.hash to be 'string' (base64 wire shape), got:\n%s", metaBlock)
+	}
+
+	// big: [20]int is above the tuple cap → plain number[]
+	if !strings.Contains(metaBlock, "big: number[]") {
+		t.Errorf("expected MetaWithFixedArray.big to be 'number[]' (above tuple cap), got:\n%s", metaBlock)
+	}
+}

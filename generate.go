@@ -427,6 +427,11 @@ type fieldData struct {
 	// is a named struct (e.g., "EventLinkInput"). Used by Zod codegen to look up
 	// the element's generated schema. Empty for primitive elements.
 	ElemTypeName string
+	// ArrayLen is the fixed length of a [N]T array field, valid only when
+	// GoType is "array". Zod codegen uses it to emit z.tuple([...]) with N
+	// element schemas (or z.array(...).length(N) above the tuple cap) so the
+	// inferred type matches the TS tuple the interface generator emits (#240).
+	ArrayLen int
 	// Enum is non-nil when the field's type is a registered enum. Zod codegen
 	// uses it to emit z.enum([...]) (string enums) or z.union([z.literal(...),
 	// ...]) (int enums), matching the branded enum type the TS interface
@@ -1364,6 +1369,14 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		goType := goKindString(field.Type)
 		tsType := g.goTypeToTS(field.Type)
 		optional := g.isOptional(field)
+		// Fixed-size array length ([N]T, possibly behind a pointer) — drives
+		// tuple emission in Zod codegen (#240).
+		arrayLen := 0
+		if at := field.Type; at.Kind() == reflect.Ptr && at.Elem().Kind() == reflect.Array {
+			arrayLen = at.Elem().Len()
+		} else if at.Kind() == reflect.Array {
+			arrayLen = at.Len()
+		}
 		// A bare pointer (no json omitempty) is always serialized — as null when
 		// nil — so it is required and nullable, not absent. Reflect that in both
 		// the TS type (`| null`) and the optionality flag.
@@ -1375,7 +1388,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 				tsType += " | null"
 			}
 		}
-		if isByteSlice(field.Type) {
+		if isByteSlice(field.Type) || isByteArray(field.Type) {
 			// go-json-experiment/json v2 per-field `format:` tag (issue
 			// #174). A tag value wins over the issue #174 default — it can
 			// force an unnamed []byte to serialize as a number array, or
@@ -1388,15 +1401,24 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 					goType = gk
 					elemGoKind = ek
 					elemTypeName = ""
+					if format == "array" && isByteArray(field.Type) {
+						// A [N]byte forced onto the number-array wire shape
+						// keeps its fixed length: tuple below the cap, plain
+						// number[] above it (#240).
+						tsType = tsTupleOrArray("number", arrayLen)
+						goType = "array"
+					}
 				}
-			} else if isUnnamedByteSlice(field.Type) {
-				// Unnamed []byte with no format tag is encoded as a base64
-				// string on the wire. Report it as a string kind so Zod
-				// codegen emits z.string() instead of z.array(z.number()),
-				// and clear the element info that would drive z.array(...).
+			} else if isUnnamedByteSlice(field.Type) || isByteArray(field.Type) {
+				// Unnamed []byte — and every [N]byte, named or not — is
+				// encoded as a base64 string on the wire. Report it as a
+				// string kind so Zod codegen emits z.string() instead of
+				// z.array(z.number()), and clear the element info that would
+				// drive z.array(...).
 				goType = "string"
 				elemGoKind = ""
 				elemTypeName = ""
+				arrayLen = 0
 			}
 		}
 		fields = append(fields, fieldData{
@@ -1412,6 +1434,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			SQLNullKind:  SQLNullGoKind(field.Type, goKindString),
 			ElemGoKind:   elemGoKind,
 			ElemTypeName: elemTypeName,
+			ArrayLen:     arrayLen,
 			Enum:         g.lookupEnum(field.Type),
 			ElemEnum:     g.lookupElemEnum(field.Type),
 		})
@@ -1493,7 +1516,7 @@ func (g *Generator) collectNestedType(ft reflect.Type) {
 		if ft.PkgPath() != "" && !g.hasMarshalOverride(ft) {
 			g.collectType(ft)
 		}
-	case reflect.Slice:
+	case reflect.Slice, reflect.Array:
 		g.collectNestedType(ft.Elem())
 	case reflect.Map:
 		g.collectNestedType(ft.Elem())
@@ -1560,7 +1583,7 @@ func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map {
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map && t.Kind() != reflect.Array {
 		return nil
 	}
 	elem := t.Elem()
@@ -1570,20 +1593,21 @@ func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
 	return g.registry.GetEnum(elem)
 }
 
-// elemTypeInfo inspects a slice or map type and returns the element's Go kind
-// (e.g., "string", "int", "struct") and TS type name (for named structs only).
-// Returns ("", "") for non-slice/map types or for elements that aren't usefully
-// describable for Zod codegen (e.g., interfaces, anonymous structs, slices of
-// slices). The TS type name is only set when the element is a named struct type
-// — primitive elements have an empty type name and rely on the kind alone.
+// elemTypeInfo inspects a slice, map, or fixed-size array type and returns the
+// element's Go kind (e.g., "string", "int", "struct") and TS type name (for
+// named structs only). Returns ("", "") for other types or for elements that
+// aren't usefully describable for Zod codegen (e.g., interfaces, anonymous
+// structs, slices of slices). The TS type name is only set when the element is
+// a named struct type — primitive elements have an empty type name and rely on
+// the kind alone.
 //
 // Used by Zod codegen to substitute element schemas into z.array(...) /
-// z.record(...) instead of falling through to z.any().
+// z.record(...) / z.tuple([...]) instead of falling through to z.any().
 func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
-	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map {
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map && t.Kind() != reflect.Array {
 		return "", ""
 	}
 	elem := t.Elem()
@@ -1603,10 +1627,10 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 		return "", ""
 	}
 	// Primitive elements (string, int, etc.) — return the kind, no name.
-	// Slices of slices and slices of maps are punted to z.any(): the
-	// recursive case requires a structured nested fieldData and is out of
-	// scope for the initial fix.
-	if kind == "slice" || kind == "map" {
+	// Slices of slices, slices of maps, and nested fixed-size arrays are
+	// punted to z.any(): the recursive case requires a structured nested
+	// fieldData and is out of scope for the initial fix.
+	if kind == "slice" || kind == "map" || kind == "array" {
 		return "", ""
 	}
 	return kind, ""
@@ -1627,6 +1651,37 @@ func isUnnamedByteSlice(t reflect.Type) bool {
 // applies to every []byte / `type Foo []byte` regardless of naming.
 func isByteSlice(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8
+}
+
+// isByteArray reports whether t is a fixed-size byte array ([N]byte, named or
+// not). go-json-experiment/json v2 encodes byte arrays as base64 strings by
+// default — unlike named byte slices, which encode as number arrays — so
+// TS/Zod/OpenAPI codegen must emit a string shape (#240).
+func isByteArray(t reflect.Type) bool {
+	return t.Kind() == reflect.Array && t.Elem().Kind() == reflect.Uint8
+}
+
+// maxTSTupleLen is the largest fixed-size Go array rendered as a TS tuple
+// ([T, T, ...]). Longer arrays fall back to the plain T[] form — the length
+// is still statically known, but a 100-element tuple type hurts more than it
+// helps (#240).
+const maxTSTupleLen = 16
+
+// tsTupleOrArray renders the TS type for a [N]T array whose element renders
+// as elemTS: a tuple [T, T, ...] when N is at most maxTSTupleLen, otherwise
+// T[].
+func tsTupleOrArray(elemTS string, n int) string {
+	if n > maxTSTupleLen {
+		if strings.Contains(elemTS, " | ") {
+			return "(" + elemTS + ")[]"
+		}
+		return elemTS + "[]"
+	}
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = elemTS
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 // jsonFormatOption parses the `format:X` option from a go-json-experiment
@@ -1685,6 +1740,8 @@ func goKindString(t reflect.Type) string {
 		return "bool"
 	case reflect.Slice:
 		return "slice"
+	case reflect.Array:
+		return "array"
 	case reflect.Map:
 		return "map"
 	case reflect.Struct:
@@ -1754,6 +1811,11 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 			return "(" + elemType + ")[]"
 		}
 		return elemType + "[]"
+	case reflect.Array:
+		if isByteArray(t) {
+			return "string"
+		}
+		return tsTupleOrArray(g.goTypeToTS(t.Elem()), t.Len())
 	case reflect.Map:
 		valType := g.goTypeToTS(t.Elem())
 		// boolean is not a valid TypeScript index signature, so Record<boolean,

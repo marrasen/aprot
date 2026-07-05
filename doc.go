@@ -731,6 +731,9 @@
 //   - int, float64, etc. → number
 //   - bool → boolean
 //   - []T → T[]
+//   - [N]T → tuple [T, T, ...] for N ≤ 16, T[] above that ([N]byte → string,
+//     base64-encoded on the wire like []byte; Zod schemas emit z.tuple([...])
+//     / z.array(...).length(N) to match)
 //   - map[K]V → Record<K, V> (map[bool]V → Partial<Record<"true" | "false", V>>)
 //   - *T (json:,omitempty) → T (optional field); bare *T → T | null (always sent)
 //   - time.Time → string (RFC 3339)

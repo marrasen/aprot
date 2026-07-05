@@ -495,6 +495,7 @@ Zod schemas mirror these as `T.nullable()`.
 
 Other type-mapping notes:
 - Bare pointer `*T` (no `json:,omitempty`) → `T | null` (always sent; null when nil). `*T` with `omitempty` stays optional `?: T`.
+- Fixed-size array `[N]T` → TS tuple `[T, T, ...]` for `N ≤ 16`, plain `T[]` above that. `[N]byte` (named or not) → `string` (base64 on the wire, like `[]byte`); a `json:",format:array"` tag forces the number-array shape and keeps the tuple. Zod schemas emit `z.tuple([...])` (or `z.array(...).length(N)` above the cap); OpenAPI emits `minItems`/`maxItems`.
 - `map[bool]V` → `Partial<Record<"true" | "false", V>>` (boolean isn't a valid TS index type).
 - `json.RawMessage` → `unknown`.
 - `time.Duration` has no default JSON representation in the v2 encoder and is **rejected at generation time** — add a json format option (e.g. `json:"d,format:nano"`) or use a different type.
