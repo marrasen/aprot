@@ -10,6 +10,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-07-06
+
+### Fixed
+
+- Live task progress in the generated React `useSharedTasks` hook: the hook
+  only folded in full `TaskStateEvent` snapshots, which the server broadcasts
+  only at task lifecycle boundaries (create/finish), so the per-node
+  `TaskUpdateEvent` progress ticks emitted during execution were dropped and
+  progress bars showed an initial `0/N` then vanished. The hook now also
+  subscribes to `TaskUpdateEvent` and folds `current`/`total` into the task
+  list — recursing through nested subtasks — so consumers see live progress
+  between snapshots (#246).
+
 ## [0.47.0] - 2026-07-05
 
 ### Added
@@ -191,7 +204,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.47.1...HEAD
+[0.47.1]: https://github.com/marrasen/aprot/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/marrasen/aprot/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/marrasen/aprot/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/marrasen/aprot/compare/v0.44.0...v0.45.0
