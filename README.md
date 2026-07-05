@@ -136,6 +136,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
 - **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
 - **Streaming handlers** — return `iter.Seq[T]` / `iter.Seq2[K, V]` from Go and the generated client exposes `AsyncIterable<T>`, so UIs can populate lists item-by-item as results arrive
+- **Binary Blob responses** — return `aprot.Blob` from a handler and the client receives a DOM `Blob`; delivered as a raw WebSocket binary frame (no base64 overhead), with an automatic JSON fallback on SSE and stream transports
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
 - **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
 - **Middleware** — server-level and per-handler middleware chains
@@ -611,6 +612,31 @@ The `err` passed to the hook distinguishes every termination path:
 Use `errors.Is(err, aprot.ErrClientCanceled)` etc. to distinguish. The hook also receives `items int` — the number of elements successfully yielded to the client (for `iter.Seq2`, each `(key, value)` pair counts as one).
 
 `OnStreamComplete` is a no-op on a unary handler's context — the hooks slot is only populated when the dispatcher sees a streaming return type. Middleware that calls it on every request (as in the example above) works uniformly across both.
+
+## Binary Blob Responses
+
+Return `aprot.Blob` (or `*aprot.Blob`) from a handler to deliver raw binary data — images, PDFs, file downloads — without base64 inflation:
+
+```go
+func (h *FileHandlers) GetAvatar(ctx context.Context, userID string) (aprot.Blob, error) {
+    data, err := h.store.Avatar(userID)
+    if err != nil {
+        return aprot.Blob{}, err
+    }
+    return aprot.Blob{ContentType: "image/png", Data: data}, nil
+}
+```
+
+The generated client method is typed `Promise<Blob>` and resolves a DOM `Blob`:
+
+```typescript
+const avatar = await getAvatar(client, userId);
+imgEl.src = URL.createObjectURL(avatar); // avatar.type === 'image/png'
+```
+
+Over WebSocket the payload travels as a binary frame (a 4-byte header length, a small JSON header, then the raw bytes). Transports without binary frames (SSE, byte-stream) fall back to a JSON envelope carrying base64 data, which the client converts back into a `Blob` automatically — the resolved type never depends on the transport. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) deliver `Blob`s the same way.
+
+Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
 
 ## Validation
 

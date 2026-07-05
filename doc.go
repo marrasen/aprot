@@ -72,6 +72,29 @@
 // one frame per item. Batching is transparent to the generated client's
 // AsyncIterable but requires a client generated from the same aprot version.
 //
+// # Binary Blob Responses
+//
+// Returning [Blob] (or *Blob) from a unary handler opts the result into
+// binary delivery:
+//
+//	func (h *FileHandlers) GetAvatar(ctx context.Context, userID string) (aprot.Blob, error) {
+//	    return aprot.Blob{ContentType: "image/png", Data: pngBytes}, nil
+//	}
+//
+// The generated client method is typed Promise<Blob> and resolves a DOM Blob.
+// Over WebSocket the payload is sent as a binary frame (4-byte big-endian
+// header length, JSON header, raw payload — no base64 inflation). Transports
+// without binary frames (SSE, byte-stream) fall back to a JSON envelope whose
+// result is {"$blob": {contentType, data}} with base64 data; the generated
+// client converts it back into a DOM Blob, so the resolved type is identical
+// on every transport. Server-driven subscription refreshes deliver Blobs the
+// same way.
+//
+// Only the explicit Blob type opts in, and only as a top-level result: a
+// plain []byte result keeps its base64 string encoding, and a Blob nested in
+// another struct, streamed as an item, or used as a parameter travels as
+// ordinary JSON ({contentType?, data}).
+//
 // # Input Transformation
 //
 // Request struct fields can be normalized before handler dispatch using
@@ -748,6 +771,9 @@
 //     int, int64, int32, int16, float64, bool, time.Time); other
 //     instantiations fall back to the {"V":…,"Valid":…} object shape.
 //   - json.RawMessage → unknown
+//   - Blob as a top-level result → DOM Blob (binary delivery; see Binary
+//     Blob Responses); nested/streamed Blob → { contentType?: string;
+//     data: string }
 //   - struct → interface
 //   - Registered enum → const object + union type
 //

@@ -296,14 +296,13 @@ func (m *mockTransport) SendCtx(ctx context.Context, data []byte) error {
 	}
 	return m.Send(data)
 }
+func (m *mockTransport) SupportsBinary() bool { return true }
 func (m *mockTransport) SendBinary(data []byte) error {
 	return m.Send(data)
 }
 func (m *mockTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return m.SendBinary(data)
 }

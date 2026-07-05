@@ -307,6 +307,7 @@ func (f *failAfterN) Send(data []byte) error {
 	return nil
 }
 func (f *failAfterN) SendCtx(ctx context.Context, data []byte) error { return f.Send(data) }
+func (f *failAfterN) SupportsBinary() bool                           { return true }
 func (f *failAfterN) SendBinary(data []byte) error                   { return f.Send(data) }
 func (f *failAfterN) SendBinaryCtx(ctx context.Context, data []byte) error {
 	return f.SendBinary(data)

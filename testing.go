@@ -36,15 +36,15 @@ func (t *recordingTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
+func (t *recordingTransport) SupportsBinary() bool { return true }
+
 func (t *recordingTransport) SendBinary(data []byte) error {
 	return t.Send(data)
 }
 
 func (t *recordingTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return t.SendBinary(data)
 }

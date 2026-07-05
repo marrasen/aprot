@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 	"net"
 	"os"
 	"time"
@@ -53,6 +55,8 @@ func (t *wsTransport) Send(data []byte) error {
 func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
 }
+
+func (t *wsTransport) SupportsBinary() bool { return true }
 
 func (t *wsTransport) SendBinary(data []byte) error {
 	return t.sendFrame(context.Background(), outboundFrame{messageType: websocket.BinaryMessage, data: data})
@@ -182,8 +186,12 @@ func encodeBinaryFrame(header binaryFrameHeader, payload []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
+	headerLen := uint64(len(headerData))
+	if headerLen > math.MaxUint32 {
+		return nil, fmt.Errorf("binary frame header too large: %d bytes", len(headerData))
+	}
 	frame := make([]byte, 4+len(headerData)+len(payload))
-	binary.BigEndian.PutUint32(frame[:4], uint32(len(headerData)))
+	binary.BigEndian.PutUint32(frame[:4], uint32(headerLen))
 	copy(frame[4:], headerData)
 	copy(frame[4+len(headerData):], payload)
 	return frame, nil

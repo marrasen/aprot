@@ -11,6 +11,7 @@ import (
 
 // sseTransport wraps an http.ResponseWriter for SSE output.
 type sseTransport struct {
+	noBinary
 	w       http.ResponseWriter
 	flusher http.Flusher
 	mu      sync.Mutex
@@ -33,17 +34,6 @@ func (t *sseTransport) SendCtx(ctx context.Context, data []byte) error {
 		}
 	}
 	return t.Send(data)
-}
-
-func (t *sseTransport) SendBinary(data []byte) error {
-	return ErrBinaryUnsupported
-}
-
-func (t *sseTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrBinaryUnsupported
 }
 
 func (t *sseTransport) Send(data []byte) error {

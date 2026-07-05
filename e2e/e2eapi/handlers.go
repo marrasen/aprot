@@ -8,6 +8,7 @@ package e2eapi
 import (
 	"context"
 	"database/sql"
+	"sync"
 
 	"github.com/marrasen/aprot"
 )
@@ -78,6 +79,42 @@ func (h *FixedArrayHandlers) EchoArrays(ctx context.Context, req *FixedArrayPayl
 	return req, nil
 }
 
+// BlobHandlers exercises binary Blob responses (#238). A top-level Blob
+// result crosses the wire as a WebSocket binary frame, or as the $blob JSON
+// fallback on transports without binary frames (SSE); generated clients must
+// resolve a DOM Blob either way — including for subscription refreshes.
+type BlobHandlers struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+// NewBlobHandlers seeds a payload with non-UTF-8 bytes so the tests catch
+// any encoding corruption on either the binary or the base64 fallback path.
+func NewBlobHandlers() *BlobHandlers {
+	return &BlobHandlers{data: []byte{0x00, 0x01, 0xfe, 0xff, 'v', '1'}}
+}
+
+// GetBlob returns the current payload and subscribes callers to SetBlob
+// refreshes via the "blob" trigger key.
+func (h *BlobHandlers) GetBlob(ctx context.Context) (aprot.Blob, error) {
+	aprot.RegisterRefreshTrigger(ctx, "blob")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return aprot.Blob{
+		ContentType: "application/x-e2e",
+		Data:        append([]byte(nil), h.data...),
+	}, nil
+}
+
+// SetBlob replaces the payload and refreshes every GetBlob subscriber.
+func (h *BlobHandlers) SetBlob(ctx context.Context, data string) error {
+	h.mu.Lock()
+	h.data = []byte(data)
+	h.mu.Unlock()
+	aprot.TriggerRefresh(ctx, "blob")
+	return nil
+}
+
 // Register wires the e2e-only REST and validation handlers onto an existing
 // registry and turns on request validation. Existing handlers without validate
 // tags are unaffected (validation is a no-op for them).
@@ -85,5 +122,6 @@ func Register(registry *aprot.Registry) {
 	registry.RegisterREST(&EchoHandlers{})
 	registry.Register(&SignupHandlers{})
 	registry.Register(&FixedArrayHandlers{})
+	registry.Register(NewBlobHandlers())
 	registry.SetValidator(aprot.NewPlaygroundValidator())
 }

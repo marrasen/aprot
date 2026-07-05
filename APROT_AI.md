@@ -113,6 +113,14 @@ Streaming handlers cannot be exposed via REST (panics at registration). For SSE/
 
 **Chunked delivery (#239):** by default each yielded item is one wire frame. `aprot.ServerOptions{StreamChunking: &aprot.StreamChunking{MaxItems: 128, MaxBytes: 64 << 10, MaxDelay: 20 * time.Millisecond}}` batches consecutive items into `stream_chunk` frames — flushed when *any* threshold is hit; `MaxDelay` bounds added latency for slow producers. `&aprot.StreamChunking{}` = all defaults; nil = disabled (per-item frames). Transparent to the generated `AsyncIterable`, but requires a client generated from the same aprot version (older clients don't know `stream_chunk`). Server-wide, applies to all streaming handlers.
 
+### Binary Blob responses (#238)
+```go
+func (h *H) GetAvatar(ctx context.Context, userID string) (aprot.Blob, error) {
+    return aprot.Blob{ContentType: "image/png", Data: pngBytes}, nil
+}
+```
+Return `aprot.Blob` / `*aprot.Blob` as the **top-level result** and the generated method is typed `Promise<Blob>`, resolving a DOM `Blob` on every transport: WS sends a raw binary frame (no base64); SSE/stream fall back to a `{"$blob": {contentType, data}}` JSON envelope that the client converts back automatically. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) also deliver `Blob`s. Opt-in only: a plain `[]byte` result stays a base64 string, and a `Blob` nested in a struct, streamed, or used as a param travels as JSON `{ contentType?: string; data: string }`. Do not name your own generated type `Blob` — the DOM type is used verbatim.
+
 ## Input Transformation
 
 `transform:"…"` ops run after JSON decoding, before validation. Statically checked at `Register` time.

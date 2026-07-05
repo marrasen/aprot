@@ -111,6 +111,4 @@ var (
 	ErrConnectionClosed = &CancelReason{"connection closed"}
 	// ErrServerShutdown indicates the server is shutting down.
 	ErrServerShutdown = &CancelReason{"server shutdown"}
-	// ErrBinaryUnsupported indicates the transport cannot send binary frames.
-	ErrBinaryUnsupported = fmt.Errorf("binary frames unsupported")
 )
