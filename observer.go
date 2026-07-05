@@ -46,6 +46,13 @@ type Observer interface {
 	// large fan-out for a single trigger is an amplification signal.
 	RefreshFanout(key string, matched int)
 
+	// PatchFanout fires once per [Server.PatchSubscription] call, reporting how
+	// many matching subscriptions received the patch frame and how many fell
+	// back to a full refresh (clients without patch support). A persistently
+	// non-zero refreshed count means some clients were generated before patch
+	// support and still pay full-result amplification.
+	PatchFanout(key string, patched, refreshed int)
+
 	// SendBufferFull fires when a connection's outbound WebSocket buffer is full
 	// at enqueue time — an early backpressure / slow-consumer signal and the
 	// precursor to a stalled-client write timeout. The frame is not dropped: the
@@ -96,5 +103,6 @@ func (NoopObserver) RequestCompleted(RequestEvent)                  {}
 func (NoopObserver) SubscriptionRegistered(*Conn, string, string)   {}
 func (NoopObserver) SubscriptionUnregistered(*Conn, string, string) {}
 func (NoopObserver) RefreshFanout(string, int)                      {}
+func (NoopObserver) PatchFanout(string, int, int)                   {}
 func (NoopObserver) SendBufferFull(*Conn)                           {}
 func (NoopObserver) WriteTimedOut(*Conn)                            {}

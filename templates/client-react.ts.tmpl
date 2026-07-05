@@ -678,7 +678,7 @@ export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{e
 {{- end}}
 }
 {{- else if not (hasParams .Params)}}
-export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
+export function {{.HookName}}(options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),
         [],
@@ -686,7 +686,7 @@ export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.Resp
     return useQuery(wrappedFn, options);
 }
 {{- else}}
-export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
+export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal }),
         [],

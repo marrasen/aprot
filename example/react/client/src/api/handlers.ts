@@ -103,8 +103,8 @@ export function createUser(client: ApiClient, name: string, email: string, optio
 // (unaffected by minification, unlike Function.name).
 createUser.method = 'Handlers.CreateUser' as const;
 
-export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<CreateUserResponse>('Handlers.CreateUser', [name, email], callback, onError);
+export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<CreateUserResponse>('Handlers.CreateUser', [name, email], callback, onError, options);
 }
 
 
@@ -116,8 +116,8 @@ export function getDashboard(client: ApiClient, options?: RequestOptions): Promi
 // (unaffected by minification, unlike Function.name).
 getDashboard.method = 'Handlers.GetDashboard' as const;
 
-export function subscribeGetDashboard(client: ApiClient, callback: (data: GetDashboardResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetDashboardResponse>('Handlers.GetDashboard', [], callback, onError);
+export function subscribeGetDashboard(client: ApiClient, callback: (data: GetDashboardResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetDashboardResponse>('Handlers.GetDashboard', [], callback, onError, options);
 }
 
 
@@ -129,8 +129,8 @@ export function getTask(client: ApiClient, id: string, options?: RequestOptions)
 // (unaffected by minification, unlike Function.name).
 getTask.method = 'Handlers.GetTask' as const;
 
-export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetTaskResponse>('Handlers.GetTask', [id], callback, onError);
+export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetTaskResponse>('Handlers.GetTask', [id], callback, onError, options);
 }
 
 
@@ -142,8 +142,8 @@ export function getUser(client: ApiClient, id: string, options?: RequestOptions)
 // (unaffected by minification, unlike Function.name).
 getUser.method = 'Handlers.GetUser' as const;
 
-export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetUserResponse>('Handlers.GetUser', [id], callback, onError);
+export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetUserResponse>('Handlers.GetUser', [id], callback, onError, options);
 }
 
 
@@ -155,8 +155,8 @@ export function listUsers(client: ApiClient, options?: RequestOptions): Promise<
 // (unaffected by minification, unlike Function.name).
 listUsers.method = 'Handlers.ListUsers' as const;
 
-export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ListUsersResponse>('Handlers.ListUsers', [], callback, onError);
+export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ListUsersResponse>('Handlers.ListUsers', [], callback, onError, options);
 }
 
 
@@ -168,8 +168,8 @@ export function processBatch(client: ApiClient, items: string[], delay: number, 
 // (unaffected by minification, unlike Function.name).
 processBatch.method = 'Handlers.ProcessBatch' as const;
 
-export function subscribeProcessBatch(client: ApiClient, items: string[], delay: number, callback: (data: ProcessBatchResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], callback, onError);
+export function subscribeProcessBatch(client: ApiClient, items: string[], delay: number, callback: (data: ProcessBatchResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ProcessBatchResponse>('Handlers.ProcessBatch', [items, delay], callback, onError, options);
 }
 
 
@@ -181,8 +181,8 @@ export function sendNotification(client: ApiClient, message: string, level: stri
 // (unaffected by minification, unlike Function.name).
 sendNotification.method = 'Handlers.SendNotification' as const;
 
-export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<SystemNotificationEvent>('Handlers.SendNotification', [message, level], callback, onError);
+export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<SystemNotificationEvent>('Handlers.SendNotification', [message, level], callback, onError, options);
 }
 
 
@@ -194,8 +194,8 @@ export function startSharedWork(client: ApiClient, title: string, steps: string[
 // (unaffected by minification, unlike Function.name).
 startSharedWork.method = 'Handlers.StartSharedWork' as const;
 
-export function subscribeStartSharedWork(client: ApiClient, title: string, steps: string[], delay: number, callback: (data: StartSharedWorkResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<StartSharedWorkResponse>('Handlers.StartSharedWork', [title, steps, delay], callback, onError);
+export function subscribeStartSharedWork(client: ApiClient, title: string, steps: string[], delay: number, callback: (data: StartSharedWorkResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<StartSharedWorkResponse>('Handlers.StartSharedWork', [title, steps, delay], callback, onError, options);
 }
 
 export function onUserCreatedEvent(client: ApiClient, handler: PushHandler<UserCreatedEvent>): () => void {
@@ -219,7 +219,7 @@ export function onSystemNotificationEvent(client: ApiClient, handler: PushHandle
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useCreateUser(name: string, email: string, options?: UseQueryOptions): UseQueryResult<CreateUserResponse> {
+export function useCreateUser(name: string, email: string, options?: UseQueryOptions<CreateUserResponse>): UseQueryResult<CreateUserResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, name: string, email: string) => createUser(client, name, email, { signal }),
         [],
@@ -233,7 +233,7 @@ export function useCreateUser(name: string, email: string, options?: UseQueryOpt
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useGetDashboard(options?: UseQueryOptions): UseQueryResult<GetDashboardResponse> {
+export function useGetDashboard(options?: UseQueryOptions<GetDashboardResponse>): UseQueryResult<GetDashboardResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => getDashboard(client, { signal }),
         [],
@@ -248,7 +248,7 @@ export function useGetDashboard(options?: UseQueryOptions): UseQueryResult<GetDa
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useGetTask(id: string, options?: UseQueryOptions): UseQueryResult<GetTaskResponse> {
+export function useGetTask(id: string, options?: UseQueryOptions<GetTaskResponse>): UseQueryResult<GetTaskResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, id: string) => getTask(client, id, { signal }),
         [],
@@ -263,7 +263,7 @@ export function useGetTask(id: string, options?: UseQueryOptions): UseQueryResul
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useGetUser(id: string, options?: UseQueryOptions): UseQueryResult<GetUserResponse> {
+export function useGetUser(id: string, options?: UseQueryOptions<GetUserResponse>): UseQueryResult<GetUserResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, id: string) => getUser(client, id, { signal }),
         [],
@@ -277,7 +277,7 @@ export function useGetUser(id: string, options?: UseQueryOptions): UseQueryResul
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useListUsers(options?: UseQueryOptions): UseQueryResult<ListUsersResponse> {
+export function useListUsers(options?: UseQueryOptions<ListUsersResponse>): UseQueryResult<ListUsersResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => listUsers(client, { signal }),
         [],
@@ -292,7 +292,7 @@ export function useListUsers(options?: UseQueryOptions): UseQueryResult<ListUser
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useProcessBatch(items: string[], delay: number, options?: UseQueryOptions): UseQueryResult<ProcessBatchResponse> {
+export function useProcessBatch(items: string[], delay: number, options?: UseQueryOptions<ProcessBatchResponse>): UseQueryResult<ProcessBatchResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, items: string[], delay: number) => processBatch(client, items, delay, { signal }),
         [],
@@ -307,7 +307,7 @@ export function useProcessBatch(items: string[], delay: number, options?: UseQue
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useSendNotification(message: string, level: string, options?: UseQueryOptions): UseQueryResult<SystemNotificationEvent> {
+export function useSendNotification(message: string, level: string, options?: UseQueryOptions<SystemNotificationEvent>): UseQueryResult<SystemNotificationEvent> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, message: string, level: string) => sendNotification(client, message, level, { signal }),
         [],
@@ -322,7 +322,7 @@ export function useSendNotification(message: string, level: string, options?: Us
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useStartSharedWork(title: string, steps: string[], delay: number, options?: UseQueryOptions): UseQueryResult<StartSharedWorkResponse> {
+export function useStartSharedWork(title: string, steps: string[], delay: number, options?: UseQueryOptions<StartSharedWorkResponse>): UseQueryResult<StartSharedWorkResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, title: string, steps: string[], delay: number) => startSharedWork(client, title, steps, delay, { signal }),
         [],

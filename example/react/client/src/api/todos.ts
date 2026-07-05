@@ -43,8 +43,8 @@ export function createTodo(client: ApiClient, req: CreateTodoRequest, options?: 
 // (unaffected by minification, unlike Function.name).
 createTodo.method = 'Todos.CreateTodo' as const;
 
-export function subscribeCreateTodo(client: ApiClient, req: CreateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<Todo>('Todos.CreateTodo', [req], callback, onError);
+export function subscribeCreateTodo(client: ApiClient, req: CreateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<Todo>('Todos.CreateTodo', [req], callback, onError, options);
 }
 
 
@@ -56,8 +56,8 @@ export function deleteTodo(client: ApiClient, id: string, options?: RequestOptio
 // (unaffected by minification, unlike Function.name).
 deleteTodo.method = 'Todos.DeleteTodo' as const;
 
-export function subscribeDeleteTodo(client: ApiClient, id: string, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<void>('Todos.DeleteTodo', [id], callback, onError);
+export function subscribeDeleteTodo(client: ApiClient, id: string, callback: (data: void) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<void>('Todos.DeleteTodo', [id], callback, onError, options);
 }
 
 
@@ -69,8 +69,8 @@ export function getTodo(client: ApiClient, id: string, options?: RequestOptions)
 // (unaffected by minification, unlike Function.name).
 getTodo.method = 'Todos.GetTodo' as const;
 
-export function subscribeGetTodo(client: ApiClient, id: string, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<Todo>('Todos.GetTodo', [id], callback, onError);
+export function subscribeGetTodo(client: ApiClient, id: string, callback: (data: Todo) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<Todo>('Todos.GetTodo', [id], callback, onError, options);
 }
 
 
@@ -82,8 +82,8 @@ export function listTodos(client: ApiClient, options?: RequestOptions): Promise<
 // (unaffected by minification, unlike Function.name).
 listTodos.method = 'Todos.ListTodos' as const;
 
-export function subscribeListTodos(client: ApiClient, callback: (data: ListTodosResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ListTodosResponse>('Todos.ListTodos', [], callback, onError);
+export function subscribeListTodos(client: ApiClient, callback: (data: ListTodosResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ListTodosResponse>('Todos.ListTodos', [], callback, onError, options);
 }
 
 
@@ -95,8 +95,8 @@ export function updateTodo(client: ApiClient, id: string, req: UpdateTodoRequest
 // (unaffected by minification, unlike Function.name).
 updateTodo.method = 'Todos.UpdateTodo' as const;
 
-export function subscribeUpdateTodo(client: ApiClient, id: string, req: UpdateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<Todo>('Todos.UpdateTodo', [id, req], callback, onError);
+export function subscribeUpdateTodo(client: ApiClient, id: string, req: UpdateTodoRequest, callback: (data: Todo) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<Todo>('Todos.UpdateTodo', [id, req], callback, onError, options);
 }
 
 // React Hooks for Todos
@@ -108,7 +108,7 @@ export function subscribeUpdateTodo(client: ApiClient, id: string, req: UpdateTo
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useCreateTodo(req: CreateTodoRequest, options?: UseQueryOptions): UseQueryResult<Todo> {
+export function useCreateTodo(req: CreateTodoRequest, options?: UseQueryOptions<Todo>): UseQueryResult<Todo> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, req: CreateTodoRequest) => createTodo(client, req, { signal }),
         [],
@@ -123,7 +123,7 @@ export function useCreateTodo(req: CreateTodoRequest, options?: UseQueryOptions)
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useDeleteTodo(id: string, options?: UseQueryOptions): UseQueryResult<void> {
+export function useDeleteTodo(id: string, options?: UseQueryOptions<void>): UseQueryResult<void> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, id: string) => deleteTodo(client, id, { signal }),
         [],
@@ -138,7 +138,7 @@ export function useDeleteTodo(id: string, options?: UseQueryOptions): UseQueryRe
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useGetTodo(id: string, options?: UseQueryOptions): UseQueryResult<Todo> {
+export function useGetTodo(id: string, options?: UseQueryOptions<Todo>): UseQueryResult<Todo> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, id: string) => getTodo(client, id, { signal }),
         [],
@@ -152,7 +152,7 @@ export function useGetTodo(id: string, options?: UseQueryOptions): UseQueryResul
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useListTodos(options?: UseQueryOptions): UseQueryResult<ListTodosResponse> {
+export function useListTodos(options?: UseQueryOptions<ListTodosResponse>): UseQueryResult<ListTodosResponse> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => listTodos(client, { signal }),
         [],
@@ -167,7 +167,7 @@ export function useListTodos(options?: UseQueryOptions): UseQueryResult<ListTodo
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useUpdateTodo(id: string, req: UpdateTodoRequest, options?: UseQueryOptions): UseQueryResult<Todo> {
+export function useUpdateTodo(id: string, req: UpdateTodoRequest, options?: UseQueryOptions<Todo>): UseQueryResult<Todo> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, id: string, req: UpdateTodoRequest) => updateTodo(client, id, req, { signal }),
         [],

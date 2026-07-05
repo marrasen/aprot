@@ -80,8 +80,8 @@ export function cancelTask(client: ApiClient, taskId: string, options?: RequestO
 // (unaffected by minification, unlike Function.name).
 cancelTask.method = 'tasksHandler.CancelTask' as const;
 
-export function subscribeCancelTask(client: ApiClient, taskId: string, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError);
+export function subscribeCancelTask(client: ApiClient, taskId: string, callback: (data: void) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError, options);
 }
 
 export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {
@@ -113,7 +113,7 @@ export function onRequestTaskProgressEvent(client: ApiClient, handler: PushHandl
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function useCancelTask(taskId: string, options?: UseQueryOptions): UseQueryResult<void> {
+export function useCancelTask(taskId: string, options?: UseQueryOptions<void>): UseQueryResult<void> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, taskId: string) => cancelTask(client, taskId, { signal }),
         [],

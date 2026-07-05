@@ -77,8 +77,8 @@ export function createUser(client: ApiClient, name: string, email: string, optio
     return client.request<CreateUserResponse>('PublicHandlers.CreateUser', [name, email], options);
 }
 
-export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<CreateUserResponse>('PublicHandlers.CreateUser', [name, email], callback, onError);
+export function subscribeCreateUser(client: ApiClient, name: string, email: string, callback: (data: CreateUserResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<CreateUserResponse>('PublicHandlers.CreateUser', [name, email], callback, onError, options);
 }
 
 
@@ -86,8 +86,8 @@ export function getTask(client: ApiClient, id: string, options?: RequestOptions)
     return client.request<GetTaskResponse>('PublicHandlers.GetTask', [id], options);
 }
 
-export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetTaskResponse>('PublicHandlers.GetTask', [id], callback, onError);
+export function subscribeGetTask(client: ApiClient, id: string, callback: (data: GetTaskResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetTaskResponse>('PublicHandlers.GetTask', [id], callback, onError, options);
 }
 
 
@@ -95,8 +95,8 @@ export function getUser(client: ApiClient, id: string, options?: RequestOptions)
     return client.request<GetUserResponse>('PublicHandlers.GetUser', [id], options);
 }
 
-export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetUserResponse>('PublicHandlers.GetUser', [id], callback, onError);
+export function subscribeGetUser(client: ApiClient, id: string, callback: (data: GetUserResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetUserResponse>('PublicHandlers.GetUser', [id], callback, onError, options);
 }
 
 
@@ -104,8 +104,8 @@ export function listUsers(client: ApiClient, options?: RequestOptions): Promise<
     return client.request<ListUsersResponse>('PublicHandlers.ListUsers', [], options);
 }
 
-export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ListUsersResponse>('PublicHandlers.ListUsers', [], callback, onError);
+export function subscribeListUsers(client: ApiClient, callback: (data: ListUsersResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ListUsersResponse>('PublicHandlers.ListUsers', [], callback, onError, options);
 }
 
 
@@ -113,8 +113,8 @@ export function login(client: ApiClient, username: string, password: string, opt
     return client.request<LoginResponse>('PublicHandlers.Login', [username, password], options);
 }
 
-export function subscribeLogin(client: ApiClient, username: string, password: string, callback: (data: LoginResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<LoginResponse>('PublicHandlers.Login', [username, password], callback, onError);
+export function subscribeLogin(client: ApiClient, username: string, password: string, callback: (data: LoginResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<LoginResponse>('PublicHandlers.Login', [username, password], callback, onError, options);
 }
 
 
@@ -122,8 +122,8 @@ export function processBatch(client: ApiClient, items: string[], delay: number, 
     return client.request<ProcessBatchResponse>('PublicHandlers.ProcessBatch', [items, delay], options);
 }
 
-export function subscribeProcessBatch(client: ApiClient, items: string[], delay: number, callback: (data: ProcessBatchResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ProcessBatchResponse>('PublicHandlers.ProcessBatch', [items, delay], callback, onError);
+export function subscribeProcessBatch(client: ApiClient, items: string[], delay: number, callback: (data: ProcessBatchResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ProcessBatchResponse>('PublicHandlers.ProcessBatch', [items, delay], callback, onError, options);
 }
 
 
@@ -131,8 +131,8 @@ export function processWithSubTasks(client: ApiClient, steps: string[], delay: n
     return client.request<ProcessWithSubTasksResponse>('PublicHandlers.ProcessWithSubTasks', [steps, delay], options);
 }
 
-export function subscribeProcessWithSubTasks(client: ApiClient, steps: string[], delay: number, callback: (data: ProcessWithSubTasksResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<ProcessWithSubTasksResponse>('PublicHandlers.ProcessWithSubTasks', [steps, delay], callback, onError);
+export function subscribeProcessWithSubTasks(client: ApiClient, steps: string[], delay: number, callback: (data: ProcessWithSubTasksResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<ProcessWithSubTasksResponse>('PublicHandlers.ProcessWithSubTasks', [steps, delay], callback, onError, options);
 }
 
 
@@ -140,8 +140,8 @@ export function sendNotification(client: ApiClient, message: string, level: stri
     return client.request<SystemNotificationEvent>('PublicHandlers.SendNotification', [message, level], options);
 }
 
-export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<SystemNotificationEvent>('PublicHandlers.SendNotification', [message, level], callback, onError);
+export function subscribeSendNotification(client: ApiClient, message: string, level: string, callback: (data: SystemNotificationEvent) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<SystemNotificationEvent>('PublicHandlers.SendNotification', [message, level], callback, onError, options);
 }
 
 
@@ -149,8 +149,8 @@ export function startSharedWork(client: ApiClient, title: string, steps: string[
     return client.request<void>('PublicHandlers.StartSharedWork', [title, steps, delay], options);
 }
 
-export function subscribeStartSharedWork(client: ApiClient, title: string, steps: string[], delay: number, callback: (data: void) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<void>('PublicHandlers.StartSharedWork', [title, steps, delay], callback, onError);
+export function subscribeStartSharedWork(client: ApiClient, title: string, steps: string[], delay: number, callback: (data: void) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<void>('PublicHandlers.StartSharedWork', [title, steps, delay], callback, onError, options);
 }
 
 export function onUserCreatedEvent(client: ApiClient, handler: PushHandler<UserCreatedEvent>): () => void {

@@ -21,6 +21,10 @@ type subscription struct {
 	method string              // handler method name
 	keys   map[string]struct{} // trigger keys this subscription depends on
 	params jsontext.Value      // raw JSON params for server-driven re-execution
+	// wantsPatch records that the client declared patch support for this
+	// subscription; PatchSubscription sends subscription_patch frames to
+	// these and falls back to a full refresh for the rest.
+	wantsPatch bool
 }
 
 // subscriptionManager tracks all active subscriptions across connections.
@@ -203,16 +207,18 @@ func (sm *subscriptionManager) updateKeys(connID uint64, subID string, newKeys m
 	}
 }
 
-// updateParams replaces the stored raw params for a subscription. Called when
-// a client re-subscribes with the same ID but different params, so that
-// server-driven re-execution uses the latest params rather than stale ones.
-func (sm *subscriptionManager) updateParams(connID uint64, subID string, params jsontext.Value) {
+// updateParams replaces the stored raw params and patch support for a
+// subscription. Called when a client re-subscribes with the same ID but
+// different params, so that server-driven re-execution uses the latest params
+// rather than stale ones (and the latest patch-support declaration).
+func (sm *subscriptionManager) updateParams(connID uint64, subID string, params jsontext.Value, wantsPatch bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if connSubs, ok := sm.byConn[connID]; ok {
 		if sub, ok := connSubs[subID]; ok {
 			sub.params = params
+			sub.wantsPatch = wantsPatch
 		}
 	}
 }
@@ -382,6 +388,91 @@ func TriggerRefreshNow(ctx context.Context, keys ...string) {
 	if server != nil {
 		server.processRefreshQueue(rq)
 	}
+}
+
+// PatchSubscription pushes a partial update to every subscription matching
+// the given trigger keys, without re-running the subscribed query. Call it
+// from mutation handlers whose effect on a large subscribed result is small —
+// e.g. one edited row in a several-thousand-row list — so the wire cost is
+// O(patch) instead of O(full result):
+//
+//	func (h *Handlers) SetRating(ctx context.Context, id string, rating int) error {
+//	    h.store.SetRating(id, rating)
+//	    return aprot.PatchSubscription(ctx, PhotoPatch{ID: id, Rating: rating}, "photos")
+//	}
+//
+// The patch payload is marshaled once and delivered as a subscription_patch
+// frame to every subscriber that declared patch support (generated clients do
+// so when the subscription registers an applyPatch/onPatch reducer).
+// Subscribers without patch support fall back to a full refresh — their query
+// re-executes exactly as [TriggerRefresh] would — so mixed client fleets stay
+// consistent. Keys form one composite key, matching [RegisterRefreshTrigger].
+//
+// Patches are delivered immediately, not batched with the surrounding
+// request; a subscriber may observe the patch before the mutation's own
+// response settles. Use patches for in-place updates to existing entries and
+// keep [TriggerRefresh] for structural changes (items added or removed).
+//
+// Returns an error only when the patch cannot be marshaled; delivery is
+// fire-and-forget like every other server->client frame. Outside a request
+// context (including during subscription re-execution) this is a no-op —
+// use [Server.PatchSubscription] from background goroutines.
+func PatchSubscription(ctx context.Context, patch any, keys ...string) error {
+	rq, ok := ctx.Value(refreshQueueKey).(*refreshQueue)
+	if !ok || rq == nil {
+		return nil
+	}
+	rq.mu.Lock()
+	server := rq.server
+	rq.mu.Unlock()
+	if server == nil {
+		return nil
+	}
+	return server.PatchSubscription(patch, keys...)
+}
+
+// PatchSubscription is like the package-level [PatchSubscription] but callable
+// from background goroutines, cron jobs, webhook fan-in, or any other
+// out-of-request code path.
+func (s *Server) PatchSubscription(patch any, keys ...string) error {
+	rawPatch, err := marshalJSON(patch)
+	if err != nil {
+		return err
+	}
+	key := compositeKey(keys...)
+	subs := s.subscriptions.getSubscriptionsForKey(key)
+
+	patched, refreshed := 0, 0
+	for _, sub := range subs {
+		if !sub.wantsPatch {
+			refreshed++
+			s.requestsWg.Add(1)
+			go sub.conn.refreshSubscription(sub)
+			continue
+		}
+		patched++
+		data, err := marshalJSON(SubscriptionPatchMessage{
+			Type:  TypeSubscriptionPatch,
+			ID:    sub.id,
+			Patch: rawPatch,
+		})
+		if err != nil {
+			// The patch itself marshaled above, so only the envelope can fail
+			// here — which it cannot for valid IDs; skip defensively.
+			continue
+		}
+		// Deliver per subscriber in its own goroutine so one slow client's
+		// backpressure cannot stall the fan-out (mirrors refresh dispatch).
+		s.requestsWg.Add(1)
+		go func(c *Conn, data []byte) {
+			defer s.requestsWg.Done()
+			_ = c.sendRaw(data)
+		}(sub.conn, data)
+	}
+	if s.observer != nil {
+		s.observer.PatchFanout(key, patched, refreshed)
+	}
+	return nil
 }
 
 // TriggerRefresh fires a refresh for all subscriptions matching the given keys,

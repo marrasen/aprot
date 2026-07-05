@@ -68,8 +68,8 @@ export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{par
 // (unaffected by minification, unlike Function.name).
 {{.MethodName}}.method = '{{.WireMethod}}' as const;
 
-export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError);
+export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError, options);
 }
 
 {{end -}}
@@ -123,7 +123,7 @@ export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{e
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
+export function {{.HookName}}(options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),
         [],
@@ -138,7 +138,7 @@ export function {{.HookName}}(options?: UseQueryOptions): UseQueryResult<{{.Resp
  * See {@link UseQueryResult} for return value details — including the
  * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
  */
-export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions): UseQueryResult<{{.ResponseType}}> {
+export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
     const wrappedFn = useCallback(
         (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal }),
         [],

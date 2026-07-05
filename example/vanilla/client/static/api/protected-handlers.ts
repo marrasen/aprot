@@ -24,8 +24,8 @@ export function getProfile(client: ApiClient, options?: RequestOptions): Promise
     return client.request<GetProfileResponse>('ProtectedHandlers.GetProfile', [], options);
 }
 
-export function subscribeGetProfile(client: ApiClient, callback: (data: GetProfileResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<GetProfileResponse>('ProtectedHandlers.GetProfile', [], callback, onError);
+export function subscribeGetProfile(client: ApiClient, callback: (data: GetProfileResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<GetProfileResponse>('ProtectedHandlers.GetProfile', [], callback, onError, options);
 }
 
 
@@ -33,8 +33,8 @@ export function sendMessage(client: ApiClient, toUserID: string, message: string
     return client.request<SendMessageResponse>('ProtectedHandlers.SendMessage', [toUserID, message], options);
 }
 
-export function subscribeSendMessage(client: ApiClient, toUserID: string, message: string, callback: (data: SendMessageResponse) => void, onError?: (error: Error) => void): () => void {
-    return client.subscribe<SendMessageResponse>('ProtectedHandlers.SendMessage', [toUserID, message], callback, onError);
+export function subscribeSendMessage(client: ApiClient, toUserID: string, message: string, callback: (data: SendMessageResponse) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<SendMessageResponse>('ProtectedHandlers.SendMessage', [toUserID, message], callback, onError, options);
 }
 
 export function onDirectMessageEvent(client: ApiClient, handler: PushHandler<DirectMessageEvent>): () => void {

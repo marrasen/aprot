@@ -471,6 +471,33 @@
 // [TriggerRefresh] is a no-op outside a request context. Subscriptions are
 // cleaned up automatically on client disconnect.
 //
+// # Subscription Patches
+//
+// TriggerRefresh re-runs the query and re-sends the entire result, which
+// amplifies small mutations into large frames on big subscribed collections.
+// [PatchSubscription] pushes a small typed patch instead:
+//
+//	func (h *H) SetRating(ctx context.Context, id string, rating int) error {
+//	    h.store.SetRating(id, rating)
+//	    return aprot.PatchSubscription(ctx, RatingPatch{ID: id, Rating: rating}, "photos")
+//	}
+//
+// Subscribers that registered a patch reducer receive the payload as a
+// subscription_patch frame and apply it client-side; everyone else falls back
+// to a full refresh automatically, so mixed client fleets stay consistent. In
+// generated React clients the reducer is the applyPatch hook option, applied
+// to the shared query-cache snapshot so every component sees it:
+//
+//	const { data } = useListPhotos({ applyPatch: mergeByKey('id') });
+//
+// mergeByKey builds the common reducer for keyed-array results; wrapped
+// results take a hand-written reducer. Vanilla clients pass onPatch to the
+// generated subscribe functions and fold patches themselves. Patches are
+// meant for in-place updates to existing entries — keep using TriggerRefresh
+// for structural changes (items added or removed). [Server.PatchSubscription]
+// is the out-of-request variant, and [Observer.PatchFanout] reports how many
+// subscribers took each path.
+//
 // # Error Handling
 //
 // Return [ProtocolError] values from handlers to send structured errors to
@@ -785,5 +812,6 @@
 //
 // Messages are JSON objects with a "type" field. Client-to-server: request,
 // cancel, subscribe, unsubscribe. Server-to-client: response, error, progress,
-// push, config, connected (SSE only).
+// push, config, subscription_patch, connected (SSE only). Streaming adds
+// stream_item / stream_chunk / stream_end.
 package aprot

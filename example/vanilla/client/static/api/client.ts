@@ -70,6 +70,49 @@ export function getValidationErrors(err: unknown): FieldError[] | null {
     return err.data as FieldError[];
 }
 
+/**
+ * Options for {@link ApiClient.subscribe} and generated `subscribeX` helpers.
+ */
+export interface SubscribeOptions {
+    /**
+     * Called when the server pushes a `subscription_patch` frame for this
+     * subscription (see the server-side `aprot.PatchSubscription`). Providing
+     * it declares patch support to the server; without it, the server falls
+     * back to a full refresh (re-running the query and re-sending the result).
+     * The patch payload is whatever the mutation handler pushed — apply it to
+     * your local copy of the data.
+     */
+    onPatch?: (patch: unknown) => void;
+}
+
+/**
+ * Builds an `applyPatch` reducer for the common case: the subscribed result
+ * is an array of objects with a unique key field, and patches are partial
+ * objects (or arrays of them) carrying that key. Entries matching a patch's
+ * key are shallow-merged; patches with no matching entry are ignored — use a
+ * full refresh (server-side `TriggerRefresh`) for structural changes like
+ * added or removed items.
+ *
+ *   const { data } = useListPhotos({ applyPatch: mergeByKey('id') });
+ *
+ * For wrapped results (e.g. `{ photos: Photo[] }`) or richer semantics,
+ * write the reducer by hand: `(data, patch) => ({ ...data, photos: ... })`.
+ */
+export function mergeByKey<T extends object>(key: keyof T & string): (data: T[], patch: unknown) => T[] {
+    return (data: T[], patch: unknown): T[] => {
+        const patches = (Array.isArray(patch) ? patch : [patch]) as Array<Partial<T> & Record<string, unknown>>;
+        const byKey = new Map<unknown, Partial<T>>();
+        for (const p of patches) {
+            if (p && typeof p === 'object' && key in p) byKey.set(p[key], p);
+        }
+        if (byKey.size === 0) return data;
+        return data.map((item) => {
+            const p = byKey.get((item as Record<string, unknown>)[key]);
+            return p ? { ...item, ...p } : item;
+        });
+    };
+}
+
 // Shared decoder for binary frame headers — small and reused per message.
 const binaryHeaderDecoder = new TextDecoder();
 
@@ -534,6 +577,7 @@ export class ApiClient {
         params: unknown[];
         callback: (data: unknown) => void;
         onError?: (error: Error) => void;
+        onPatch?: (patch: unknown) => void;
     }>();
     private streams = new Map<string, {
         push: (item: unknown) => void;
@@ -984,6 +1028,20 @@ export class ApiClient {
                 this.settleResponse(msg.id, decodeBlobResult(msg.result));
                 break;
             }
+            case 'subscription_patch': {
+                const sub = this.subscriptions.get(msg.id);
+                if (!sub) break;
+                if (sub.onPatch) {
+                    sub.onPatch(msg.patch);
+                } else if (this.transport.isConnected()) {
+                    // Defensive: the server only sends patches to subscriptions
+                    // that declared support, so this should not happen — but if
+                    // it does, re-subscribe to fetch the full result rather
+                    // than silently going stale.
+                    this.transport.send({ type: 'subscribe', id: msg.id, method: sub.method, params: sub.params });
+                }
+                break;
+            }
             case 'error': {
                 const p = this.pending.get(msg.id);
                 if (p) {
@@ -1255,7 +1313,7 @@ export class ApiClient {
                 resolve: (result) => { sub.callback(result); },
                 reject: (err) => { sub.onError?.(err as Error); },
             });
-            this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params });
+            this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params, ...(sub.onPatch ? { patch: true } : {}) });
         }
         this.notifyLoadingChange();
     }
@@ -1271,10 +1329,11 @@ export class ApiClient {
         };
     }
 
-    subscribe<T>(method: string, params: unknown[], callback: (data: T) => void, onError?: (error: Error) => void): () => void {
+    subscribe<T>(method: string, params: unknown[], callback: (data: T) => void, onError?: (error: Error) => void, options?: SubscribeOptions): () => void {
         const id = String(++this.requestId);
         const cb = callback as (data: unknown) => void;
-        this.subscriptions.set(id, { method, params, callback: cb, onError });
+        const onPatch = options?.onPatch;
+        this.subscriptions.set(id, { method, params, callback: cb, onError, onPatch });
 
         // Register in pending for the initial response
         this.pending.set(id, {
@@ -1283,7 +1342,7 @@ export class ApiClient {
         });
 
         if (this.transport.isConnected()) {
-            this.transport.send({ type: 'subscribe', id, method, params });
+            this.transport.send({ type: 'subscribe', id, method, params, ...(onPatch ? { patch: true } : {}) });
         }
 
         return () => {
