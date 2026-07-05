@@ -91,6 +91,17 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	}
 }
 
+func (t *streamTransport) SendBinary(data []byte) error {
+	return ErrBinaryUnsupported
+}
+
+func (t *streamTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrBinaryUnsupported
+}
+
 // reportBufferFull signals send-buffer backpressure to the observer. The
 // frame is not dropped; the caller falls back to a blocking send.
 func (t *streamTransport) reportBufferFull() {

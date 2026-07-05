@@ -35,6 +35,17 @@ func (t *sseTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
+func (t *sseTransport) SendBinary(data []byte) error {
+	return ErrBinaryUnsupported
+}
+
+func (t *sseTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return ErrBinaryUnsupported
+}
+
 func (t *sseTransport) Send(data []byte) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

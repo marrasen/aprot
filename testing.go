@@ -36,6 +36,19 @@ func (t *recordingTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
+func (t *recordingTransport) SendBinary(data []byte) error {
+	return t.Send(data)
+}
+
+func (t *recordingTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return t.SendBinary(data)
+}
+
 func (t *recordingTransport) Close() error           { return nil }
 func (t *recordingTransport) CloseGracefully() error { return nil }
 

@@ -13,6 +13,11 @@ type transport interface {
 	// for stream items where a canceled request should promptly stop yielding
 	// even if the outbound queue is full.
 	SendCtx(ctx context.Context, data []byte) error
+	// SendBinary sends one binary protocol frame when the transport supports it.
+	// Transports without a native binary channel may return ErrBinaryUnsupported.
+	SendBinary(data []byte) error
+	// SendBinaryCtx is like SendBinary but returns early if ctx is canceled.
+	SendBinaryCtx(ctx context.Context, data []byte) error
 	// Close closes the transport.
 	Close() error
 	// CloseGracefully sends a close frame (if supported) before closing.

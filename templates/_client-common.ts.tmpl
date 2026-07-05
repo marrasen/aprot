@@ -188,7 +188,7 @@ export interface TransportCloseInfo {
  *   must be reusable after disconnect()/onClose.
  */
 export interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
     send(message: object): void;
     disconnect(): void;
     isConnected(): boolean;
@@ -264,7 +264,7 @@ export function getSSEUrl(path: string = '/sse'): string {
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         return new Promise((resolve, reject) => {
             // Detach and close previous socket so its deferred onclose
             // cannot interfere with the new connection (mobile wake race).
@@ -277,6 +277,7 @@ class WebSocketTransport implements ClientTransport {
             }
             let opened = false;
             this.ws = new WebSocket(url);
+            this.ws.binaryType = 'arraybuffer';
             this.ws.onopen = () => { opened = true; resolve(); };
             this.ws.onerror = () => {}; // Error is followed by close
             this.ws.onmessage = (e) => onMessage(e.data);
@@ -326,7 +327,7 @@ class SSETransport implements ClientTransport {
     private baseUrl: string = '';
     private onMessage: ((data: string) => void) | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         this.baseUrl = url;
         this.onMessage = onMessage;
 
@@ -941,7 +942,11 @@ export class ApiClient {
         }
     }
 
-    private handleMessage(data: string): void {
+    private handleMessage(data: string | Blob | ArrayBuffer): void {
+        if (typeof data !== 'string') {
+            this.handleBinaryMessage(data);
+            return;
+        }
         const msg = JSON.parse(data);
         switch (msg.type) {
             case 'config':
@@ -1060,6 +1065,24 @@ export class ApiClient {
                 }
                 break;
             }
+        }
+    }
+
+    private async handleBinaryMessage(data: Blob | ArrayBuffer): Promise<void> {
+        const buffer = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+        const view = new DataView(buffer);
+        const headerLen = view.getUint32(0, false);
+        const headerBytes = new Uint8Array(buffer, 4, headerLen);
+        const header = JSON.parse(new TextDecoder().decode(headerBytes));
+        if (header.version !== 1 || header.type !== 'response') return;
+        const payload = buffer.slice(4 + headerLen);
+        const blob = new Blob([payload], header.contentType ? { type: header.contentType } : undefined);
+        const p = this.pending.get(header.id);
+        if (p) {
+            this.pending.delete(header.id);
+            p.onSettle?.();
+            p.resolve(blob);
+            this.notifyLoadingChange();
         }
     }
 

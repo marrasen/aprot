@@ -322,6 +322,9 @@ func (c *Conn) sendJSONCtx(ctx context.Context, v any) error {
 }
 
 func (c *Conn) sendResponse(id string, result any) {
+	if c.sendBinaryResponse(id, result) {
+		return
+	}
 	msg := ResponseMessage{
 		Type:   TypeResponse,
 		ID:     id,
@@ -335,6 +338,38 @@ func (c *Conn) sendResponse(id string, result any) {
 		return
 	}
 	_ = c.sendRaw(data)
+}
+
+func (c *Conn) sendBinaryResponse(id string, result any) bool {
+	var blob Blob
+	switch v := result.(type) {
+	case Blob:
+		blob = v
+	case *Blob:
+		if v == nil {
+			return false
+		}
+		blob = *v
+	case []byte:
+		blob = Blob{Data: v}
+	default:
+		return false
+	}
+	frame, err := encodeBinaryFrame(binaryFrameHeader{
+		Type:        "response",
+		ID:          id,
+		ContentType: blob.ContentType,
+	}, blob.Data)
+	if err != nil {
+		c.sendError(id, CodeInternalError, "failed to encode binary response: "+err.Error())
+		return true
+	}
+	if err := c.transport.SendBinary(frame); err != nil {
+		// Transports without binary support (SSE, stream) retain the previous JSON
+		// behavior, which encodes []byte as base64 and Blob as a JSON object.
+		return false
+	}
+	return true
 }
 
 // errorCode maps a handler error to the protocol code that sendError /
