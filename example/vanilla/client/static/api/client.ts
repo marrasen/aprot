@@ -376,6 +376,10 @@ class SSETransport implements ClientTransport {
                 onMessage(e.data);
             });
 
+            this.eventSource.addEventListener('stream_chunk', (e: MessageEvent) => {
+                onMessage(e.data);
+            });
+
             this.eventSource.addEventListener('stream_end', (e: MessageEvent) => {
                 onMessage(e.data);
             });
@@ -1025,6 +1029,16 @@ export class ApiClient {
             case 'stream_item': {
                 const s = this.streams.get(msg.id);
                 if (s) s.push(msg.item);
+                break;
+            }
+            case 'stream_chunk': {
+                // Server-side chunking (ServerOptions.StreamChunking) batches
+                // consecutive items into one frame; unroll so the
+                // AsyncIterable still yields one item at a time.
+                const s = this.streams.get(msg.id);
+                if (s && Array.isArray(msg.items)) {
+                    for (const item of msg.items) s.push(item);
+                }
                 break;
             }
             case 'stream_end': {

@@ -95,6 +95,36 @@ type ServerOptions struct {
 	// connections linger indefinitely, which is a DoS vector on public endpoints;
 	// keep a bounded timeout there.
 	AuthTimeout time.Duration
+	// StreamChunking batches consecutive items yielded by streaming handlers
+	// into stream_chunk frames instead of sending one frame per item, cutting
+	// framing and syscall overhead for large streamed collections. Nil (the
+	// default) keeps the per-item stream_item frames. Enabling chunking
+	// requires a client generated from the same aprot version — older
+	// generated clients do not understand stream_chunk frames. See
+	// [StreamChunking].
+	StreamChunking *StreamChunking
+}
+
+// StreamChunking configures server-side batching of streamed items (issue
+// #239). A chunk is flushed as soon as any threshold is reached; a partial
+// chunk held by a stalled producer is flushed after MaxDelay so buffering
+// never adds unbounded latency. The batching is transparent to the generated
+// TypeScript client — the AsyncIterable still yields one item at a time.
+//
+// Fields set to zero (or negative) take their documented defaults, so
+// &StreamChunking{} enables chunking with sensible settings.
+type StreamChunking struct {
+	// MaxItems flushes a chunk once it holds this many items. Default: 128.
+	MaxItems int
+	// MaxBytes flushes a chunk once its marshaled items reach this many
+	// bytes. A single item larger than MaxBytes still ships (in its own
+	// chunk), so a chunk may exceed the limit by the size of one item.
+	// Default: 64 KiB.
+	MaxBytes int
+	// MaxDelay flushes a partial chunk this long after its first item was
+	// buffered, bounding the extra latency chunking can add when the
+	// producer is slower than the thresholds. Default: 20ms.
+	MaxDelay time.Duration
 }
 
 func defaultServerOptions() ServerOptions {
@@ -188,6 +218,21 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		}
 		if opt.AuthTimeout != 0 {
 			options.AuthTimeout = opt.AuthTimeout
+		}
+		if opt.StreamChunking != nil {
+			// Copy so later mutation of the caller's struct can't race the
+			// server, and fill defaults for unset thresholds.
+			cfg := *opt.StreamChunking
+			if cfg.MaxItems <= 0 {
+				cfg.MaxItems = 128
+			}
+			if cfg.MaxBytes <= 0 {
+				cfg.MaxBytes = 64 << 10
+			}
+			if cfg.MaxDelay <= 0 {
+				cfg.MaxDelay = 20 * time.Millisecond
+			}
+			options.StreamChunking = &cfg
 		}
 	}
 
