@@ -17,6 +17,7 @@ import (
 // net.Conn — to the aprot protocol using newline-delimited JSON framing:
 // exactly one protocol message per line, in both directions.
 type streamTransport struct {
+	noBinary
 	rw   io.ReadWriteCloser
 	send chan []byte
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op

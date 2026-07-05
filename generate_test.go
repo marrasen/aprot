@@ -782,6 +782,62 @@ func TestVoidHandlerCallError(t *testing.T) {
 	}
 }
 
+type BlobHandlers struct{}
+
+func (h *BlobHandlers) GetAvatar(ctx context.Context) (Blob, error) {
+	return Blob{ContentType: "image/png", Data: []byte{1}}, nil
+}
+
+func (h *BlobHandlers) GetReport(ctx context.Context) (*Blob, error) {
+	return &Blob{ContentType: "application/pdf"}, nil
+}
+
+// BlobFieldStruct nests a Blob inside a regular result; nested blobs stay in
+// their JSON wire shape because only top-level Blob results use binary frames.
+type BlobFieldStruct struct {
+	Attachment Blob   `json:"attachment"`
+	Name       string `json:"name"`
+}
+
+func (h *BlobHandlers) GetDocument(ctx context.Context) (BlobFieldStruct, error) {
+	return BlobFieldStruct{}, nil
+}
+
+func TestGenerateBlobResponse(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&BlobHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	// Top-level Blob results resolve to a DOM Blob at runtime, so the method
+	// must be typed Promise<Blob> — for both value and pointer returns.
+	if !strings.Contains(output, "getAvatar(client: ApiClient, options?: RequestOptions): Promise<Blob>") {
+		t.Error("GetAvatar should be typed Promise<Blob>")
+	}
+	if !strings.Contains(output, "getReport(client: ApiClient, options?: RequestOptions): Promise<Blob>") {
+		t.Error("GetReport (*Blob) should be typed Promise<Blob>")
+	}
+
+	// The DOM Blob type must not be shadowed by a generated interface.
+	if strings.Contains(output, "export interface Blob {") {
+		t.Error("Should not generate an interface named Blob (shadows the DOM Blob type)")
+	}
+
+	// A Blob nested in another struct is delivered as JSON, so its field keeps
+	// the honest wire shape instead of claiming to be a DOM Blob.
+	if !strings.Contains(output, "attachment: { contentType?: string; data: string }") {
+		t.Error("Nested Blob field should map to its JSON wire shape")
+	}
+
+	t.Logf("Generated TypeScript (blob):\n%s", output)
+}
+
 func TestGenerateVoidResponse(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&VoidHandlers{})

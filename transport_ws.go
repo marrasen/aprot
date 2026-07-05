@@ -2,7 +2,10 @@ package aprot
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 	"net"
 	"os"
 	"time"
@@ -13,13 +16,18 @@ import (
 // wsTransport wraps a WebSocket connection as a transport.
 type wsTransport struct {
 	ws   *websocket.Conn
-	send chan []byte
+	send chan outboundFrame
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 	opts ServerOptions // read limit, write timeout, and keepalive settings
 	// conn is a back-reference used only to report send-buffer pressure and
 	// write timeouts to the server's observer. Set after construction, before
 	// the pumps start; nil in transports created without a connection.
 	conn *Conn
+}
+
+type outboundFrame struct {
+	messageType int
+	data        []byte
 }
 
 // observer returns the server's observer via the connection back-reference, or
@@ -34,13 +42,31 @@ func (t *wsTransport) observer() Observer {
 func newWSTransport(ws *websocket.Conn, opts ServerOptions) *wsTransport {
 	return &wsTransport{
 		ws:   ws,
-		send: make(chan []byte, 256),
+		send: make(chan outboundFrame, 256),
 		done: make(chan struct{}),
 		opts: opts,
 	}
 }
 
 func (t *wsTransport) Send(data []byte) error {
+	return t.sendFrame(context.Background(), outboundFrame{messageType: websocket.TextMessage, data: data})
+}
+
+func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
+	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
+}
+
+func (t *wsTransport) SupportsBinary() bool { return true }
+
+func (t *wsTransport) SendBinary(data []byte) error {
+	return t.sendFrame(context.Background(), outboundFrame{messageType: websocket.BinaryMessage, data: data})
+}
+
+func (t *wsTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
+	return t.sendFrame(ctx, outboundFrame{messageType: websocket.BinaryMessage, data: data})
+}
+
+func (t *wsTransport) sendFrame(ctx context.Context, frame outboundFrame) error {
 	// Blocking send — waits for room in the 256-slot buffer. Unblocks
 	// immediately if the transport is closed. Previously this method dropped
 	// on a full buffer, which silently lost responses/progress for slow
@@ -50,24 +76,7 @@ func (t *wsTransport) Send(data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
-		return nil
-	default:
-		t.reportBufferFull()
-	}
-	select {
-	case <-t.done:
-		return ErrConnectionClosed
-	case t.send <- data:
-		return nil
-	}
-}
-
-func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
-	select {
-	case <-t.done:
-		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- frame:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -77,7 +86,7 @@ func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- frame:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -163,12 +172,29 @@ func (t *wsTransport) writePump() {
 			if err := t.writeMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
-		case data := <-t.send:
-			if err := t.writeMessage(websocket.TextMessage, data); err != nil {
+		case frame := <-t.send:
+			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
 				return
 			}
 		}
 	}
+}
+
+func encodeBinaryFrame(header binaryFrameHeader, payload []byte) ([]byte, error) {
+	header.Version = binaryFrameVersion
+	headerData, err := marshalJSON(header)
+	if err != nil {
+		return nil, err
+	}
+	headerLen := uint64(len(headerData))
+	if headerLen > math.MaxUint32 {
+		return nil, fmt.Errorf("binary frame header too large: %d bytes", len(headerData))
+	}
+	frame := make([]byte, 4+len(headerData)+len(payload))
+	binary.BigEndian.PutUint32(frame[:4], uint32(headerLen))
+	copy(frame[4:], headerData)
+	copy(frame[4+len(headerData):], payload)
+	return frame, nil
 }
 
 // writeMessage writes one frame, bounded by WriteTimeout so a peer that

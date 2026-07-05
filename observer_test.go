@@ -331,14 +331,14 @@ func TestObserver_SendBufferFull(t *testing.T) {
 	t.Cleanup(func() { _ = server.Stop(context.Background()) })
 
 	tr := &wsTransport{
-		send: make(chan []byte, 256),
+		send: make(chan outboundFrame, 256),
 		done: make(chan struct{}),
 	}
 	tr.conn = &Conn{server: server, transport: tr, id: 1}
 
 	// Fill the buffer so the next enqueue must report backpressure.
 	for i := 0; i < 256; i++ {
-		tr.send <- nil
+		tr.send <- outboundFrame{}
 	}
 
 	sent := make(chan error, 1)

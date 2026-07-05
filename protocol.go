@@ -2,6 +2,8 @@ package aprot
 
 import "github.com/go-json-experiment/json/jsontext"
 
+const binaryFrameVersion byte = 1
+
 // MessageType represents the type of protocol message.
 type MessageType string
 
@@ -57,6 +59,13 @@ type ResponseMessage struct {
 	Type   MessageType `json:"type"`
 	ID     string      `json:"id"`
 	Result any         `json:"result"`
+}
+
+type binaryFrameHeader struct {
+	Version     byte   `json:"version"`
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	ContentType string `json:"contentType,omitempty"`
 }
 
 // ErrorMessage represents an error response from server to client.

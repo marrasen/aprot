@@ -322,6 +322,10 @@ func (c *Conn) sendJSONCtx(ctx context.Context, v any) error {
 }
 
 func (c *Conn) sendResponse(id string, result any) {
+	if blob, ok := asBlob(result); ok {
+		c.sendBlobResponse(id, blob)
+		return
+	}
 	msg := ResponseMessage{
 		Type:   TypeResponse,
 		ID:     id,
@@ -335,6 +339,61 @@ func (c *Conn) sendResponse(id string, result any) {
 		return
 	}
 	_ = c.sendRaw(data)
+}
+
+// asBlob reports whether a handler result opts into binary delivery. Only the
+// explicit Blob type does; a plain []byte keeps its JSON base64 encoding so
+// existing handlers are unaffected. A nil *Blob is not a blob — it falls
+// through to the JSON path and reaches the client as a null result, matching
+// every other nil pointer result.
+func asBlob(result any) (Blob, bool) {
+	switch v := result.(type) {
+	case Blob:
+		return v, true
+	case *Blob:
+		if v == nil {
+			return Blob{}, false
+		}
+		return *v, true
+	}
+	return Blob{}, false
+}
+
+// blobFallbackResult is the JSON representation of a Blob result on transports
+// without binary frames (SSE, stream). The $blob marker lets the client
+// convert it back into the same Blob value the binary path delivers, so the
+// client-visible result type does not depend on the transport.
+type blobFallbackResult struct {
+	Blob Blob `json:"$blob"`
+}
+
+func (c *Conn) sendBlobResponse(id string, blob Blob) {
+	if !c.transport.SupportsBinary() {
+		msg := ResponseMessage{
+			Type:   TypeResponse,
+			ID:     id,
+			Result: blobFallbackResult{Blob: blob},
+		}
+		data, err := marshalJSON(msg)
+		if err != nil {
+			c.sendError(id, CodeInternalError, "failed to encode response: "+err.Error())
+			return
+		}
+		_ = c.sendRaw(data)
+		return
+	}
+	frame, err := encodeBinaryFrame(binaryFrameHeader{
+		Type:        "response",
+		ID:          id,
+		ContentType: blob.ContentType,
+	}, blob.Data)
+	if err != nil {
+		c.sendError(id, CodeInternalError, "failed to encode binary response: "+err.Error())
+		return
+	}
+	// Send failures mean the connection is going away; match the JSON path,
+	// which discards sendRaw errors for the same reason.
+	_ = c.transport.SendBinary(frame)
 }
 
 // errorCode maps a handler error to the protocol code that sendError /

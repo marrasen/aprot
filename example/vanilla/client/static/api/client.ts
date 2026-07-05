@@ -70,6 +70,28 @@ export function getValidationErrors(err: unknown): FieldError[] | null {
     return err.data as FieldError[];
 }
 
+// Shared decoder for binary frame headers — small and reused per message.
+const binaryHeaderDecoder = new TextDecoder();
+
+// decodeBlobResult converts the server's JSON fallback for a Blob result —
+// an object whose only key is "$blob" carrying { contentType?, data(base64) } —
+// into a DOM Blob, so callers see the same type the binary path delivers.
+// Any other result value passes through untouched.
+function decodeBlobResult(result: unknown): unknown {
+    if (
+        result === null || typeof result !== 'object' || Array.isArray(result)
+        || !('$blob' in result) || Object.keys(result).length !== 1
+    ) {
+        return result;
+    }
+    const b = (result as { $blob: { contentType?: string; data?: string } }).$blob;
+    if (b === null || typeof b !== 'object') return result;
+    const bin = atob(b.data ?? '');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], b.contentType ? { type: b.contentType } : undefined);
+}
+
 // ConnectionErrorReason classifies why a connection failed or could not be
 // used. Browsers deliberately collapse most pre-WebSocket-upgrade failures
 // (DNS, TCP refused, TLS handshake, HTTP 4xx during upgrade) into close
@@ -182,7 +204,7 @@ export interface TransportCloseInfo {
  *   must be reusable after disconnect()/onClose.
  */
 export interface ClientTransport {
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void>;
     send(message: object): void;
     disconnect(): void;
     isConnected(): boolean;
@@ -258,7 +280,7 @@ export function getSSEUrl(path: string = '/sse'): string {
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         return new Promise((resolve, reject) => {
             // Detach and close previous socket so its deferred onclose
             // cannot interfere with the new connection (mobile wake race).
@@ -271,6 +293,7 @@ class WebSocketTransport implements ClientTransport {
             }
             let opened = false;
             this.ws = new WebSocket(url);
+            this.ws.binaryType = 'arraybuffer';
             this.ws.onopen = () => { opened = true; resolve(); };
             this.ws.onerror = () => {}; // Error is followed by close
             this.ws.onmessage = (e) => onMessage(e.data);
@@ -320,7 +343,7 @@ class SSETransport implements ClientTransport {
     private baseUrl: string = '';
     private onMessage: ((data: string) => void) | null = null;
 
-    connect(url: string, onMessage: (data: string) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
+    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         this.baseUrl = url;
         this.onMessage = onMessage;
 
@@ -935,7 +958,11 @@ export class ApiClient {
         }
     }
 
-    private handleMessage(data: string): void {
+    private handleMessage(data: string | Blob | ArrayBuffer): void {
+        if (typeof data !== 'string') {
+            this.handleBinaryMessage(data);
+            return;
+        }
         const msg = JSON.parse(data);
         switch (msg.type) {
             case 'config':
@@ -954,19 +981,7 @@ export class ApiClient {
                 break;
             }
             case 'response': {
-                const p = this.pending.get(msg.id);
-                if (p) {
-                    this.pending.delete(msg.id);
-                    p.onSettle?.();
-                    p.resolve(msg.result);
-                    this.notifyLoadingChange();
-                } else {
-                    // Server-driven subscription refresh
-                    const sub = this.subscriptions.get(msg.id);
-                    if (sub) {
-                        sub.callback(msg.result);
-                    }
-                }
+                this.settleResponse(msg.id, decodeBlobResult(msg.result));
                 break;
             }
             case 'error': {
@@ -1055,6 +1070,64 @@ export class ApiClient {
                 break;
             }
         }
+    }
+
+    /**
+     * Delivers a result for `id`: settles the pending request if there is
+     * one, otherwise dispatches to the matching server-driven subscription.
+     * Both the JSON `response` envelope and binary frames end here, so the
+     * two paths cannot drift apart.
+     */
+    private settleResponse(id: string, result: unknown): void {
+        const p = this.pending.get(id);
+        if (p) {
+            this.pending.delete(id);
+            p.onSettle?.();
+            p.resolve(result);
+            this.notifyLoadingChange();
+        } else {
+            // Server-driven subscription refresh
+            const sub = this.subscriptions.get(id);
+            if (sub) {
+                sub.callback(result);
+            }
+        }
+    }
+
+    private rejectResponse(id: string, error: Error): void {
+        const p = this.pending.get(id);
+        if (p) {
+            this.pending.delete(id);
+            p.onSettle?.();
+            p.reject(error);
+            this.notifyLoadingChange();
+        } else {
+            const sub = this.subscriptions.get(id);
+            if (sub) {
+                sub.onError?.(error);
+            }
+        }
+    }
+
+    private async handleBinaryMessage(data: Blob | ArrayBuffer): Promise<void> {
+        const buffer = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+        const view = new DataView(buffer);
+        const headerLen = view.getUint32(0, false);
+        const headerBytes = new Uint8Array(buffer, 4, headerLen);
+        const header = JSON.parse(binaryHeaderDecoder.decode(headerBytes));
+        if (header.version !== 1 || header.type !== 'response') {
+            // Unknown frame: reject rather than drop, so the awaiting caller
+            // fails fast instead of hanging until the connection closes.
+            this.rejectResponse(header.id, new ApiError(
+                ErrorCode.InternalError,
+                `unsupported binary frame (version ${header.version}, type ${header.type})`,
+            ));
+            return;
+        }
+        // Zero-copy view into the received buffer; Blob copies on read.
+        const payload = new Uint8Array(buffer, 4 + headerLen);
+        const blob = new Blob([payload], header.contentType ? { type: header.contentType } : undefined);
+        this.settleResponse(header.id, blob);
     }
 
     private applyConfig(config: {

@@ -951,6 +951,10 @@ func (g *Generator) buildMethodData(info *HandlerInfo, wireMethod, shortName str
 		respType = "void"
 	case isStream, isStream2:
 		respType = g.goTypeToTS(info.ResponseType)
+	case isBlobResponse(info.ResponseType):
+		// Top-level Blob results are delivered as binary frames (or the $blob
+		// JSON fallback) and always reach the caller as a DOM Blob.
+		respType = "Blob"
 	default:
 		respType = g.goTypeToTS(info.ResponseType)
 	}
@@ -1446,6 +1450,12 @@ func (g *Generator) collectType(t reflect.Type) {
 	if t == nil || t == voidResponseType {
 		return
 	}
+	// Blob is never emitted as an interface: top-level results are typed as
+	// the DOM Blob (which an interface of the same name would shadow), and
+	// nested occurrences use the inline wire shape from goTypeToTS.
+	if t == blobType {
+		return
+	}
 	if _, ok := g.types[t]; ok {
 		return
 	}
@@ -1791,6 +1801,12 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	// number[] (the named-byte-slice default) is wrong. Type it as `unknown`.
 	if t.PkgPath() == "encoding/json" && t.Name() == "RawMessage" {
 		return "unknown"
+	}
+
+	// Blob outside a top-level result position travels as plain JSON.
+	// buildMethodData overrides top-level unary results to the DOM Blob.
+	if t == blobType {
+		return blobTSWireShape
 	}
 
 	switch t.Kind() {

@@ -11,6 +11,7 @@ import (
 
 // sseTransport wraps an http.ResponseWriter for SSE output.
 type sseTransport struct {
+	noBinary
 	w       http.ResponseWriter
 	flusher http.Flusher
 	mu      sync.Mutex
