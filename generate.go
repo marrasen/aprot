@@ -1321,10 +1321,27 @@ func pkgShortName(pkgPath string) string {
 // findSharedTypeImports scans handler template data for references to shared type names
 // and returns import groups organized by module. sharedTypeNames maps type name -> module.
 func findSharedTypeImports(data *templateData, sharedTypeNames map[string]string) []typeImportGroup {
+	// Names declared by this file itself. A local declaration shadows a shared
+	// type of the same short name (e.g. a handler-local Point next to a shared
+	// focus_bank.Point, or package analysis' Exports next to package filter's
+	// Exports): importing the shared one alongside the local declaration is a
+	// TS2440 conflict, so references in this file bind to the local type and
+	// the import is skipped.
+	localNames := make(map[string]bool, len(data.Interfaces)+len(data.Enums))
+	for _, iface := range data.Interfaces {
+		localNames[iface.Name] = true
+	}
+	for _, enum := range data.Enums {
+		localNames[enum.Name+"Type"] = true
+	}
+
 	// Collect referenced type names grouped by module
 	byModule := make(map[string]map[string]bool)
 	scanRef := func(text string) {
 		for name, module := range sharedTypeNames {
+			if localNames[name] {
+				continue
+			}
 			if containsTypeName(text, name) {
 				if byModule[module] == nil {
 					byModule[module] = make(map[string]bool)
