@@ -34,7 +34,7 @@ func Enable(r *aprot.Registry, opts ...EnableOption) {
 		tm := newTaskManager(s, o)
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
-			states := tm.snapshotAllForConn(conn.ID())
+			states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
 			if len(states) > 0 {
 				_ = conn.Push(TaskStateEvent{Tasks: states})
 			}
@@ -65,7 +65,7 @@ func EnableWithMeta[M any](r *aprot.Registry, opts ...EnableOption) {
 		tm := newTaskManager(s, o)
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
-			states := tm.snapshotAllForConn(conn.ID())
+			states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
 			if len(states) > 0 {
 				_ = conn.Push(TaskStateEvent{Tasks: states})
 			}

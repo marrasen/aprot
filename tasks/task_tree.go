@@ -58,8 +58,21 @@ type taskNode struct {
 	ctx         context.Context    // task-scoped context for shared tasks
 	manager     *taskManager       // back-reference to manager (shared only)
 	ownerConnID uint64             // connection that created this task
+	ownerUserID string             // user that created this task ("" if unauthenticated)
 	topLevel    bool               // true if created by StartTask with Shared()
 
+}
+
+// cancelInfo builds the descriptor passed to a CancelAuthorizer. id, title, and
+// owner fields are set once at creation and never mutated, so they are safe to
+// read without the node lock.
+func (n *taskNode) cancelInfo() TaskCancelInfo {
+	return TaskCancelInfo{
+		ID:          n.id,
+		Title:       n.title,
+		OwnerConnID: n.ownerConnID,
+		OwnerUserID: n.ownerUserID,
+	}
 }
 
 // runScoped wraps fn with the registered task middleware (if any) and runs
@@ -419,10 +432,21 @@ func (n *taskNode) sharedSnapshot() SharedTaskState {
 	return state
 }
 
-// sharedSnapshotForConn returns a SharedTaskState with IsOwner set.
-func (n *taskNode) sharedSnapshotForConn(connID uint64) SharedTaskState {
+// sharedSnapshotForConn returns a SharedTaskState with IsOwner set for the
+// viewing connection. Ownership is matched by user ID when the task's owner was
+// authenticated (so it survives a reconnect on a new connection), and falls
+// back to the creating connection ID otherwise.
+func (n *taskNode) sharedSnapshotForConn(connID uint64, userID string) SharedTaskState {
 	state := n.sharedSnapshot()
-	state.IsOwner = n.topLevel && (n.ownerConnID == connID)
+	if !n.topLevel {
+		state.IsOwner = false
+		return state
+	}
+	if n.ownerUserID != "" {
+		state.IsOwner = userID != "" && n.ownerUserID == userID
+	} else {
+		state.IsOwner = n.ownerConnID == connID
+	}
 	return state
 }
 

@@ -345,7 +345,7 @@ func TestMiddlewareCascadeFailure(t *testing.T) {
 	_, tm := setupTestServer(t)
 	tm.hooks = opts // inject after setup since setupTestServer uses nil
 
-	root := tm.create("root", 1, true, context.Background())
+	root := tm.create("root", 1, "", true, context.Background())
 	root.mu.Lock()
 	root.status = TaskNodeStatusRunning
 	root.mu.Unlock()
@@ -420,7 +420,7 @@ func TestMiddlewareIdempotentEnd(t *testing.T) {
 	_, tm := setupTestServer(t)
 	tm.hooks = opts
 
-	node := tm.create("once", 1, true, context.Background())
+	node := tm.create("once", 1, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
@@ -509,7 +509,7 @@ func TestMiddlewareTerminalBeforeNext(t *testing.T) {
 
 	_, tm := setupTestServer(t)
 	tm.hooks = opts
-	node := tm.create("pre-ended", 1, true, context.Background())
+	node := tm.create("pre-ended", 1, "", true, context.Background())
 
 	// Terminal signal arrives BEFORE runManaged registers its done channel.
 	node.signalMiddlewareEnd(errors.New("canceled"))

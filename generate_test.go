@@ -259,6 +259,50 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+// A custom error registered under a name whose generated helper collides with
+// a built-in ApiError method (here "NotFound" -> isNotFound) must fail
+// generation with a clear error, and must not emit a duplicate isNotFound
+// method into the client.
+func TestGenerateCustomErrorHelperCollision(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterError(ErrTestNotFound, "NotFound") // collides with built-in isNotFound
+
+	files, err := NewGenerator(registry).Generate()
+	if err == nil {
+		t.Fatal("expected a generation error for the colliding custom error helper, got nil")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Errorf("error message should explain the collision, got: %v", err)
+	}
+	// Even on error the emitted client (if any) must not contain a duplicate
+	// isNotFound method definition.
+	if base, ok := files["client.ts"]; ok {
+		if strings.Count(base, "isNotFound(): boolean") > 1 {
+			t.Error("client.ts contains a duplicate isNotFound() method")
+		}
+	}
+}
+
+// A custom error whose helper name does not collide generates normally.
+func TestGenerateCustomErrorHelperNoCollision(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&TestHandlers{})
+	registry.RegisterError(ErrTestNotFound, "EntityNotFound")
+
+	files, err := NewGenerator(registry).Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	base := files["client.ts"]
+	if !strings.Contains(base, "isEntityNotFound(): boolean") {
+		t.Error("expected isEntityNotFound() helper in client.ts")
+	}
+	if strings.Count(base, "isNotFound(): boolean") != 1 {
+		t.Error("expected exactly one built-in isNotFound() method")
+	}
+}
+
 func TestGenerateMultipleFiles(t *testing.T) {
 	registry := NewRegistry()
 	registry.Register(&TestHandlers{})

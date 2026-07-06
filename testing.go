@@ -12,6 +12,14 @@ func WithTestConnection(ctx context.Context, id uint64) context.Context {
 	return withConnection(ctx, &Conn{id: id})
 }
 
+// WithTestConnectionUser returns a context carrying a minimal [Conn] with the
+// given connection ID and authenticated user ID. Unlike calling SetUserID, it
+// needs no server, so it is usable for tests that exercise user-based
+// ownership. Test-only.
+func WithTestConnectionUser(ctx context.Context, id uint64, userID string) context.Context {
+	return withConnection(ctx, &Conn{id: id, userID: userID})
+}
+
 // recordingTransport captures all data sent through the connection.
 type recordingTransport struct {
 	mu   sync.Mutex

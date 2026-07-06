@@ -36,12 +36,32 @@ type TaskInfo struct {
 // is re-raised on the internal goroutine.
 type TaskMiddleware func(ctx context.Context, info TaskInfo, next func(context.Context) error) error
 
+// TaskCancelInfo describes a shared task whose cancellation is being
+// authorized. It is passed to a [CancelAuthorizer].
+type TaskCancelInfo struct {
+	ID          string // task ID
+	Title       string // task title
+	OwnerConnID uint64 // connection that created the task
+	OwnerUserID string // user that created the task ("" if the owner was unauthenticated)
+}
+
+// CancelAuthorizer decides whether the caller identified by ctx may cancel the
+// described shared task. Return nil to allow cancellation, or an error
+// (typically [aprot.ErrForbidden]) to deny it. The ctx is the requesting
+// caller's context, so the authorizer can read aprot.Connection(ctx).UserID()
+// and compare it against task.OwnerUserID.
+//
+// Install one with [WithCancelAuthorizer]. When none is installed the default
+// policy applies: only the connection that created the task may cancel it.
+type CancelAuthorizer func(ctx context.Context, task TaskCancelInfo) error
+
 // EnableOption configures the task system at registration time. Pass
 // options to [Enable] or [EnableWithMeta].
 type EnableOption func(*enableOptions)
 
 type enableOptions struct {
-	middleware TaskMiddleware
+	middleware       TaskMiddleware
+	cancelAuthorizer CancelAuthorizer
 }
 
 func buildEnableOptions(opts []EnableOption) *enableOptions {
@@ -77,4 +97,23 @@ func buildEnableOptions(opts []EnableOption) *enableOptions {
 //	))
 func WithTaskMiddleware(mw TaskMiddleware) EnableOption {
 	return func(o *enableOptions) { o.middleware = mw }
+}
+
+// WithCancelAuthorizer installs a policy deciding who may cancel a shared task
+// via the built-in CancelTask RPC (and [CancelSharedTask]). Without it, only
+// the connection that created a task may cancel it — a policy that also loses
+// cancel rights across a reconnect, since it is keyed by connection ID. An
+// authorizer can implement any policy, e.g. "any authenticated user" or
+// "same user, surviving reconnect":
+//
+//	tasks.EnableWithMeta[Meta](reg, tasks.WithCancelAuthorizer(
+//	    func(ctx context.Context, t tasks.TaskCancelInfo) error {
+//	        if aprot.Connection(ctx).UserID() == "" {
+//	            return aprot.ErrForbidden("not authenticated")
+//	        }
+//	        return nil // any authenticated user may cancel any task
+//	    },
+//	))
+func WithCancelAuthorizer(fn CancelAuthorizer) EnableOption {
+	return func(o *enableOptions) { o.cancelAuthorizer = fn }
 }

@@ -91,7 +91,7 @@ func TestProgressThrottleCleanedUpOnRemove(t *testing.T) {
 func TestProgressThrottleCleanedUpForSubtaskOnRemove(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	parent := tm.create("parent", 1, true, context.Background())
+	parent := tm.create("parent", 1, "", true, context.Background())
 	child := parent.createChild("child")
 	child.progress(1, 10) // routes through sharedDelivery → throttles[child.id]
 
@@ -233,7 +233,7 @@ func TestCancelSharedTaskOwnerOnly(t *testing.T) {
 	const ownerID uint64 = 1
 	const otherID uint64 = 2
 
-	node := tm.create("owned task", ownerID, true, context.Background())
+	node := tm.create("owned task", ownerID, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
