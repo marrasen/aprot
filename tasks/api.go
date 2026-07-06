@@ -353,7 +353,7 @@ func startSharedTask[M any](ctx context.Context, title string) (context.Context,
 	if tm == nil {
 		return newDetachedTask[M](ctx, title)
 	}
-	node := tm.create(title, conn.ID(), true, ctx)
+	node := tm.create(title, conn.ID(), conn.UserID(), true, ctx)
 	tm.broadcastNow() // first message shows CREATED
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
@@ -393,7 +393,7 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 		return SubTask(ctx, title, fn)
 	}
 
-	node := tm.create(title, conn.ID(), false, ctx)
+	node := tm.create(title, conn.ID(), conn.UserID(), false, ctx)
 	tm.broadcastNow() // first message shows CREATED
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
@@ -418,22 +418,76 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 	})
 }
 
-// CancelSharedTask cancels a shared task by ID. Only the connection that
-// created the task may cancel it; any other caller (including one with no
-// connection, such as the REST path) is refused with CodeForbidden. The same
-// error is returned whether the task is missing or owned by someone else, so a
-// caller can't probe for the existence of other clients' tasks.
+// CancelSharedTask cancels a shared task by ID, subject to authorization.
+//
+// When a [CancelAuthorizer] is installed (via [WithCancelAuthorizer]) it decides
+// whether the caller may cancel the task. Otherwise the default policy applies:
+// only the connection that created the task may cancel it, and any other caller
+// (including one with no connection, such as the REST path) is refused with
+// CodeForbidden. Under the default policy the same error is returned whether the
+// task is missing or owned by someone else, so a caller can't probe for the
+// existence of other clients' tasks.
 func CancelSharedTask(ctx context.Context, taskID string) error {
 	tm := taskManagerFromContext(ctx)
 	if tm == nil {
 		return aprot.NewError(aprot.CodeInternalError, "tasks not enabled")
 	}
+
+	tm.mu.Lock()
+	node, ok := tm.tasks[taskID]
+	tm.mu.Unlock()
+
+	var auth CancelAuthorizer
+	if tm.hooks != nil {
+		auth = tm.hooks.cancelAuthorizer
+	}
+	if auth != nil {
+		if !ok {
+			return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
+		}
+		if err := auth(ctx, node.cancelInfo()); err != nil {
+			return err
+		}
+		node.failTop("canceled")
+		return nil
+	}
+
+	// Default policy: owner-by-connection. A missing task and one owned by
+	// another connection are reported identically to prevent probing.
 	conn := aprot.Connection(ctx)
-	if conn == nil {
+	if !ok || conn == nil || node.ownerConnID != conn.ID() {
 		return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
 	}
-	if !tm.cancelTaskOwnedBy(taskID, conn.ID()) {
-		return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
-	}
+	node.failTop("canceled")
 	return nil
+}
+
+// CancelTaskByID cancels a shared task by ID from application code, bypassing
+// any [CancelAuthorizer] — use it for trusted, server-initiated cancellation
+// (an admin action, a custom cancel endpoint, shutdown). It reports whether a
+// live task with that ID was found and canceled. The task manager is resolved
+// from ctx, which must be a task or request context from an aprot handler.
+func CancelTaskByID(ctx context.Context, taskID string) bool {
+	tm := taskManagerFromContext(ctx)
+	if tm == nil {
+		return false
+	}
+	return tm.cancelTask(taskID)
+}
+
+// FindSharedTask returns the current wire state of a live shared task by ID and
+// whether it exists. It lets application code inspect a task outside a snapshot
+// broadcast. The task manager is resolved from ctx.
+func FindSharedTask(ctx context.Context, taskID string) (SharedTaskState, bool) {
+	tm := taskManagerFromContext(ctx)
+	if tm == nil {
+		return SharedTaskState{}, false
+	}
+	tm.mu.Lock()
+	node, ok := tm.tasks[taskID]
+	tm.mu.Unlock()
+	if !ok {
+		return SharedTaskState{}, false
+	}
+	return node.sharedSnapshot(), true
 }

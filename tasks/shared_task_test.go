@@ -51,7 +51,7 @@ func findTaskByID(states []SharedTaskState, id string) (SharedTaskState, bool) {
 func TestSharedTaskBasic(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("basic task", 1, true, context.Background())
+	node := tm.create("basic task", 1, "", true, context.Background())
 	id := node.id
 
 	states := tm.snapshotAll()
@@ -82,7 +82,7 @@ func TestSharedTaskBasic(t *testing.T) {
 func TestSharedTaskProgress(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("progress task", 1, true, context.Background())
+	node := tm.create("progress task", 1, "", true, context.Background())
 
 	node.progress(3, 10)
 
@@ -100,7 +100,7 @@ func TestSharedTaskProgress(t *testing.T) {
 func TestSharedTaskSubTask(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("parent task", 1, true, context.Background())
+	node := tm.create("parent task", 1, "", true, context.Background())
 	child := node.createChild("child task")
 
 	if child == nil {
@@ -141,7 +141,7 @@ func TestSharedTaskSubTask(t *testing.T) {
 func TestSharedTaskCancel(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("cancel task", 1, true, context.Background())
+	node := tm.create("cancel task", 1, "", true, context.Background())
 	id := node.id
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
@@ -193,7 +193,7 @@ func TestSharedTaskCancelNonExistent(t *testing.T) {
 func TestSharedTaskFail(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("fail task", 1, true, context.Background())
+	node := tm.create("fail task", 1, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
@@ -223,7 +223,7 @@ func TestSharedTaskErr(t *testing.T) {
 	t.Run("nil error completes", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		node := tm.create("err nil task", 1, true, context.Background())
+		node := tm.create("err nil task", 1, "", true, context.Background())
 		node.mu.Lock()
 		node.status = TaskNodeStatusRunning
 		node.mu.Unlock()
@@ -247,7 +247,7 @@ func TestSharedTaskErr(t *testing.T) {
 	t.Run("non-nil error fails", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		node := tm.create("err non-nil task", 1, true, context.Background())
+		node := tm.create("err non-nil task", 1, "", true, context.Background())
 		node.mu.Lock()
 		node.status = TaskNodeStatusRunning
 		node.mu.Unlock()
@@ -278,7 +278,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 	t.Run("nil error completes", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		node := tm.create("sub err nil", 1, true, context.Background())
+		node := tm.create("sub err nil", 1, "", true, context.Background())
 		task := &Task[string]{node: node}
 		sub := task.SubTask("sub nil")
 
@@ -296,7 +296,7 @@ func TestSharedTaskSubErr(t *testing.T) {
 	t.Run("non-nil error fails", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		node := tm.create("sub err non-nil", 1, true, context.Background())
+		node := tm.create("sub err non-nil", 1, "", true, context.Background())
 		task := &Task[string]{node: node}
 		sub := task.SubTask("sub fail")
 
@@ -324,7 +324,7 @@ func TestSharedTaskSetMeta(t *testing.T) {
 
 	_, tm := setupTestServer(t)
 
-	node := tm.create("meta task", 1, true, context.Background())
+	node := tm.create("meta task", 1, "", true, context.Background())
 	task := &Task[meta]{node: node}
 	task.SetMeta(meta{UserName: "alice"})
 
@@ -346,7 +346,7 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 
 	_, tm := setupTestServer(t)
 
-	node := tm.create("parent meta", 1, true, context.Background())
+	node := tm.create("parent meta", 1, "", true, context.Background())
 	task := &Task[meta]{node: node}
 	sub := task.SubTask("sub meta")
 	sub.SetMeta(meta{Step: 7})
@@ -368,7 +368,7 @@ func TestSharedTaskSubSetMeta(t *testing.T) {
 func TestSharedTaskSubSubTask(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("top", 1, true, context.Background())
+	node := tm.create("top", 1, "", true, context.Background())
 	task := &Task[struct{}]{node: node}
 
 	level1 := task.SubTask("level-1")
@@ -404,14 +404,14 @@ func TestSharedTaskSnapshotForConn(t *testing.T) {
 	const ownerID uint64 = 42
 	const otherID uint64 = 99
 
-	node := tm.create("owner task", ownerID, true, context.Background())
+	node := tm.create("owner task", ownerID, "", true, context.Background())
 
-	ownerState := node.sharedSnapshotForConn(ownerID)
+	ownerState := node.sharedSnapshotForConn(ownerID, "")
 	if !ownerState.IsOwner {
 		t.Error("IsOwner should be true for the owning connection")
 	}
 
-	otherState := node.sharedSnapshotForConn(otherID)
+	otherState := node.sharedSnapshotForConn(otherID, "")
 	if otherState.IsOwner {
 		t.Error("IsOwner should be false for a different connection")
 	}
@@ -424,9 +424,9 @@ func TestSharedTaskSnapshotForConn_NonTopLevel(t *testing.T) {
 
 	const ownerID uint64 = 42
 
-	node := tm.create("sub task", ownerID, false, context.Background())
+	node := tm.create("sub task", ownerID, "", false, context.Background())
 
-	ownerState := node.sharedSnapshotForConn(ownerID)
+	ownerState := node.sharedSnapshotForConn(ownerID, "")
 	if ownerState.IsOwner {
 		t.Error("IsOwner should be false for non-top-level tasks")
 	}
@@ -440,10 +440,10 @@ func TestSharedTaskSnapshotAllForConn(t *testing.T) {
 	const conn1 uint64 = 1
 	const conn2 uint64 = 2
 
-	node1 := tm.create("task-conn1", conn1, true, context.Background())
-	node2 := tm.create("task-conn2", conn2, true, context.Background())
+	node1 := tm.create("task-conn1", conn1, "", true, context.Background())
+	node2 := tm.create("task-conn2", conn2, "", true, context.Background())
 
-	states1 := tm.snapshotAllForConn(conn1)
+	states1 := tm.snapshotAllForConn(conn1, "")
 	s1, ok := findTaskByID(states1, node1.id)
 	if !ok {
 		t.Fatal("task for conn1 not found in conn1 snapshot")
@@ -459,7 +459,7 @@ func TestSharedTaskSnapshotAllForConn(t *testing.T) {
 		t.Error("conn2's task should have IsOwner=false for conn1")
 	}
 
-	states2 := tm.snapshotAllForConn(conn2)
+	states2 := tm.snapshotAllForConn(conn2, "")
 	s1InConn2, ok := findTaskByID(states2, node1.id)
 	if !ok {
 		t.Fatal("task for conn1 not found in conn2 snapshot")
@@ -481,7 +481,7 @@ func TestSharedTaskSnapshotAllForConn(t *testing.T) {
 func TestSubTaskWithSharedContext(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("shared root", 1, true, context.Background())
+	node := tm.create("shared root", 1, "", true, context.Background())
 	ctx := withDelivery(context.Background(), node.delivery)
 	ctx = withTaskNode(ctx, node)
 
@@ -521,7 +521,7 @@ func TestSubTaskWithSharedContext(t *testing.T) {
 func TestTaskProgressSharedContext(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("progress root", 1, true, context.Background())
+	node := tm.create("progress root", 1, "", true, context.Background())
 	child := node.createChild("progress node")
 
 	ctx := withDelivery(context.Background(), child.delivery)
@@ -547,7 +547,7 @@ func TestTaskProgressSharedContext(t *testing.T) {
 func TestStepTaskProgressSharedContext(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("step root", 1, true, context.Background())
+	node := tm.create("step root", 1, "", true, context.Background())
 	child := node.createChild("step node")
 	child.mu.Lock()
 	child.current = 2
@@ -573,7 +573,7 @@ func TestStepTaskProgressSharedContext(t *testing.T) {
 func TestSubTaskWithSharedContextNested(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("nested root", 1, true, context.Background())
+	node := tm.create("nested root", 1, "", true, context.Background())
 	ctx := withDelivery(context.Background(), node.delivery)
 	ctx = withTaskNode(ctx, node)
 
@@ -609,7 +609,7 @@ func TestSubTaskWithSharedContextNested(t *testing.T) {
 func TestSubTaskWithSharedContextError(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("error root", 1, true, context.Background())
+	node := tm.create("error root", 1, "", true, context.Background())
 	ctx := withDelivery(context.Background(), node.delivery)
 	ctx = withTaskNode(ctx, node)
 
@@ -700,7 +700,7 @@ func TestSharedSubTaskWithoutConnection(t *testing.T) {
 func TestSharedSubTaskRoutesThroughSharedContext(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("existing shared", 1, true, context.Background())
+	node := tm.create("existing shared", 1, "", true, context.Background())
 	ctx := withDelivery(context.Background(), node.delivery)
 	ctx = withTaskNode(ctx, node)
 
@@ -739,7 +739,7 @@ func TestCancelSharedTaskViaAPI(t *testing.T) {
 	}
 
 	// Known running task owned by the caller should be canceled successfully.
-	node := tm.create("cancel-api", ownerID, true, context.Background())
+	node := tm.create("cancel-api", ownerID, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
@@ -792,7 +792,7 @@ func TestSharedTaskAllocID(t *testing.T) {
 func TestSharedTaskContextCanceledOnClose(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("ctx cancel", 1, true, context.Background())
+	node := tm.create("ctx cancel", 1, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
@@ -815,7 +815,7 @@ func TestSharedTaskContextCanceledOnClose(t *testing.T) {
 func TestSharedTaskWithContext(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("with-ctx", 1, true, context.Background())
+	node := tm.create("with-ctx", 1, "", true, context.Background())
 	task := &Task[struct{}]{node: node}
 
 	derived := task.WithContext(context.Background())
@@ -839,7 +839,7 @@ func TestSharedTaskWithContext(t *testing.T) {
 func TestSharedTaskID(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("id task", 1, true, context.Background())
+	node := tm.create("id task", 1, "", true, context.Background())
 	task := &Task[struct{}]{node: node}
 
 	if task.ID() != node.id {
@@ -852,7 +852,7 @@ func TestSharedTaskID(t *testing.T) {
 func TestSharedTaskSubTaskProgress(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("sub-progress root", 1, true, context.Background())
+	node := tm.create("sub-progress root", 1, "", true, context.Background())
 	task := &Task[struct{}]{node: node}
 	sub := task.SubTask("sub progress")
 
@@ -875,7 +875,7 @@ func TestSharedTaskSubTaskProgress(t *testing.T) {
 func TestSharedTaskFailIdempotent(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("fail-idempotent", 1, true, context.Background())
+	node := tm.create("fail-idempotent", 1, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()
@@ -1068,7 +1068,7 @@ func TestSharedTaskCancelFailsChildren(t *testing.T) {
 	t.Run("direct children", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		root := tm.create("root", 1, true, context.Background())
+		root := tm.create("root", 1, "", true, context.Background())
 		root.mu.Lock()
 		root.status = TaskNodeStatusRunning
 		root.mu.Unlock()
@@ -1117,7 +1117,7 @@ func TestSharedTaskCancelFailsChildren(t *testing.T) {
 	t.Run("nested grandchildren", func(t *testing.T) {
 		_, tm := setupTestServer(t)
 
-		root := tm.create("root", 1, true, context.Background())
+		root := tm.create("root", 1, "", true, context.Background())
 		root.mu.Lock()
 		root.status = TaskNodeStatusRunning
 		root.mu.Unlock()
@@ -1154,7 +1154,7 @@ func TestSharedTaskCancelFailsChildren(t *testing.T) {
 func TestSharedTaskCloseIdempotent(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	node := tm.create("close-idempotent", 1, true, context.Background())
+	node := tm.create("close-idempotent", 1, "", true, context.Background())
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
 	node.mu.Unlock()

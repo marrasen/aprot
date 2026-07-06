@@ -492,6 +492,55 @@ type errorCodeData struct {
 	MethodName string // e.g., "isEndOfFile"
 }
 
+// builtinErrorHelpers are the ApiError type-guard method names the client
+// template emits unconditionally. A custom error whose generated helper name
+// (see NamingPlugin.ErrorMethodName) equals one of these would produce a
+// duplicate method — a TypeScript error — so such a registration is rejected at
+// generation time (validateErrorCodes) and skipped in the emitted data
+// (buildCustomErrorCodes).
+var builtinErrorHelpers = map[string]bool{
+	"isUnauthorized":       true,
+	"isForbidden":          true,
+	"isNotFound":           true,
+	"isInvalidParams":      true,
+	"isValidationFailed":   true,
+	"isCanceled":           true,
+	"isConnectionRejected": true,
+	"isTooManyRequests":    true,
+	"isAuthFailed":         true,
+}
+
+// validateErrorCodes records a generation error for each custom error whose
+// generated helper name collides with a built-in ApiError helper. Called once
+// per generation so the collision is reported a single time.
+func (g *Generator) validateErrorCodes() {
+	for _, ec := range g.registry.ErrorCodes() {
+		method := g.naming().ErrorMethodName(ec.Name)
+		if builtinErrorHelpers[method] {
+			g.recordGenError(fmt.Errorf(
+				"custom error %q generates helper %q, which collides with a built-in ApiError method; register the error under a different name (e.g. %q)",
+				ec.Name, method, ec.Name+"Error"))
+		}
+	}
+}
+
+// buildCustomErrorCodes converts the registry's custom error codes to template
+// data, skipping any whose generated helper name collides with a built-in
+// ApiError method. The collision itself is reported once by validateErrorCodes;
+// skipping here keeps the emitted client valid even if a caller ignores the
+// generation error.
+func (g *Generator) buildCustomErrorCodes() []errorCodeData {
+	var out []errorCodeData
+	for _, ec := range g.registry.ErrorCodes() {
+		method := g.naming().ErrorMethodName(ec.Name)
+		if builtinErrorHelpers[method] {
+			continue
+		}
+		out = append(out, errorCodeData{Name: ec.Name, Code: ec.Code, MethodName: method})
+	}
+	return out
+}
+
 // Generate writes TypeScript client code for all handler groups.
 // Returns a map of filename to content, or writes to OutputDir if set.
 // Generates:
@@ -500,6 +549,7 @@ type errorCodeData struct {
 func (g *Generator) Generate() (map[string]string, error) {
 	results := make(map[string]string)
 	g.genErrors = nil
+	g.validateErrorCodes()
 
 	// Phase 1: Pre-scan all groups to find types shared across 2+ groups.
 	// Shared types go into per-package .ts files; group-specific types stay in handler files.
@@ -679,13 +729,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 		StructName: "Base",
 		FileName:   "client.ts",
 	}
-	for _, ec := range g.registry.ErrorCodes() {
-		baseData.CustomErrorCodes = append(baseData.CustomErrorCodes, errorCodeData{
-			Name:       ec.Name,
-			Code:       ec.Code,
-			MethodName: g.naming().ErrorMethodName(ec.Name),
-		})
-	}
+	baseData.CustomErrorCodes = g.buildCustomErrorCodes()
 
 	// Build base type name set for handler import resolution (RequestOptions, PushHandler, etc.)
 	baseTypeNames := make(map[string]bool)
@@ -895,13 +939,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	}
 
 	// Build custom error codes
-	for _, ec := range g.registry.ErrorCodes() {
-		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
-			Name:       ec.Name,
-			Code:       ec.Code,
-			MethodName: g.naming().ErrorMethodName(ec.Name),
-		})
-	}
+	data.CustomErrorCodes = g.buildCustomErrorCodes()
 
 	// Build enums
 	data.Enums = g.buildEnums()
@@ -1023,13 +1061,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 	}
 
 	// Build custom error codes
-	for _, ec := range g.registry.ErrorCodes() {
-		data.CustomErrorCodes = append(data.CustomErrorCodes, errorCodeData{
-			Name:       ec.Name,
-			Code:       ec.Code,
-			MethodName: g.naming().ErrorMethodName(ec.Name),
-		})
-	}
+	data.CustomErrorCodes = g.buildCustomErrorCodes()
 
 	// Build enums (sorted by name for deterministic output)
 	enumTypes := make([]reflect.Type, 0, len(g.collectedEnums))

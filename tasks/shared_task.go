@@ -58,7 +58,7 @@ func (tm *taskManager) allocID() string {
 	return "st" + itoa(n)
 }
 
-func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx context.Context) *taskNode {
+func (tm *taskManager) create(title string, connID uint64, userID string, topLevel bool, ctx context.Context) *taskNode {
 	taskCtx, cancel := context.WithCancel(ctx)
 
 	id := tm.allocID()
@@ -72,6 +72,7 @@ func (tm *taskManager) create(title string, connID uint64, topLevel bool, ctx co
 		ctx:         taskCtx,
 		manager:     tm,
 		ownerConnID: connID,
+		ownerUserID: userID,
 		topLevel:    topLevel,
 		hooks:       tm.hooks,
 	}
@@ -181,20 +182,6 @@ func (tm *taskManager) cancelTask(id string) bool {
 	return true
 }
 
-// cancelTaskOwnedBy cancels a task only if it is owned by connID. It reports
-// whether the task was found and canceled. ownerConnID is set once at creation
-// and never mutated, so it is safe to read without the task lock.
-func (tm *taskManager) cancelTaskOwnedBy(id string, connID uint64) bool {
-	tm.mu.Lock()
-	node, ok := tm.tasks[id]
-	tm.mu.Unlock()
-	if !ok || node.ownerConnID != connID {
-		return false
-	}
-	node.failTop("canceled")
-	return true
-}
-
 func (tm *taskManager) snapshotAll() []SharedTaskState {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
@@ -205,12 +192,12 @@ func (tm *taskManager) snapshotAll() []SharedTaskState {
 	return states
 }
 
-func (tm *taskManager) snapshotAllForConn(connID uint64) []SharedTaskState {
+func (tm *taskManager) snapshotAllForConn(connID uint64, userID string) []SharedTaskState {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	states := make([]SharedTaskState, 0, len(tm.tasks))
 	for _, node := range tm.tasks {
-		states = append(states, node.sharedSnapshotForConn(connID))
+		states = append(states, node.sharedSnapshotForConn(connID, userID))
 	}
 	return states
 }
@@ -218,7 +205,7 @@ func (tm *taskManager) snapshotAllForConn(connID uint64) []SharedTaskState {
 // broadcastNow sends the full task state to all clients immediately.
 func (tm *taskManager) broadcastNow() {
 	tm.server.ForEachConn(func(conn *aprot.Conn) {
-		states := tm.snapshotAllForConn(conn.ID())
+		states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
 		_ = conn.Push(TaskStateEvent{Tasks: states})
 	})
 }
