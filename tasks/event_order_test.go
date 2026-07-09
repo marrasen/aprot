@@ -50,7 +50,9 @@ func setupEventOrderServer(t *testing.T) *httptest.Server {
 	return ts
 }
 
-// connectEventOrderWS opens a WS connection and discards the initial config message.
+// connectEventOrderWS opens a WS connection and discards the initial config
+// message plus the empty on-connect TaskStateEvent snapshot, so tests observe
+// only the pushes triggered by their own requests.
 func connectEventOrderWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
 	t.Helper()
 	url := "ws" + strings.TrimPrefix(ts.URL, "http")
@@ -63,6 +65,23 @@ func connectEventOrderWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
 	_, _, err = ws.ReadMessage()
 	if err != nil {
 		t.Fatalf("Failed to read config message: %v", err)
+	}
+	// Discard the on-connect TaskStateEvent (empty task list) so it is not
+	// mistaken for the first lifecycle snapshot.
+	ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Failed to read on-connect snapshot: %v", err)
+	}
+	var base struct {
+		Type  string `json:"type"`
+		Event string `json:"event"`
+	}
+	if err := json.Unmarshal(data, &base); err != nil {
+		t.Fatalf("Unmarshal on-connect message failed: %v", err)
+	}
+	if base.Type != "push" || base.Event != "TaskStateEvent" {
+		t.Fatalf("expected on-connect TaskStateEvent, got type=%q event=%q", base.Type, base.Event)
 	}
 	return ws
 }

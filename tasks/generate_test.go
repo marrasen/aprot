@@ -159,7 +159,7 @@ func TestGenerateWithTasksReactMultiFile(t *testing.T) {
 		label string
 		want  string
 	}{
-		{"React imports", "import { useState, useEffect, useCallback } from 'react'"},
+		{"React imports", "import { useState, useEffect, useCallback, useSyncExternalStore } from 'react'"},
 		{"useApiClient import", "import { useApiClient } from './client'"},
 		{"cancelSharedTask function", "export function cancelSharedTask"},
 		{"useSharedTasks hook", "export function useSharedTasks"},

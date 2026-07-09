@@ -74,6 +74,15 @@ export function subscribeCancelTask(client: ApiClient, taskId: string, callback:
     return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError, options);
 }
 
+
+export function listTasks(client: ApiClient, options?: RequestOptions): Promise<SharedTaskState[]> {
+    return client.request<SharedTaskState[]>('tasksHandler.ListTasks', [], options);
+}
+
+export function subscribeListTasks(client: ApiClient, callback: (data: SharedTaskState[]) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<SharedTaskState[]>('tasksHandler.ListTasks', [], callback, onError, options);
+}
+
 export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {
     return client.onPush<TaskStateEvent>('TaskStateEvent', handler);
 }

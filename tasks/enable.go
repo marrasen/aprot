@@ -8,10 +8,26 @@ import (
 )
 
 // tasksHandler is the handler struct for client-facing task operations.
-type tasksHandler struct{}
+type tasksHandler struct {
+	// tm is assigned on server init; ListTasks answers from the live manager.
+	tm *taskManager
+}
 
 func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
 	return CancelSharedTask(ctx, taskId)
+}
+
+// ListTasks returns the current shared-task snapshot for the calling
+// connection (IsOwner is evaluated against the caller). Clients hydrate from
+// it on mount and reconnect: full TaskStateEvent broadcasts fire only on
+// lifecycle changes, so a consumer arriving mid-task would otherwise see
+// nothing until the next lifecycle event.
+func (h *tasksHandler) ListTasks(ctx context.Context) ([]SharedTaskState, error) {
+	conn := aprot.Connection(ctx)
+	if h.tm == nil || conn == nil {
+		return []SharedTaskState{}, nil
+	}
+	return h.tm.snapshotAllForConn(conn.ID(), conn.UserID()), nil
 }
 
 // Enable registers the shared task system with the registry. Pass options
@@ -32,12 +48,13 @@ func Enable(r *aprot.Registry, opts ...EnableOption) {
 	})
 	r.OnServerInit(func(s *aprot.Server) {
 		tm := newTaskManager(s, o)
+		handler.tm = tm
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+			// Push even an empty list: a reconnecting client whose task
+			// finished while it was away must clear its stale state.
 			states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
-			if len(states) > 0 {
-				_ = conn.Push(TaskStateEvent{Tasks: states})
-			}
+			_ = conn.Push(TaskStateEvent{Tasks: states})
 			return nil
 		})
 		s.OnStop(func() { tm.stop() })
@@ -63,12 +80,13 @@ func EnableWithMeta[M any](r *aprot.Registry, opts ...EnableOption) {
 	})
 	r.OnServerInit(func(s *aprot.Server) {
 		tm := newTaskManager(s, o)
+		handler.tm = tm
 		s.Use(taskMiddleware(tm))
 		s.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+			// Push even an empty list: a reconnecting client whose task
+			// finished while it was away must clear its stale state.
 			states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
-			if len(states) > 0 {
-				_ = conn.Push(TaskStateEvent{Tasks: states})
-			}
+			_ = conn.Push(TaskStateEvent{Tasks: states})
 			return nil
 		})
 		s.OnStop(func() { tm.stop() })
