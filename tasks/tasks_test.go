@@ -112,7 +112,7 @@ func TestAppendTaskConvenienceCode_MultiFileReact(t *testing.T) {
 	if !ok {
 		t.Fatal("tasks.ts should be created in multi-file mode")
 	}
-	if !strings.Contains(tasksCode, "import { useState, useEffect, useCallback } from 'react'") {
+	if !strings.Contains(tasksCode, "import { useState, useEffect, useCallback, useSyncExternalStore } from 'react'") {
 		t.Error("missing React imports")
 	}
 	if !strings.Contains(tasksCode, "import type { ApiClient, RequestOptions } from './client'") {

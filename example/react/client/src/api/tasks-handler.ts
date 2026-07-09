@@ -84,6 +84,19 @@ export function subscribeCancelTask(client: ApiClient, taskId: string, callback:
     return client.subscribe<void>('tasksHandler.CancelTask', [taskId], callback, onError, options);
 }
 
+
+export function listTasks(client: ApiClient, options?: RequestOptions): Promise<SharedTaskState[]> {
+    return client.request<SharedTaskState[]>('tasksHandler.ListTasks', [], options);
+}
+// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+listTasks.method = 'tasksHandler.ListTasks' as const;
+
+export function subscribeListTasks(client: ApiClient, callback: (data: SharedTaskState[]) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<SharedTaskState[]>('tasksHandler.ListTasks', [], callback, onError, options);
+}
+
 export function onTaskStateEvent(client: ApiClient, handler: PushHandler<TaskStateEvent>): () => void {
     return client.onPush<TaskStateEvent>('TaskStateEvent', handler);
 }
@@ -119,6 +132,20 @@ export function useCancelTask(taskId: string, options?: UseQueryOptions<void>): 
         [],
     );
     return useQuery(wrappedFn, { ...options, params: [taskId], _subscribe: { method: 'tasksHandler.CancelTask', params: [taskId] } });
+}
+
+/**
+ * Subscribes to `tasksHandler.ListTasks` and re-renders automatically when the
+ * server triggers a refresh. The subscription is cleaned up on unmount.
+ * See {@link UseQueryResult} for return value details — including the
+ * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
+ */
+export function useListTasks(options?: UseQueryOptions<SharedTaskState[]>): UseQueryResult<SharedTaskState[]> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal) => listTasks(client, { signal }),
+        [],
+    );
+    return useQuery(wrappedFn, { ...options, _subscribe: { method: 'tasksHandler.ListTasks', params: [] } });
 }
 
 export function useTaskStateEvent(options?: { maxEvents?: number }): UsePushResult<TaskStateEvent> {

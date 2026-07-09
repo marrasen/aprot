@@ -10,6 +10,37 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-07-09
+
+### Added
+
+- Pluggable shared-task cancel authorization: `tasks.WithCancelAuthorizer(fn)`
+  replaces the built-in owner-only policy, receiving a `TaskCancelInfo`
+  (`{ID, Title, OwnerConnID, OwnerUserID}`) and returning nil to allow or
+  `aprot.ErrForbidden(...)` to deny. The default policy is keyed by connection
+  ID, so a client silently loses the right to cancel its own task across a
+  reconnect; an authorizer comparing `aprot.Connection(ctx).UserID()` against
+  `OwnerUserID` survives one.
+- `ListTasks` handler, registered by `tasks.Enable` / `tasks.EnableWithMeta`,
+  returning the current shared-task snapshot with `IsOwner` evaluated against
+  the calling connection.
+
+### Fixed
+
+- Shared-task state was empty for any client that mounted while a task was
+  already running. `TaskStateEvent` is broadcast only at lifecycle boundaries
+  (create/finish), so a late-joining consumer saw nothing until the next one.
+  The generated React `useSharedTasks` hook now seeds itself from `ListTasks`
+  on mount and on every reconnect, guarding against an in-flight seed
+  clobbering a fresher snapshot.
+- Shared-task state was also kept per hook instance, so a second `useSharedTasks`
+  consumer mounting later started empty. State now lives in one store per
+  client, attached once and shared by every hook instance via
+  `useSyncExternalStore`.
+- A reconnecting client whose task finished while it was away kept showing the
+  stale task: the on-connect `TaskStateEvent` push was skipped when the task
+  list was empty. It now fires unconditionally so the client clears its state.
+
 ## [0.47.1] - 2026-07-06
 
 ### Fixed
@@ -204,7 +235,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.47.1...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/marrasen/aprot/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/marrasen/aprot/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/marrasen/aprot/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/marrasen/aprot/compare/v0.45.0...v0.46.0

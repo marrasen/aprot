@@ -23,8 +23,8 @@
 //	tasks.Enable(registry)                   // no typed metadata
 //	tasks.EnableWithMeta[MyMeta](registry)   // with typed metadata
 //
-// This registers the CancelTask handler, push event types, and the
-// middleware that wires task delivery into every request context.
+// This registers the CancelTask and ListTasks handlers, push event types,
+// and the middleware that wires task delivery into every request context.
 //
 // # Task middleware
 //
@@ -159,13 +159,36 @@
 //   - Request-scoped: onTaskProgress and onOutput callbacks in
 //     RequestOptions
 //
+// TaskStateEvent is broadcast only at lifecycle boundaries, so a client that
+// mounts while a task is already running would see nothing until the next
+// one. useSharedTasks therefore seeds itself from the ListTasks RPC on mount
+// and on every reconnect, and keeps its state in one store per client rather
+// than per hook instance. The server likewise pushes a TaskStateEvent on
+// connect even when no tasks exist, so a client whose task finished while it
+// was disconnected clears its stale state.
+//
 // # Cancellation
 //
 // Clients can cancel shared tasks via the generated CancelTask handler.
-// On the server side, use [CancelSharedTask] directly. Cancellation is
-// owner-scoped: only the connection that started a task may cancel it; any
-// other caller is refused with CodeForbidden. (Internal callers that already
-// hold the task can still cancel it directly via the task handle.)
+// On the server side, use [CancelSharedTask] directly. By default
+// cancellation is owner-scoped: only the connection that started a task may
+// cancel it; any other caller is refused with CodeForbidden. (Internal
+// callers that already hold the task can still cancel it directly via the
+// task handle.)
+//
+// Because that default is keyed by connection ID, a client loses the right to
+// cancel its own task across a reconnect. Pass [WithCancelAuthorizer] to
+// install any other policy — "same user, surviving reconnect", say — from a
+// [TaskCancelInfo] carrying the owning connection and user:
+//
+//	tasks.Enable(registry, tasks.WithCancelAuthorizer(
+//	    func(ctx context.Context, t tasks.TaskCancelInfo) error {
+//	        if aprot.Connection(ctx).UserID() != t.OwnerUserID {
+//	            return aprot.ErrForbidden("not the task owner")
+//	        }
+//	        return nil
+//	    },
+//	))
 //
 // # REST and other transports without a client channel
 //
