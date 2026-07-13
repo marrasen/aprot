@@ -1743,7 +1743,7 @@ func TestGenerateEmbeddedPointerStruct(t *testing.T) {
 // their types must not be collected either. An unexported `mu sync.Mutex`
 // previously emitted empty Mutex interfaces (sync.Mutex plus the
 // internal/sync.Mutex it embeds — both land in sync.ts) and noCopy.
-type unexportedHiddenState struct {
+type unexportedHiddenState struct { //nolint:unused // referenced only via reflection through unexported fields
 	N int `json:"N"`
 }
 
