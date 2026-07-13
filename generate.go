@@ -1510,9 +1510,16 @@ func (g *Generator) collectType(t reflect.Type) {
 	}
 	g.types[t] = t.Name()
 
-	// Recursively collect field types, flattening embedded structs
+	// Recursively collect field types, flattening embedded structs.
+	// Mirror collectInterfaceFields: unexported and json:"-" fields never
+	// appear in the emitted interfaces, so their types must not be collected
+	// either — an unexported `mu sync.Mutex` field would otherwise emit empty
+	// Mutex/noCopy interfaces into a shared sync.ts.
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if !field.IsExported() || shouldSkipField(field) {
+			continue
+		}
 		if field.Anonymous {
 			ft := field.Type
 			if ft.Kind() == reflect.Ptr {
@@ -1522,7 +1529,11 @@ func (g *Generator) collectType(t reflect.Type) {
 				// Don't register as separate interface — fields are flattened.
 				// But recurse into its fields to collect nested types.
 				for j := 0; j < ft.NumField(); j++ {
-					g.collectNestedType(ft.Field(j).Type)
+					ef := ft.Field(j)
+					if !ef.IsExported() || shouldSkipField(ef) {
+						continue
+					}
+					g.collectNestedType(ef.Type)
 				}
 			}
 			continue
