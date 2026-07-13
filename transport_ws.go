@@ -167,6 +167,12 @@ func (t *wsTransport) writePump() {
 	for {
 		select {
 		case <-t.done:
+			// Frames enqueued before Close happened-before done was closed,
+			// so drain them onto the wire — a send-then-close caller (e.g.
+			// handleAuth rejecting a token) relies on the final frame being
+			// delivered. Without this, the select above may observe done
+			// first and drop the queued frame.
+			t.drainSend()
 			return
 		case <-pingC:
 			if err := t.writeMessage(websocket.PingMessage, nil); err != nil {
@@ -176,6 +182,22 @@ func (t *wsTransport) writePump() {
 			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
 				return
 			}
+		}
+	}
+}
+
+// drainSend writes the frames still queued at shutdown. It stops at the first
+// write error or when the queue is empty; each write is bounded by
+// WriteTimeout, so a dead peer cannot stall teardown.
+func (t *wsTransport) drainSend() {
+	for {
+		select {
+		case frame := <-t.send:
+			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
+				return
+			}
+		default:
+			return
 		}
 	}
 }
