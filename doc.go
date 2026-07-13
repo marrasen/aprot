@@ -759,6 +759,26 @@
 // or the raw async function) — only queries fit the Suspense paradigm
 // cleanly.
 //
+// # Keep Previous Data (React)
+//
+// Query hooks default to `keepPreviousData: true`: when a param change
+// starts a params-keyed reload, the hook keeps returning the previous
+// params' data instead of flashing an empty loading state (opt out per
+// hook with `{ keepPreviousData: false }`). The pure selector behind the
+// option, `selectWithPreviousData`, is exported from the generated client
+// along with its `SubscriptionSnapshot<T>` type, so hand-written stores
+// that call the generated RPC functions imperatively can reuse the same
+// semantics instead of re-deriving them:
+//
+//	import { selectWithPreviousData, type SubscriptionSnapshot } from './api/client'
+//
+//	const prev: { current: SubscriptionSnapshot<Draft> | null } = { current: null }
+//	const effective = selectWithPreviousData(prev, { data, error, isLoading })
+//
+// The returned snapshot carries the previous `data` through the reload's
+// null gap but always the current `error` and `isLoading` flags — kept
+// data never masks the loading or error state.
+//
 // # Context Helpers
 //
 // Several functions extract request-scoped values from context:

@@ -352,6 +352,19 @@ function App() {
 
 A single generic hook handles every handler — no per-method Suspense hook is generated. The hook opens a server subscription on first read (using the same `TriggerRefresh` machinery as `useQuery`), suspends until the first response arrives, then replaces the cached promise on each subsequent push so live updates flow without re-suspending. Errors propagate to the nearest error boundary. Requires React 19+.
 
+**Keeping previous data across param changes** — query hooks default to `keepPreviousData: true`: when a param change starts a reload, the hook keeps showing the previous params' data instead of flashing an empty loading state (opt out per hook with `{ keepPreviousData: false }`). The selector behind it is exported for hand-written stores that call the generated RPC functions imperatively — a state store outside React that re-derives this pattern tends to get it subtly wrong:
+
+```typescript
+import { selectWithPreviousData, type SubscriptionSnapshot } from './api/client';
+
+const prev: { current: SubscriptionSnapshot<Draft> | null } = { current: null };
+
+// On each store update, derive what the UI should show:
+const effective = selectWithPreviousData(prev, { data, error, isLoading });
+```
+
+The returned snapshot carries the previous `data` through the reload's null gap but always the **current** `error` and `isLoading` flags — kept data never masks the loading or error state, which is the invariant worth centralizing.
+
 **With auth tokens** (dynamic URL for automatic token refresh on reconnect):
 
 ```typescript

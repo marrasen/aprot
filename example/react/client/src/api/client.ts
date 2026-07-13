@@ -1907,7 +1907,7 @@ export function setQueryCacheEnabled(enabled: boolean): void {
     queryCacheEnabled = enabled;
 }
 
-interface SubscriptionSnapshot<T = unknown> {
+export interface SubscriptionSnapshot<T = unknown> {
     data: T | null;
     error: Error | null;
     isLoading: boolean;
@@ -2053,7 +2053,7 @@ function subscribeCached<T>(
  * aprot server. The only mutation is to the passed-in ref, which represents
  * per-hook-instance state.
  */
-function selectWithPreviousData<T>(
+export function selectWithPreviousData<T>(
     previousRef: { current: SubscriptionSnapshot<T> | null },
     snapshot: SubscriptionSnapshot<T>,
 ): SubscriptionSnapshot<T> {

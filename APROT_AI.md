@@ -496,6 +496,19 @@ const isLoading = useIsLoading();               // any in-flight request anywher
 import { useQuery, useStream, usePushEvent } from './api/client';
 ```
 
+### keepPreviousData outside hooks — `selectWithPreviousData`
+
+`useQuery` defaults to `keepPreviousData: true` (opt out per hook with `{ keepPreviousData: false }`): on a params-keyed reload the hook keeps surfacing the previous data instead of flashing empty. The pure selector behind it is exported for hand-written stores (e.g. zustand outside React) that call the generated RPC functions imperatively:
+
+```ts
+import { selectWithPreviousData, type SubscriptionSnapshot } from './api/client';
+
+const prev: { current: SubscriptionSnapshot<Draft> | null } = { current: null };
+const effective = selectWithPreviousData(prev, { data, error, isLoading });
+```
+
+Invariant it centralizes: the returned snapshot carries the previous `data` through the null gap but the **current** `error`/`isLoading` flags — kept data never masks loading or error state. Don't re-derive this in store code; import it.
+
 ## Vanilla Output
 
 Per-handler standalone functions plus `subscribe`/`unsubscribe` helpers for live data:
