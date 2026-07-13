@@ -10,6 +10,15 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Fixed
+
+- WebSocket frames enqueued just before a server-side close could be dropped:
+  `writePump` selects over the shutdown signal and the send queue, and when
+  both were ready it sometimes exited without flushing. In practice a client
+  rejected by the auth hook (or the auth timeout) could see an abnormal close
+  (1006) without ever receiving its `auth_error` frame. The pump now drains
+  frames queued before `Close` onto the wire during teardown.
+
 ## [0.48.0] - 2026-07-09
 
 ### Added
