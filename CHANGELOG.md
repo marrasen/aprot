@@ -10,6 +10,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-07-13
+
+### Added
+
+- The generated React client now exports `selectWithPreviousData` and its
+  `SubscriptionSnapshot<T>` type — the pure selector behind `useQuery`'s
+  `keepPreviousData` option — so hand-written stores that call the generated
+  RPC functions imperatively can reuse it instead of re-deriving the pattern.
+  The invariant it centralizes: the returned snapshot carries the previous
+  `data` through a params-keyed reload's null gap but always the current
+  `error`/`isLoading` flags, so kept data never masks loading or error state
+  (#254).
+
 ### Fixed
 
 - WebSocket frames enqueued just before a server-side close could be dropped:
@@ -17,7 +30,7 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   both were ready it sometimes exited without flushing. In practice a client
   rejected by the auth hook (or the auth timeout) could see an abnormal close
   (1006) without ever receiving its `auth_error` frame. The pump now drains
-  frames queued before `Close` onto the wire during teardown.
+  frames queued before `Close` onto the wire during teardown (#257).
 
 ## [0.48.0] - 2026-07-09
 
@@ -244,7 +257,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/marrasen/aprot/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/marrasen/aprot/compare/v0.47.1...v0.48.0
 [0.47.1]: https://github.com/marrasen/aprot/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/marrasen/aprot/compare/v0.46.0...v0.47.0
