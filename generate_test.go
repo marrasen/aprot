@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1736,6 +1737,79 @@ func TestGenerateEmbeddedPointerStruct(t *testing.T) {
 	}
 
 	t.Logf("Generated TypeScript (pointer-embedded struct):\n%s", output)
+}
+
+// Unexported and json:"-" fields never appear in the emitted interfaces, so
+// their types must not be collected either. An unexported `mu sync.Mutex`
+// previously emitted empty Mutex interfaces (sync.Mutex plus the
+// internal/sync.Mutex it embeds — both land in sync.ts) and noCopy.
+type unexportedHiddenState struct { //nolint:unused // referenced only via reflection through unexported fields
+	N int `json:"N"`
+}
+
+type UnexportedSkippedState struct {
+	X int `json:"X"`
+}
+
+type UnexportedFieldResponse struct {
+	mu     sync.Mutex             //nolint:unused // exercises unexported-field collection
+	hidden unexportedHiddenState  //nolint:unused // exercises unexported-field collection
+	Ignore UnexportedSkippedState `json:"-"`
+	Value  string                 `json:"Value"`
+}
+
+type UnexportedEmbedded struct {
+	inner unexportedHiddenState //nolint:unused // exercises unexported-field collection
+	Label string                `json:"Label"`
+}
+
+type UnexportedFieldOuter struct {
+	UnexportedEmbedded
+	Extra string `json:"Extra"`
+}
+
+type UnexportedFieldHandlers struct{}
+
+func (h *UnexportedFieldHandlers) Get(ctx context.Context, req *UnexportedFieldOuter) (*UnexportedFieldResponse, error) {
+	return &UnexportedFieldResponse{}, nil
+}
+
+func TestGenerateUnexportedFieldTypesNotCollected(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&UnexportedFieldHandlers{})
+
+	gen := NewGenerator(registry)
+
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	output := buf.String()
+
+	if strings.Contains(output, "interface Mutex") {
+		t.Error("sync.Mutex from an unexported field should not be emitted")
+	}
+	if strings.Contains(output, "noCopy") {
+		t.Error("sync.noCopy should not be emitted")
+	}
+	if strings.Contains(output, "unexportedHiddenState") {
+		t.Error("type of an unexported field should not be emitted")
+	}
+	if strings.Contains(output, "UnexportedSkippedState") {
+		t.Error("type of a json:\"-\" field should not be emitted")
+	}
+
+	// The exported fields must still generate normally.
+	if !strings.Contains(output, "Value: string") {
+		t.Error("Expected 'Value: string' field")
+	}
+	if !strings.Contains(output, "Label: string") {
+		t.Error("Expected flattened 'Label: string' from embedded struct")
+	}
+	if !strings.Contains(output, "Extra: string") {
+		t.Error("Expected 'Extra: string' field")
+	}
 }
 
 // Invalid-identifier field name: a json tag like "my-field" is not a valid JS
