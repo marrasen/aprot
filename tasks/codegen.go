@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -19,20 +20,16 @@ var taskTemplates = template.Must(
 
 // taskTemplateData holds all data needed for task template rendering.
 type taskTemplateData struct {
-	IsMultiFile    bool
-	IsReact        bool
-	MetaInterfaces []metaInterfaceData
+	IsMultiFile   bool
+	IsReact       bool
+	MetaReExports []metaReExportData
 }
 
-type metaInterfaceData struct {
-	Name   string
-	Fields []metaFieldData
-}
-
-type metaFieldData struct {
-	Name     string
-	Type     string
-	Optional bool
+// metaReExportData is one `export type { Names } from 'Module';` line in the
+// generated tasks.ts.
+type metaReExportData struct {
+	Module string
+	Names  string // comma-joined interface names declared by Module
 }
 
 // appendTaskConvenienceCode generates convenience TypeScript code for the task system.
@@ -45,8 +42,8 @@ func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode,
 		IsReact:     mode == aprot.OutputReact,
 	}
 
-	if metaType != nil {
-		data.MetaInterfaces = buildMetaInterfaces(metaType)
+	if metaType != nil && isMultiFile {
+		data.MetaReExports = buildMetaReExports(results, metaType)
 	}
 
 	var buf strings.Builder
@@ -63,14 +60,65 @@ func appendTaskConvenienceCode(results map[string]string, mode aprot.OutputMode,
 	}
 }
 
+// buildMetaReExports locates the meta interfaces among the already-generated
+// files and groups them by declaring module. The main generator declares them
+// where the meta fields live — tasks-handler.ts, or a shared per-package file
+// when the meta type is also used by other handler groups. tasks.ts
+// re-exports the names so consumer imports from './tasks' — where the
+// interfaces lived before they were wired into the handler file — keep
+// resolving. In single-file mode everything shares one module, so no
+// re-export is needed.
+func buildMetaReExports(results map[string]string, metaType reflect.Type) []metaReExportData {
+	names := metaTypeNames(metaType)
+	if len(names) == 0 {
+		return nil
+	}
+
+	files := make([]string, 0, len(results))
+	for f := range results {
+		if strings.HasSuffix(f, ".ts") {
+			files = append(files, f)
+		}
+	}
+	sort.Strings(files)
+
+	byModule := make(map[string][]string)
+	var moduleOrder []string
+	for _, name := range names {
+		for _, f := range files {
+			if !strings.Contains(results[f], "export interface "+name+" {") {
+				continue
+			}
+			module := "./" + strings.TrimSuffix(f, ".ts")
+			if _, ok := byModule[module]; !ok {
+				moduleOrder = append(moduleOrder, module)
+			}
+			byModule[module] = append(byModule[module], name)
+			break
+		}
+	}
+
+	reExports := make([]metaReExportData, 0, len(moduleOrder))
+	for _, module := range moduleOrder {
+		reExports = append(reExports, metaReExportData{
+			Module: module,
+			Names:  strings.Join(byModule[module], ", "),
+		})
+	}
+	return reExports
+}
+
 // hasMarshalOverride returns true if t has a custom JSON/text marshaler that
 // overrides the default struct serialization.
 func hasMarshalOverride(t reflect.Type) bool {
 	return aprot.InferTypeFromMarshal(t) != nil || aprot.SQLNullTSType(t, goTypeToTS) != ""
 }
 
-// buildMetaInterfaces converts a meta type to template data via reflection.
-func buildMetaInterfaces(t reflect.Type) []metaInterfaceData {
+// metaTypeNames returns the TS interface names the main generator declares
+// for meta type t: nested struct names first, then t itself. Empty when t is
+// not a struct (a map or slice meta produces an inline TS type, not a named
+// interface).
+func metaTypeNames(t reflect.Type) []string {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
@@ -81,55 +129,11 @@ func buildMetaInterfaces(t reflect.Type) []metaInterfaceData {
 	var nested []reflect.Type
 	collectNestedStructs(t, &nested, map[reflect.Type]bool{})
 
-	var result []metaInterfaceData
-
+	names := make([]string, 0, len(nested)+1)
 	for _, nt := range nested {
-		result = append(result, buildInterfaceData(nt))
+		names = append(names, nt.Name())
 	}
-
-	result = append(result, buildInterfaceData(t))
-
-	return result
-}
-
-func buildInterfaceData(t reflect.Type) metaInterfaceData {
-	iface := metaInterfaceData{Name: t.Name()}
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		tag := field.Tag.Get("json")
-		if tag == "-" {
-			continue
-		}
-
-		name := field.Name
-		optional := false
-		if tag != "" {
-			parts := strings.Split(tag, ",")
-			if parts[0] != "" {
-				name = parts[0]
-			}
-			for _, opt := range parts[1:] {
-				if opt == "omitempty" {
-					optional = true
-				}
-			}
-		}
-		if field.Type.Kind() == reflect.Ptr {
-			optional = true
-		}
-
-		iface.Fields = append(iface.Fields, metaFieldData{
-			Name:     name,
-			Type:     goTypeToTS(field.Type),
-			Optional: optional,
-		})
-	}
-
-	return iface
+	return append(names, t.Name())
 }
 
 // underlyingStructType peels pointer, slice, array, and map-value wrappers off
@@ -169,6 +173,9 @@ func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[refle
 	}
 }
 
+// goTypeToTS maps a Go type to its TypeScript spelling. Meta interfaces are
+// declared by the main generator (via Registry.OverrideFieldType), so this is
+// only used as the kind resolver for SQL-null detection in hasMarshalOverride.
 func goTypeToTS(t reflect.Type) string {
 	if t.Kind() == reflect.Ptr {
 		return goTypeToTS(t.Elem())
@@ -239,12 +246,12 @@ func goTypeToTS(t reflect.Type) string {
 		return fmt.Sprintf("Record<%s, %s>", goTypeToTS(t.Key()), goTypeToTS(t.Elem()))
 	case reflect.Struct:
 		if t.PkgPath() == "" {
-			return "any"
+			return "unknown"
 		}
 		return t.Name()
 	case reflect.Interface:
-		return "any"
+		return "unknown"
 	default:
-		return "any"
+		return "unknown"
 	}
 }

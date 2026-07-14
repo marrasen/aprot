@@ -152,7 +152,7 @@ func fieldToZod(f fieldData, knownSchemas map[string]bool) string {
 // zodBaseType returns the base Zod type for a Go kind. For slice, map, and
 // array kinds, elemGoKind/elemTypeName provide the element's type info so the
 // array, record, or tuple can substitute the element schema (#169) instead of
-// falling through to z.any(). elemEnum is non-nil when the element is a
+// falling through to z.unknown(). elemEnum is non-nil when the element is a
 // registered enum; in that case zodElemExpr emits z.enum(...) / z.union(...)
 // for the element (#176). arrayLen is the fixed length of a [N]T field
 // (#240): below the tuple cap it becomes z.tuple([...]) with N element
@@ -183,13 +183,13 @@ func zodBaseType(goKind string, tsType string, elemGoKind string, elemTypeName s
 	case "map":
 		return "record(z.string(), " + zodElemExpr(elemGoKind, elemTypeName, elemEnum, elemLazy, knownSchemas) + ")"
 	default:
-		// Struct or unknown — use any()
-		return "any()"
+		// Struct or unknown — use unknown()
+		return "unknown()"
 	}
 }
 
 // zodElemExpr builds a Zod expression for a slice or map element. Returns
-// "z.any()" when the element type is unknown or unsupported (recursive types,
+// "z.unknown()" when the element type is unknown or unsupported (recursive types,
 // anonymous structs, slices of slices) so callers can wrap it directly.
 // When elemEnum is non-nil, the element is a registered enum and is emitted
 // as z.enum([...]) / z.union([...]) (#176).
@@ -215,9 +215,9 @@ func zodElemExpr(elemGoKind string, elemTypeName string, elemEnum *EnumInfo, ele
 			}
 			return elemTypeName + "Schema"
 		}
-		return "z.any()"
+		return "z.unknown()"
 	default:
-		return "z.any()"
+		return "z.unknown()"
 	}
 }
 
@@ -451,7 +451,7 @@ func depReaches(deps map[string][]string, from, to string) bool {
 // topoSortSchemas reorders schemas so that every schema appears after its
 // dependencies. Uses iterative DFS with three-color marking; on cycles, the
 // affected schemas are emitted in their original order (the runtime
-// reference still works because cycles can only happen via z.any(), which
+// reference still works because cycles can only happen via z.unknown(), which
 // doesn't dereference the cyclic name).
 func topoSortSchemas(schemas []zodSchemaData, deps map[string][]string) []zodSchemaData {
 	const (

@@ -26,6 +26,13 @@
 // This registers the CancelTask and ListTasks handlers, push event types,
 // and the middleware that wires task delivery into every request context.
 //
+// With [EnableWithMeta], the generated client types the meta field on
+// TaskNode and SharedTaskState as MyMeta's TypeScript interface (declared
+// alongside the task types, and re-exported from tasks.ts) instead of
+// `unknown`, so client code can read task.meta.myField without casting.
+// With plain [Enable] the meta fields are typed `unknown`. The choice is
+// codegen-only — the wire format is identical either way.
+//
 // # Task middleware
 //
 // Pass [WithTaskMiddleware] to wrap every task with custom logic — logging,

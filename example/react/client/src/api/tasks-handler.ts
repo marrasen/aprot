@@ -44,9 +44,13 @@ export interface SharedTaskState {
     error?: string;
     current?: number;
     total?: number;
-    meta?: any;
+    meta?: TaskMeta;
     children?: TaskNode[];
     isOwner: boolean;
+}
+
+export interface TaskMeta {
+    userName?: string;
 }
 
 export interface TaskNode {
@@ -56,7 +60,7 @@ export interface TaskNode {
     error?: string;
     current?: number;
     total?: number;
-    meta?: any;
+    meta?: TaskMeta;
     children?: TaskNode[];
 }
 

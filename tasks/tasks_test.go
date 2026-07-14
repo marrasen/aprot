@@ -146,9 +146,12 @@ type testMeta struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// Single-file mode: the main generator declares the meta interfaces in
+// client.ts itself, so the convenience code must not add anything meta-related
+// (a duplicate declaration would not compile).
 func TestAppendTaskConvenienceCode_WithMeta(t *testing.T) {
 	results := map[string]string{
-		"client.ts": "// base\n",
+		"client.ts": "// base\nexport interface testMeta {\n    userName?: string;\n}\n",
 	}
 
 	metaType := reflect.TypeFor[testMeta]()
@@ -156,14 +159,52 @@ func TestAppendTaskConvenienceCode_WithMeta(t *testing.T) {
 
 	code := results["client.ts"]
 
-	if !strings.Contains(code, "export interface testMeta") {
-		t.Error("missing meta interface")
+	if strings.Count(code, "export interface testMeta") != 1 {
+		t.Error("single-file mode must not redeclare the meta interface")
 	}
-	if !strings.Contains(code, "userName?: string") {
-		t.Error("missing userName field")
+	if strings.Contains(code, "export type { testMeta }") {
+		t.Error("single-file mode needs no meta re-export")
 	}
-	if !strings.Contains(code, "error?: string") {
-		t.Error("missing error field")
+}
+
+// Multi-file mode: the main generator declares the meta interfaces in
+// tasks-handler.ts; tasks.ts re-exports them so imports from './tasks' keep
+// resolving.
+func TestAppendTaskConvenienceCode_WithMetaMultiFile(t *testing.T) {
+	results := map[string]string{
+		"client.ts":        "// base\n",
+		"tasks-handler.ts": "// handler\nexport interface testMeta {\n    userName?: string;\n}\n",
+	}
+
+	metaType := reflect.TypeFor[testMeta]()
+	appendTaskConvenienceCode(results, aprot.OutputVanilla, metaType)
+
+	code := results["tasks.ts"]
+
+	if !strings.Contains(code, "export type { testMeta } from './tasks-handler';") {
+		t.Error("missing meta re-export from tasks-handler")
+	}
+	if strings.Contains(code, "export interface testMeta") {
+		t.Error("tasks.ts must not redeclare the meta interface")
+	}
+}
+
+// A meta type that is also used by other handler groups is declared in a
+// shared per-package file; the re-export must point there instead.
+func TestAppendTaskConvenienceCode_WithMetaInSharedFile(t *testing.T) {
+	results := map[string]string{
+		"client.ts":        "// base\n",
+		"tasks-handler.ts": "// handler\n",
+		"api.ts":           "// shared\nexport interface testMeta {\n    userName?: string;\n}\n",
+	}
+
+	metaType := reflect.TypeFor[testMeta]()
+	appendTaskConvenienceCode(results, aprot.OutputVanilla, metaType)
+
+	code := results["tasks.ts"]
+
+	if !strings.Contains(code, "export type { testMeta } from './api';") {
+		t.Error("re-export must point at the shared file that declares the interface")
 	}
 }
 
@@ -178,25 +219,18 @@ type testMetaWithNested struct {
 func TestAppendTaskConvenienceCode_WithNestedMeta(t *testing.T) {
 	results := map[string]string{
 		"client.ts": "// base\n",
+		"tasks-handler.ts": "// handler\n" +
+			"export interface nestedChild {\n    value: string;\n}\n" +
+			"export interface testMetaWithNested {\n    child: nestedChild;\n}\n",
 	}
 
 	metaType := reflect.TypeFor[testMetaWithNested]()
 	appendTaskConvenienceCode(results, aprot.OutputVanilla, metaType)
 
-	code := results["client.ts"]
+	code := results["tasks.ts"]
 
-	// Nested struct should appear before the parent
-	if !strings.Contains(code, "export interface nestedChild") {
-		t.Error("missing nested interface")
-	}
-	if !strings.Contains(code, "export interface testMetaWithNested") {
-		t.Error("missing parent interface")
-	}
-
-	// Nested should come first
-	nestedIdx := strings.Index(code, "export interface nestedChild")
-	parentIdx := strings.Index(code, "export interface testMetaWithNested")
-	if nestedIdx > parentIdx {
-		t.Error("nested interface should appear before parent")
+	// Both the parent and the nested struct are re-exported, nested first.
+	if !strings.Contains(code, "export type { nestedChild, testMetaWithNested } from './tasks-handler';") {
+		t.Error("missing re-export of nested and parent meta interfaces")
 	}
 }

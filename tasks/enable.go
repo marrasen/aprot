@@ -61,14 +61,19 @@ func Enable(r *aprot.Registry, opts ...EnableOption) {
 	})
 }
 
-// EnableWithMeta registers the shared task system with typed metadata. Pass
-// options such as [WithTaskMiddleware] to wrap every task with custom logic
-// (logging, tracing, ctx decoration).
+// EnableWithMeta registers the shared task system with typed metadata. The
+// generated client types TaskNode.meta and SharedTaskState.meta as M's
+// TypeScript interface instead of `unknown`, and declares that interface
+// alongside the other task types. Pass options such as [WithTaskMiddleware]
+// to wrap every task with custom logic (logging, tracing, ctx decoration).
 func EnableWithMeta[M any](r *aprot.Registry, opts ...EnableOption) {
 	o := buildEnableOptions(opts)
 	metaType := reflect.TypeFor[M]()
 	handler := &tasksHandler{}
 	r.Register(handler)
+	// Codegen-only: emits meta fields as M's TS type instead of `unknown`.
+	r.OverrideFieldType(TaskNode{}, "Meta", metaType)
+	r.OverrideFieldType(SharedTaskState{}, "Meta", metaType)
 	r.RegisterEnumFor(handler, TaskNodeStatusValues())
 	r.RegisterPushEventFor(handler, TaskStateEvent{})
 	r.RegisterPushEventFor(handler, TaskUpdateEvent{})
