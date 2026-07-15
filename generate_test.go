@@ -2418,14 +2418,14 @@ func TestInferTypeFromMarshal(t *testing.T) {
 			wantType: "Record<string, number>",
 		},
 		{
-			name:     "EmptyObjectMarshaler → Record<string, any>",
+			name:     "EmptyObjectMarshaler → Record<string, unknown>",
 			typ:      reflect.TypeOf(EmptyObjectMarshaler{}),
-			wantType: "Record<string, any>",
+			wantType: "Record<string, unknown>",
 		},
 		{
-			name:     "HeterogeneousObjectMarshaler → Record<string, any>",
+			name:     "HeterogeneousObjectMarshaler → Record<string, unknown>",
 			typ:      reflect.TypeOf(HeterogeneousObjectMarshaler{}),
-			wantType: "Record<string, any>",
+			wantType: "Record<string, unknown>",
 		},
 		{
 			name:     "ArrayOfStringsMarshaler → string[]",
@@ -2438,9 +2438,9 @@ func TestInferTypeFromMarshal(t *testing.T) {
 			wantType: "number[]",
 		},
 		{
-			name:     "EmptyArrayMarshaler → any[]",
+			name:     "EmptyArrayMarshaler → unknown[]",
 			typ:      reflect.TypeOf(EmptyArrayMarshaler{}),
-			wantType: "any[]",
+			wantType: "unknown[]",
 		},
 		{
 			name:     "PtrReceiverMarshaler → string",
@@ -2544,10 +2544,10 @@ func TestGoTypeToTSCustomMarshalers(t *testing.T) {
 		{"PtrReceiverMarshaler", reflect.TypeOf(PtrReceiverMarshaler{}), "string"},
 		{"ArrayOfStringsMarshaler", reflect.TypeOf(ArrayOfStringsMarshaler{}), "string[]"},
 		{"ArrayOfNumbersMarshaler", reflect.TypeOf(ArrayOfNumbersMarshaler{}), "number[]"},
-		{"EmptyArrayMarshaler", reflect.TypeOf(EmptyArrayMarshaler{}), "any[]"},
+		{"EmptyArrayMarshaler", reflect.TypeOf(EmptyArrayMarshaler{}), "unknown[]"},
 		{"HomogeneousObjectMarshaler", reflect.TypeOf(HomogeneousObjectMarshaler{}), "Record<string, number>"},
-		{"EmptyObjectMarshaler", reflect.TypeOf(EmptyObjectMarshaler{}), "Record<string, any>"},
-		{"HeterogeneousObjectMarshaler", reflect.TypeOf(HeterogeneousObjectMarshaler{}), "Record<string, any>"},
+		{"EmptyObjectMarshaler", reflect.TypeOf(EmptyObjectMarshaler{}), "Record<string, unknown>"},
+		{"HeterogeneousObjectMarshaler", reflect.TypeOf(HeterogeneousObjectMarshaler{}), "Record<string, unknown>"},
 		{"time.Time still string", reflect.TypeOf(time.Time{}), "string"},
 		{"plain struct unchanged", reflect.TypeOf(CreateUserRequest{}), "CreateUserRequest"},
 		{"int unchanged", reflect.TypeOf(0), "number"},
@@ -4056,4 +4056,119 @@ func TestGenerateFixedSizeArrayIntegration(t *testing.T) {
 	if !strings.Contains(schemaFile, wantZod) {
 		t.Errorf("missing zod tuple schema: expected %q in schema file\n---\n%s", wantZod, schemaFile)
 	}
+}
+
+// --- Field type overrides (codegen-only refinement of dynamic fields) ---
+
+// OverrideEventPayload is a concrete type substituted for a dynamic field.
+type OverrideEventPayload struct {
+	Kind  string               `json:"kind"`
+	Inner OverrideEventDetails `json:"inner"`
+}
+
+// OverrideEventDetails is reachable only through the override, so its
+// interface must still be collected and declared.
+type OverrideEventDetails struct {
+	Count int `json:"count"`
+}
+
+// OverrideEvent carries dynamic fields: one overridden, one left alone.
+type OverrideEvent struct {
+	Payload any `json:"payload,omitempty"`
+	Extra   any `json:"extra,omitempty"`
+}
+
+type overrideHandler struct{}
+
+func (h *overrideHandler) Ping(ctx context.Context) error { return nil }
+
+func TestOverrideFieldType(t *testing.T) {
+	registry := NewRegistry()
+	handler := &overrideHandler{}
+	registry.Register(handler)
+	registry.RegisterPushEventFor(handler, OverrideEvent{})
+	registry.OverrideFieldType(OverrideEvent{}, "Payload", OverrideEventPayload{})
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	out := buf.String()
+
+	mustContain := []struct {
+		label string
+		want  string
+	}{
+		{"overridden field uses concrete type", "payload?: OverrideEventPayload"},
+		{"concrete interface declared", "export interface OverrideEventPayload"},
+		{"nested type collected through override", "export interface OverrideEventDetails"},
+		{"non-overridden dynamic field stays unknown", "extra?: unknown"},
+	}
+	for _, tc := range mustContain {
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("missing %s: expected %q in output", tc.label, tc.want)
+		}
+	}
+	if strings.Contains(out, "payload?: unknown") || strings.Contains(out, "payload?: any") {
+		t.Error("payload must use the override type, not any/unknown")
+	}
+}
+
+// The override may be handed reflect.Type values directly.
+func TestOverrideFieldTypeReflectTypes(t *testing.T) {
+	registry := NewRegistry()
+	handler := &overrideHandler{}
+	registry.Register(handler)
+	registry.RegisterPushEventFor(handler, OverrideEvent{})
+	registry.OverrideFieldType(reflect.TypeOf(OverrideEvent{}), "Payload", reflect.TypeOf(&OverrideEventPayload{}))
+
+	gen := NewGenerator(registry)
+	var buf bytes.Buffer
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("GenerateTo failed: %v", err)
+	}
+	if !strings.Contains(buf.String(), "payload?: OverrideEventPayload") {
+		t.Error("override registered via reflect.Type (pointer concrete) did not apply")
+	}
+}
+
+func TestOverrideFieldTypePanics(t *testing.T) {
+	mustPanic := func(label string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Errorf("%s: expected panic", label)
+			}
+		}()
+		fn()
+	}
+
+	type embedded struct {
+		Promoted any `json:"promoted"`
+	}
+	type outer struct {
+		embedded
+		Static string `json:"static"`
+	}
+
+	registry := NewRegistry()
+	mustPanic("non-struct owner", func() {
+		registry.OverrideFieldType("not a struct", "Payload", OverrideEventPayload{})
+	})
+	mustPanic("missing field", func() {
+		registry.OverrideFieldType(OverrideEvent{}, "Nope", OverrideEventPayload{})
+	})
+	mustPanic("non-interface field", func() {
+		registry.OverrideFieldType(outer{}, "Static", OverrideEventPayload{})
+	})
+	mustPanic("promoted field", func() {
+		registry.OverrideFieldType(outer{}, "Promoted", OverrideEventPayload{})
+	})
+	mustPanic("nil owner", func() {
+		registry.OverrideFieldType(nil, "Payload", OverrideEventPayload{})
+	})
+	mustPanic("nil concrete", func() {
+		registry.OverrideFieldType(OverrideEvent{}, "Payload", nil)
+	})
 }

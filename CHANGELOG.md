@@ -12,6 +12,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Added
 
+- `Registry.OverrideFieldType(owner, goFieldName, concrete)` — refine a
+  dynamic (`any`/`interface{}`) struct field to a concrete type in the
+  generated TypeScript. Codegen-only: the field is emitted with the concrete
+  type's interface (declared and import-resolved like any other referenced
+  type) while runtime serialization is untouched. Panics unless the named
+  field is an exported interface-typed field declared directly on the owner
+  struct.
+- `tasks.EnableWithMeta[M]` now wires `M` into the generated task types:
+  `TaskNode.meta` and `SharedTaskState.meta` are typed as `M`'s TypeScript
+  interface instead of `any`, so client code can read `task.meta?.field`
+  without casting. The meta interface moves from `tasks.ts` into
+  `tasks-handler.ts` (next to the types that reference it); `tasks.ts`
+  re-exports it, so existing imports keep resolving.
 - `Server.DisconnectUser(userID) int` — gracefully closes every connection
   currently associated with a user id (the identity set via `Conn.SetUserID`)
   and returns the number of connections closed. Each connection gets a close
@@ -21,6 +34,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   use; never closes a connection that has since re-authenticated as a
   different user. Use it to evict removed users whose authenticated sockets
   would otherwise linger.
+
+### Changed
+
+- **Generated TypeScript contains no `any`.** Every mapping that previously
+  fell back to `any` now emits `unknown`: `any`/`interface{}` fields and
+  params, anonymous structs, marshaler-inferred `any[]` /
+  `Record<string, any>`, and the Zod fallbacks `z.any()` (now `z.unknown()`).
+  Zod validation behavior is unchanged (both schemas accept every value); the
+  wire format is unchanged. Hand-written client code that dot-accessed a
+  value typed `any` no longer compiles until it casts or narrows — with
+  `tasks.EnableWithMeta` the task meta fields get a precise type instead, so
+  no cast is needed there.
 
 ## [0.49.1] - 2026-07-14
 

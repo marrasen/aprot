@@ -37,8 +37,6 @@ export function cancelSharedTask(client: ApiClient, taskId: string): Promise<voi
     return client.request<void>('tasksHandler.CancelTask', [taskId]);
 }
 
-
-export interface TaskMeta {
-    userName?: string;
-    error?: string;
-}
+// Task meta interfaces are declared alongside the task types; re-exported
+// here so imports from './tasks' keep resolving.
+export type { TaskMeta } from './tasks-handler';

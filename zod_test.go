@@ -45,7 +45,7 @@ func (h *PilotQuirksHandlers) Submit(ctx context.Context, req *PilotQuirksReques
 
 // SliceElemRequest exercises issue #169: parent schemas should substitute
 // element schemas into z.array(...) / z.record(...) instead of falling through
-// to z.any(). The parent has at least one validate tag so it gets a schema;
+// to z.unknown(). The parent has at least one validate tag so it gets a schema;
 // EventTag also has a validate tag so its leaf schema is generated and the
 // parent's Tags field can reference it.
 type SliceElemRequest struct {
@@ -122,8 +122,8 @@ func TestFieldToZod(t *testing.T) {
 		{"sql NullInt64 with range", fieldData{GoType: "struct", Type: "number | null", ValidateTag: "gte=0,lte=100", SQLNullKind: "int"}, "z.number().int().min(0).max(100).nullable()"},
 		{"sql NullFloat64", fieldData{GoType: "struct", Type: "number | null", SQLNullKind: "float"}, "z.number().nullable()"},
 		{"sql NullBool", fieldData{GoType: "struct", Type: "boolean | null", SQLNullKind: "bool"}, "z.boolean().nullable()"},
-		// Regression: plain struct with no SQLNullKind still falls through to z.any()
-		{"plain struct any", fieldData{GoType: "struct", Type: "SomeStruct"}, "z.any()"},
+		// Regression: plain struct with no SQLNullKind still falls through to z.unknown()
+		{"plain struct unknown", fieldData{GoType: "struct", Type: "SomeStruct"}, "z.unknown()"},
 
 		// Issue #169: slice element substitution
 		{"slice of string", fieldData{GoType: "slice", Type: "string[]", ElemGoKind: "string"}, "z.array(z.string())"},
@@ -132,15 +132,15 @@ func TestFieldToZod(t *testing.T) {
 		{"slice of bool", fieldData{GoType: "slice", Type: "boolean[]", ElemGoKind: "bool"}, "z.array(z.boolean())"},
 		{"slice of known struct", fieldData{GoType: "slice", Type: "EventLinkInput[]", ElemGoKind: "struct", ElemTypeName: "EventLinkInput"}, "z.array(EventLinkInputSchema)"},
 		{"slice of known struct with constraint", fieldData{GoType: "slice", Type: "EventLinkInput[]", ValidateTag: "dive,required", ElemGoKind: "struct", ElemTypeName: "EventLinkInput"}, "z.array(EventLinkInputSchema)"},
-		{"slice of unknown struct", fieldData{GoType: "slice", Type: "UnknownThing[]", ElemGoKind: "struct", ElemTypeName: "UnknownThing"}, "z.array(z.any())"},
+		{"slice of unknown struct", fieldData{GoType: "slice", Type: "UnknownThing[]", ElemGoKind: "struct", ElemTypeName: "UnknownThing"}, "z.array(z.unknown())"},
 		// Regression: slice with no element info (e.g., recursive types) still falls through
-		{"slice no elem info", fieldData{GoType: "slice", Type: "any[]"}, "z.array(z.any())"},
+		{"slice no elem info", fieldData{GoType: "slice", Type: "unknown[]"}, "z.array(z.unknown())"},
 
 		// Issue #169: map element substitution
 		{"map of string", fieldData{GoType: "map", Type: "Record<string, string>", ElemGoKind: "string"}, "z.record(z.string(), z.string())"},
 		{"map of int", fieldData{GoType: "map", Type: "Record<string, number>", ElemGoKind: "int"}, "z.record(z.string(), z.number().int())"},
 		{"map of known struct", fieldData{GoType: "map", Type: "Record<string, NestedItem>", ElemGoKind: "struct", ElemTypeName: "NestedItem"}, "z.record(z.string(), NestedItemSchema)"},
-		{"map no elem info", fieldData{GoType: "map", Type: "Record<string, any>"}, "z.record(z.string(), z.any())"},
+		{"map no elem info", fieldData{GoType: "map", Type: "Record<string, unknown>"}, "z.record(z.string(), z.unknown())"},
 
 		// Issue #176: registered enum fields emit z.enum / z.union instead of
 		// plain z.string() / z.number().int() so z.infer matches the branded
@@ -227,7 +227,7 @@ func TestFieldToZod(t *testing.T) {
 		{
 			"fixed array no elem info",
 			fieldData{GoType: "array", Type: "[[number, number], [number, number]]", ArrayLen: 2},
-			"z.tuple([z.any(), z.any()])",
+			"z.tuple([z.unknown(), z.unknown()])",
 		},
 		// Size constraints are meaningless on a fixed-length type and z.tuple
 		// has no .min()/.max(); they must be dropped, not emitted.
@@ -651,13 +651,13 @@ func TestZodGeneration_SliceAndMapElements(t *testing.T) {
 		}
 	}
 
-	// Regression: parent slice fields should never fall through to z.array(z.any())
+	// Regression: parent slice fields should never fall through to z.array(z.unknown())
 	// when an element type is known.
-	if strings.Contains(schemaFile, "tags: z.array(z.any())") {
-		t.Error("Tags should not fall through to z.array(z.any()) when EventTagSchema exists")
+	if strings.Contains(schemaFile, "tags: z.array(z.unknown())") {
+		t.Error("Tags should not fall through to z.array(z.unknown()) when EventTagSchema exists")
 	}
-	if strings.Contains(schemaFile, "aliases: z.array(z.any())") {
-		t.Error("Aliases should not fall through to z.array(z.any()) for primitive elements")
+	if strings.Contains(schemaFile, "aliases: z.array(z.unknown())") {
+		t.Error("Aliases should not fall through to z.array(z.unknown()) for primitive elements")
 	}
 }
 
@@ -712,8 +712,8 @@ func TestZodGeneration_PilotQuirks(t *testing.T) {
 		t.Error("schema should not emit redundant .min(1) before explicit .min(N)")
 	}
 	// Regression: no .any() fallthrough for sql.Null fields (Issue 3 fix applies)
-	if strings.Contains(schemaFile, "parentId: z.any()") || strings.Contains(schemaFile, "bio: z.any()") {
-		t.Error("sql.Null* fields should not fall through to z.any()")
+	if strings.Contains(schemaFile, "parentId: z.unknown()") || strings.Contains(schemaFile, "bio: z.unknown()") {
+		t.Error("sql.Null* fields should not fall through to z.unknown()")
 	}
 	// Regression (#178): non-pointer validate-omitempty string must not grow a
 	// trailing .optional() — isOptional treats it as required and the Zod

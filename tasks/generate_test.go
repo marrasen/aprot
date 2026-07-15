@@ -210,8 +210,10 @@ func TestGenerateWithTasksMeta(t *testing.T) {
 	}
 }
 
-// TestGenerateWithTasksMetaMultiFile verifies multi-file generation with typed metadata.
-// The TaskMeta interface must appear in the generated tasks.ts file.
+// TestGenerateWithTasksMetaMultiFile verifies multi-file generation with typed
+// metadata. The TaskMeta interface is declared in tasks-handler.ts — where the
+// meta fields reference it — and re-exported from tasks.ts so pre-existing
+// imports keep resolving.
 func TestGenerateWithTasksMetaMultiFile(t *testing.T) {
 	registry := aprot.NewRegistry()
 	registry.Register(&genTestHandler{})
@@ -223,23 +225,35 @@ func TestGenerateWithTasksMetaMultiFile(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 
-	tasksCode, ok := results["tasks.ts"]
+	handlerCode, ok := results["tasks-handler.ts"]
 	if !ok {
-		t.Fatal("tasks.ts was not created by multi-file generation")
+		t.Fatal("tasks-handler.ts was not created by multi-file generation")
 	}
 
 	mustContain := []struct {
 		label string
 		want  string
 	}{
-		{"TaskMeta interface declaration", "interface TaskMeta"},
+		{"TaskMeta interface declaration", "export interface TaskMeta"},
 		{"userName optional field", "userName?: string"},
 		{"error optional field", "error?: string"},
+		{"typed meta field", "meta?: TaskMeta"},
 	}
 	for _, tc := range mustContain {
-		if !strings.Contains(tasksCode, tc.want) {
-			t.Errorf("tasks.ts missing %s: expected %q", tc.label, tc.want)
+		if !strings.Contains(handlerCode, tc.want) {
+			t.Errorf("tasks-handler.ts missing %s: expected %q", tc.label, tc.want)
 		}
+	}
+	if strings.Contains(handlerCode, "meta?: any") || strings.Contains(handlerCode, "meta?: unknown") {
+		t.Error("meta fields must use the registered TaskMeta type, not any/unknown")
+	}
+
+	tasksCode, ok := results["tasks.ts"]
+	if !ok {
+		t.Fatal("tasks.ts was not created by multi-file generation")
+	}
+	if !strings.Contains(tasksCode, "export type { TaskMeta } from './tasks-handler';") {
+		t.Error("tasks.ts must re-export TaskMeta from tasks-handler for backward compatibility")
 	}
 }
 

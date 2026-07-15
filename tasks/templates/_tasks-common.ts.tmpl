@@ -111,14 +111,3 @@ export function useTaskOutput(taskId: string): { lines: string[]; clear: () => v
     return { lines, clear };
 }
 {{- end}}
-
-{{define "meta-interfaces"}}
-{{- range .MetaInterfaces}}
-
-export interface {{.Name}} {
-{{- range .Fields}}
-    {{.Name}}{{if .Optional}}?{{end}}: {{.Type}};
-{{- end}}
-}
-{{- end}}
-{{- end}}

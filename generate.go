@@ -157,14 +157,14 @@ func SQLNullGoKind(t reflect.Type, kindResolver func(reflect.Type) string) strin
 }
 
 // inferObjectType unmarshals JSON object data and infers a Record<string, T> type.
-// Returns Record<string, any> for empty or heterogeneous objects.
+// Returns Record<string, unknown> for empty or heterogeneous objects.
 func inferObjectType(data []byte) *MarshalTSType {
 	var obj map[string]interface{}
 	if err := json.Unmarshal(data, &obj); err != nil {
 		return nil
 	}
 	if len(obj) == 0 {
-		return &MarshalTSType{TSType: "Record<string, any>"}
+		return &MarshalTSType{TSType: "Record<string, unknown>"}
 	}
 	var common string
 	for _, v := range obj {
@@ -172,21 +172,21 @@ func inferObjectType(data []byte) *MarshalTSType {
 		if common == "" {
 			common = ts
 		} else if ts != common {
-			return &MarshalTSType{TSType: "Record<string, any>"}
+			return &MarshalTSType{TSType: "Record<string, unknown>"}
 		}
 	}
 	return &MarshalTSType{TSType: "Record<string, " + common + ">"}
 }
 
 // inferArrayType unmarshals JSON array data and infers a T[] type.
-// Returns any[] for empty or heterogeneous arrays.
+// Returns unknown[] for empty or heterogeneous arrays.
 func inferArrayType(data []byte) *MarshalTSType {
 	var arr []interface{}
 	if err := json.Unmarshal(data, &arr); err != nil {
 		return nil
 	}
 	if len(arr) == 0 {
-		return &MarshalTSType{TSType: "any[]"}
+		return &MarshalTSType{TSType: "unknown[]"}
 	}
 	var common string
 	for _, v := range arr {
@@ -194,14 +194,14 @@ func inferArrayType(data []byte) *MarshalTSType {
 		if common == "" {
 			common = ts
 		} else if ts != common {
-			return &MarshalTSType{TSType: "any[]"}
+			return &MarshalTSType{TSType: "unknown[]"}
 		}
 	}
 	return &MarshalTSType{TSType: common + "[]"}
 }
 
 // jsonValueToTS maps a single JSON value (from json.Unmarshal into interface{})
-// to a TypeScript type string. Nested objects and arrays return "any".
+// to a TypeScript type string. Nested objects and arrays return "unknown".
 func jsonValueToTS(v interface{}) string {
 	switch v.(type) {
 	case string:
@@ -211,7 +211,7 @@ func jsonValueToTS(v interface{}) string {
 	case bool:
 		return "boolean"
 	default:
-		return "any"
+		return "unknown"
 	}
 }
 
@@ -421,7 +421,7 @@ type fieldData struct {
 	// ElemGoKind is non-empty when the field is a slice or map. Its value is the
 	// Go kind of the element type ("string", "int", "struct", etc.) so Zod codegen
 	// can emit z.array(z.string()), z.array(<TypeName>Schema), etc. instead of
-	// falling through to z.array(z.any()). Empty otherwise.
+	// falling through to z.array(z.unknown()). Empty otherwise.
 	ElemGoKind string
 	// ElemTypeName is the TS type name of the slice/map element when the element
 	// is a named struct (e.g., "EventLinkInput"). Used by Zod codegen to look up
@@ -1404,6 +1404,12 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 				continue
 			}
 		}
+		// A registered override replaces the field's declared dynamic type for
+		// everything downstream (TS type, Go kind, enum lookup) — field is a
+		// copy, so the substitution is local.
+		if ov := g.registry.fieldTypeOverride(t, field.Name); ov != nil {
+			field.Type = ov
+		}
 		// time.Duration has no default JSON representation in jsonv2 and fails
 		// at runtime (both marshal and unmarshal) unless an explicit json
 		// `format:` option is given. Fail at generation time instead so the
@@ -1533,13 +1539,22 @@ func (g *Generator) collectType(t reflect.Type) {
 					if !ef.IsExported() || shouldSkipField(ef) {
 						continue
 					}
-					g.collectNestedType(ef.Type)
+					g.collectNestedType(g.effectiveFieldType(ft, ef))
 				}
 			}
 			continue
 		}
-		g.collectNestedType(field.Type)
+		g.collectNestedType(g.effectiveFieldType(t, field))
 	}
+}
+
+// effectiveFieldType returns the type collection should treat the field as:
+// its registered codegen override when one exists, its declared type otherwise.
+func (g *Generator) effectiveFieldType(owner reflect.Type, field reflect.StructField) reflect.Type {
+	if ov := g.registry.fieldTypeOverride(owner, field.Name); ov != nil {
+		return ov
+	}
+	return field.Type
 }
 
 // collectGroupTypes collects all types and enums used by a handler group's
@@ -1672,7 +1687,7 @@ func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
 // the kind alone.
 //
 // Used by Zod codegen to substitute element schemas into z.array(...) /
-// z.record(...) / z.tuple([...]) instead of falling through to z.any().
+// z.record(...) / z.tuple([...]) instead of falling through to z.unknown().
 func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -1688,7 +1703,7 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 	if kind == "struct" {
 		// Only named structs from a real package can be referenced as
 		// <Name>Schema. Anonymous structs (PkgPath == "") and types with no
-		// name fall through to z.any() at the call site.
+		// name fall through to z.unknown() at the call site.
 		if elem.Name() != "" && elem.PkgPath() != "" {
 			// Sanitize so a generic element type's schema/interface reference
 			// matches its (sanitized) declaration name.
@@ -1698,7 +1713,7 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 	}
 	// Primitive elements (string, int, etc.) — return the kind, no name.
 	// Slices of slices, slices of maps, and nested fixed-size arrays are
-	// punted to z.any(): the recursive case requires a structured nested
+	// punted to z.unknown(): the recursive case requires a structured nested
 	// fieldData and is out of scope for the initial fix.
 	if kind == "slice" || kind == "map" || kind == "array" {
 		return "", ""
@@ -1906,13 +1921,13 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		return g.goTypeToTS(t.Elem())
 	case reflect.Struct:
 		if t.PkgPath() == "" {
-			return "any"
+			return "unknown"
 		}
 		return sanitizeTSIdent(t.Name())
 	case reflect.Interface:
-		return "any"
+		return "unknown"
 	default:
-		return "any"
+		return "unknown"
 	}
 }
 

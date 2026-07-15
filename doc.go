@@ -172,6 +172,17 @@
 // Each [Registry.Register] call creates a handler group with its own middleware
 // chain and a corresponding TypeScript file.
 //
+// Struct fields declared as any / interface{} are emitted as `unknown` in the
+// generated TypeScript. When such a field in practice always carries one
+// concrete type, [Registry.OverrideFieldType] refines the generated type
+// without touching runtime serialization:
+//
+//	registry.OverrideFieldType(AuditEvent{}, "Payload", OrderPayload{})
+//	// generated: payload?: OrderPayload (interface declared like any other type)
+//
+// The tasks subpackage uses this to type task metadata: tasks.EnableWithMeta[M]
+// emits TaskNode.meta / SharedTaskState.meta as M's interface.
+//
 // # Middleware
 //
 // Middleware wraps handlers to add cross-cutting behavior. It follows the

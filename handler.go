@@ -171,20 +171,25 @@ type Registry struct {
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 	validator       StructValidator                                    // optional struct validator (nil = disabled)
 	restGroups      map[string]bool                                    // groups registered via RegisterREST
+	// fieldTypeOverrides maps a struct type and Go field name to the concrete
+	// type code generation should use in place of the field's declared dynamic
+	// (interface) type. Codegen-only: runtime serialization is unaffected.
+	fieldTypeOverrides map[reflect.Type]map[string]reflect.Type
 }
 
 // NewRegistry creates a new handler registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		handlers:       make(map[string]*HandlerInfo),
-		groups:         make(map[string]*HandlerGroup),
-		pushEvents:     []PushEventInfo{},
-		pushEventTypes: make(map[reflect.Type]string),
-		errorCodes:     []ErrorCodeInfo{},
-		errorMappings:  []errorMapping{},
-		nextErrorCode:  1000, // Start custom codes at 1000
-		enumTypes:      make(map[reflect.Type]*EnumInfo),
-		restGroups:     make(map[string]bool),
+		handlers:           make(map[string]*HandlerInfo),
+		groups:             make(map[string]*HandlerGroup),
+		pushEvents:         []PushEventInfo{},
+		pushEventTypes:     make(map[reflect.Type]string),
+		errorCodes:         []ErrorCodeInfo{},
+		errorMappings:      []errorMapping{},
+		nextErrorCode:      1000, // Start custom codes at 1000
+		enumTypes:          make(map[reflect.Type]*EnumInfo),
+		restGroups:         make(map[string]bool),
+		fieldTypeOverrides: make(map[reflect.Type]map[string]reflect.Type),
 	}
 }
 
@@ -371,6 +376,74 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 	r.pushEventTypes[dt] = eventName
 
 	group.PushEvents = append(group.PushEvents, event)
+}
+
+// OverrideFieldType tells the TypeScript generator to type a struct field as
+// concrete instead of the `unknown` its declared dynamic type would produce.
+// The field, looked up by its Go name, must be an exported field declared
+// directly on owner with an interface type (any / interface{}); for a
+// promoted field, register the override on the embedded struct instead.
+//
+// This is codegen-only: runtime serialization is untouched, and the wire
+// carries whatever value the server actually stores in the field. The
+// override also drives type collection, so a struct type given here gets its
+// interface (and any nested types) declared like any other referenced type.
+//
+// owner and concrete may each be a value (MyEvent{}), a pointer to one, or a
+// reflect.Type. tasks.EnableWithMeta uses this to type TaskNode.Meta and
+// SharedTaskState.Meta as the registered meta struct.
+//
+// Example:
+//
+//	registry.OverrideFieldType(AuditEvent{}, "Payload", OrderPayload{})
+func (r *Registry) OverrideFieldType(owner any, fieldName string, concrete any) {
+	ot := resolveReflectType(owner)
+	if ot == nil {
+		panic("aprot: OverrideFieldType owner must not be nil")
+	}
+	if ot.Kind() == reflect.Ptr {
+		ot = ot.Elem()
+	}
+	if ot.Kind() != reflect.Struct {
+		panic("aprot: OverrideFieldType owner must be a struct type, got " + ot.String())
+	}
+	field, ok := ot.FieldByName(fieldName)
+	if !ok || !field.IsExported() {
+		panic(fmt.Sprintf("aprot: OverrideFieldType: %s has no exported field %q", ot.String(), fieldName))
+	}
+	if len(field.Index) > 1 {
+		panic(fmt.Sprintf("aprot: OverrideFieldType: %s.%s is promoted from an embedded struct; register the override on the embedded type instead", ot.String(), fieldName))
+	}
+	if field.Type.Kind() != reflect.Interface {
+		panic(fmt.Sprintf("aprot: OverrideFieldType: %s.%s is declared as %s, not an interface type; only dynamic (any/interface{}) fields can be overridden", ot.String(), fieldName, field.Type.String()))
+	}
+	ct := resolveReflectType(concrete)
+	if ct == nil {
+		panic(fmt.Sprintf("aprot: OverrideFieldType: concrete type for %s.%s must not be nil", ot.String(), fieldName))
+	}
+	if r.fieldTypeOverrides[ot] == nil {
+		r.fieldTypeOverrides[ot] = make(map[string]reflect.Type)
+	}
+	r.fieldTypeOverrides[ot][fieldName] = ct
+}
+
+// fieldTypeOverride returns the codegen type override registered for the
+// struct type's field, or nil when none exists.
+func (r *Registry) fieldTypeOverride(t reflect.Type, fieldName string) reflect.Type {
+	m := r.fieldTypeOverrides[t]
+	if m == nil {
+		return nil
+	}
+	return m[fieldName]
+}
+
+// resolveReflectType returns v itself when it already is a reflect.Type,
+// otherwise reflect.TypeOf(v).
+func resolveReflectType(v any) reflect.Type {
+	if t, ok := v.(reflect.Type); ok {
+		return t
+	}
+	return reflect.TypeOf(v)
 }
 
 // Groups returns all registered handler groups.
