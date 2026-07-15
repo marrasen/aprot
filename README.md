@@ -147,7 +147,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Task middleware** — opt-in `WithTaskMiddleware` wraps every task with a single `func(ctx, info, next) error` callback (mirrors `aprot.Middleware`); decorate ctx with your logger of choice (slog, zerolog, zap), observe start/completion/failure in one place
 - **Progress reporting** — built-in support for long-running operations
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
-- **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting
+- **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting, user eviction (`DisconnectUser`)
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
@@ -906,6 +906,20 @@ await client.refreshAuth(freshToken);
 - **Mid-session refresh** — the same `auth` frame on a live connection updates the token/identity without reconnecting. A *failed* refresh keeps the existing session (a live connection is never downgraded).
 - **Both transports** — WebSocket sends the `auth` frame directly; SSE sends it in the first `POST /rpc` body (the `EventSource` GET can't set headers). `auth_ok`/`auth_error` arrive over the stream either way.
 - **Backward compatible** — with no `OnAuth` hook, connections behave exactly as before (URL-token via `OnConnect` still works). `ErrAuthFailed` uses code `-32005`; the TS client exposes `err.isAuthFailed()`.
+
+### Revoking access mid-session (`DisconnectUser`)
+
+Auth middleware can deny a removed user's *new* requests, but an already-open connection stays authenticated — still counted, still targetable by `PushToUser`. When you delete a user or revoke their access, close their sockets too:
+
+```go
+n := server.DisconnectUser(userID) // returns the number of connections closed
+```
+
+`DisconnectUser` closes every connection currently associated with the user ID (the identity set via `conn.SetUserID`), across all transports:
+
+- **Graceful close** — a close frame is sent where the transport supports one, and the connection's in-flight requests are canceled with `ErrConnectionClosed`.
+- **Full teardown** — subscriptions are unregistered and `OnDisconnect` hooks run through the normal disconnect path.
+- **Safe by default** — concurrent-use safe, a no-op (returning `0`) for unknown user IDs, and it never closes a connection that has since re-authenticated as a different user.
 
 ## Observability
 
