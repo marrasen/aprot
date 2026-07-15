@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-07-15
+
 ### Added
 
 - `Registry.OverrideFieldType(owner, goFieldName, concrete)` — refine a
@@ -307,7 +309,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.49.1...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/marrasen/aprot/compare/v0.49.1...v0.50.0
 [0.49.1]: https://github.com/marrasen/aprot/compare/v0.49.0...v0.49.1
 [0.49.0]: https://github.com/marrasen/aprot/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/marrasen/aprot/compare/v0.47.1...v0.48.0
