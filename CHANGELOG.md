@@ -10,6 +10,27 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-07-15
+
+### Added
+
+- `Registry.ReserveClientFile(base)` — marks a generated client file base name
+  (without the `.ts`) as owned by a runtime's `OnGenerate` hook, so the shared
+  per-package type file namer avoids it (emitting `{pkg}.types.ts` on a
+  collision, the same alternate base already used for handler-file clashes).
+  `tasks.Enable` and `tasks.EnableWithMeta` reserve `tasks`.
+
+### Fixed
+
+- A shared type returned from the `tasks` package by two or more handler groups
+  (e.g. a handler returning `*tasks.TaskRef`) is no longer dropped from the
+  generated client. Such a type was promoted to the shared `tasks.ts` file and
+  then overwritten wholesale by the task runtime's convenience code, leaving
+  every consumer importing a type nobody exported (`Module './tasks' has no
+  exported member 'TaskRef'`). It is now emitted as `tasks.types.ts` and
+  imported from `./tasks.types`, clear of the runtime file — the same collision
+  class as the handler-file fix in #206.
+
 ## [0.50.0] - 2026-07-15
 
 ### Added
