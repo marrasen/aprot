@@ -264,8 +264,9 @@
 //	http.Handle("/sse/", server.HTTPTransport())
 //
 // Both transports can run simultaneously and share connection tracking —
-// [Server.Broadcast], [Server.PushToUser], and [Server.ConnectionCount] work
-// across all connections regardless of transport.
+// [Server.Broadcast], [Server.PushToUser], [Server.DisconnectUser], and
+// [Server.ConnectionCount] work across all connections regardless of
+// transport.
 //
 // For byte streams HTTP can't reach, [Server.ServeStream] serves one
 // connection over any io.ReadWriteCloser using newline-delimited JSON
@@ -408,6 +409,13 @@
 // [Conn.SetUserID] / [Conn.UserID] is a routing identity used for push
 // targeting ([Server.PushToUser]). It is not a security boundary — use the
 // stored principal for authorization decisions.
+//
+// To revoke access mid-session — e.g. when an admin deletes a user who still
+// holds an authenticated connection — [Server.DisconnectUser] gracefully
+// closes every connection currently associated with a user ID and returns the
+// number closed. Each connection's in-flight requests are canceled with
+// [ErrConnectionClosed] and its disconnect hooks run through the normal
+// teardown path; other users' connections are untouched.
 //
 // # Observability
 //

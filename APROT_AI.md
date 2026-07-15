@@ -227,6 +227,8 @@ server.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
 - `Set(key, val)` / `Get(key)` / `Load(key)` — per-connection state.
 - `SetUserID(id)` / `UserID()` — push routing identity (not a security boundary; use stored principal for authz).
 
+Server-side eviction: `server.DisconnectUser(userID) int` gracefully closes every connection associated with a user id (close frame where supported, in-flight requests canceled with `ErrConnectionClosed`, disconnect hooks run via the normal teardown path) and returns the number closed — `0` for unknown ids, safe for concurrent use. Use it when removing a user or revoking access so an already-authenticated socket can't linger.
+
 Inside handlers: `conn := aprot.Connection(ctx)`.
 
 ## Push Events

@@ -3,6 +3,7 @@ package aprot
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -178,6 +179,93 @@ func TestSSEConnectHookRejectionAfterSetUserIDDisassociates(t *testing.T) {
 	defer resp.Body.Close()
 
 	waitForUserConnCount(t, server, "u1", 0, 2*time.Second)
+}
+
+// --- Server.DisconnectUser ---
+
+// DisconnectUser must close every connection of the target user — sending a
+// close frame and running their disconnect hooks — while leaving other users'
+// connections untouched.
+func TestDisconnectUserClosesAllUserConnections(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&IntegrationHandlers{})
+	server := NewServer(registry)
+	server.OnConnect(func(ctx context.Context, conn *Conn) error {
+		conn.SetUserID(conn.Info().Header.Get("X-User"))
+		return nil
+	})
+	var mu sync.Mutex
+	disconnects := map[string]int{}
+	server.OnDisconnect(func(ctx context.Context, conn *Conn) {
+		mu.Lock()
+		disconnects[conn.UserID()]++
+		mu.Unlock()
+	})
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+	defer server.Stop(context.Background())
+
+	dial := func(user string) *websocket.Conn {
+		t.Helper()
+		ws, _, err := websocket.DefaultDialer.Dial(wsURL(ts.URL), http.Header{"X-User": {user}})
+		if err != nil {
+			t.Fatalf("dial as %q: %v", user, err)
+		}
+		return ws
+	}
+	a1, a2, b := dial("A"), dial("A"), dial("B")
+	defer a1.Close()
+	defer a2.Close()
+	defer b.Close()
+	waitForUserConnCount(t, server, "A", 2, 2*time.Second)
+	waitForUserConnCount(t, server, "B", 1, 2*time.Second)
+
+	if n := server.DisconnectUser("A"); n != 2 {
+		t.Fatalf("DisconnectUser(A) = %d, want 2", n)
+	}
+
+	// Both A sockets must observe a close frame, not just a dead TCP conn.
+	for i, ws := range []*websocket.Conn{a1, a2} {
+		_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+		var err error
+		for err == nil {
+			_, _, err = ws.ReadMessage()
+		}
+		if !websocket.IsCloseError(err, websocket.CloseGoingAway) {
+			t.Errorf("A conn %d: read error = %v, want close frame (CloseGoingAway)", i+1, err)
+		}
+	}
+
+	// Teardown must run disconnect hooks for both A connections and free the
+	// user index entry.
+	waitForUserConnCount(t, server, "A", 0, 2*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		aHooks, bHooks := disconnects["A"], disconnects["B"]
+		mu.Unlock()
+		if aHooks == 2 {
+			if bHooks != 0 {
+				t.Fatalf("disconnect hooks ran %d time(s) for B, want 0", bHooks)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("disconnect hooks ran %d time(s) for A, want 2", aHooks)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// B is untouched, and repeated / unknown-id calls are no-ops.
+	if got := userConnCount(server, "B"); got != 1 {
+		t.Errorf("userConns[B] = %d, want 1", got)
+	}
+	if n := server.DisconnectUser("A"); n != 0 {
+		t.Errorf("second DisconnectUser(A) = %d, want 0", n)
+	}
+	if n := server.DisconnectUser("nobody"); n != 0 {
+		t.Errorf("DisconnectUser(nobody) = %d, want 0", n)
+	}
 }
 
 // --- Re-subscribe params freshness (#207 P2) ---

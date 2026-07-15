@@ -247,6 +247,44 @@ func TestPushToUser_SkipsReauthenticatedConnection(t *testing.T) {
 	}
 }
 
+// DisconnectUser must not close a connection that has since re-authenticated
+// as a different user — the same momentarily-stale-snapshot identity race
+// that PushToUser guards against.
+func TestDisconnectUser_SkipsReauthenticatedConnection(t *testing.T) {
+	server := NewServer(NewRegistry())
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+
+	conn := &Conn{
+		id:        1,
+		server:    server,
+		transport: &mockTransport{},
+		requests:  make(map[string]context.CancelCauseFunc),
+	}
+	conn.userID = "bob" // already re-authenticated as bob
+
+	// Momentarily-stale index: conn is still listed under alice.
+	server.userConns["alice"] = map[*Conn]struct{}{conn: {}}
+
+	if n := server.DisconnectUser("alice"); n != 0 {
+		t.Fatalf("DisconnectUser(alice) = %d, want 0 (conn now belongs to bob)", n)
+	}
+	if conn.isClosed() {
+		t.Fatal("alice's disconnect closed a connection now identified as bob")
+	}
+
+	// Sanity: a matching identity is closed and counted exactly once.
+	conn.userID = "alice"
+	if n := server.DisconnectUser("alice"); n != 1 {
+		t.Fatalf("DisconnectUser(alice) = %d, want 1", n)
+	}
+	if !conn.isClosed() {
+		t.Fatal("matching connection was not closed")
+	}
+	if n := server.DisconnectUser("alice"); n != 0 {
+		t.Fatalf("repeat DisconnectUser(alice) = %d, want 0 (already closed)", n)
+	}
+}
+
 // A failed refresh on a live connection reports auth_error but keeps the session.
 func TestAuth_FailedRefreshKeepsSession(t *testing.T) {
 	ts := newAuthServer(t, ServerOptions{}, tokenHook)

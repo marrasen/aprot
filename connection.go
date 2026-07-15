@@ -1092,32 +1092,35 @@ func (c *Conn) handleUnsubscribe(id string) {
 }
 
 func (c *Conn) close() {
+	c.closeWithCause(ErrConnectionClosed, false)
+}
+
+func (c *Conn) closeGracefully() {
+	c.closeWithCause(ErrServerShutdown, true)
+}
+
+// closeWithCause marks the connection closed, cancels its in-flight requests
+// with cause, unregisters its subscriptions, and closes the transport (with a
+// close frame when graceful and the transport supports one). It reports
+// whether this call performed the transition; false means the connection was
+// already closed.
+func (c *Conn) closeWithCause(cause error, graceful bool) bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		return
+		return false
 	}
 	c.closed = true
 	// Cancel all pending requests
 	for _, cancel := range c.requests {
-		cancel(ErrConnectionClosed)
+		cancel(cause)
 	}
 	c.mu.Unlock()
 	c.server.subscriptions.unregisterConn(c.id)
-	_ = c.transport.Close()
-}
-
-func (c *Conn) closeGracefully() {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
+	if graceful {
+		_ = c.transport.CloseGracefully()
+	} else {
+		_ = c.transport.Close()
 	}
-	c.closed = true
-	for _, cancel := range c.requests {
-		cancel(ErrServerShutdown)
-	}
-	c.mu.Unlock()
-	c.server.subscriptions.unregisterConn(c.id)
-	_ = c.transport.CloseGracefully()
+	return true
 }

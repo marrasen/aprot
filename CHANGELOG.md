@@ -25,6 +25,15 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   without casting. The meta interface moves from `tasks.ts` into
   `tasks-handler.ts` (next to the types that reference it); `tasks.ts`
   re-exports it, so existing imports keep resolving.
+- `Server.DisconnectUser(userID) int` — gracefully closes every connection
+  currently associated with a user id (the identity set via `Conn.SetUserID`)
+  and returns the number of connections closed. Each connection gets a close
+  frame where the transport supports one, its in-flight requests are canceled
+  with `ErrConnectionClosed`, and disconnect hooks run through the normal
+  teardown path. A no-op returning `0` for unknown ids; safe for concurrent
+  use; never closes a connection that has since re-authenticated as a
+  different user. Use it to evict removed users whose authenticated sockets
+  would otherwise linger.
 
 ### Changed
 

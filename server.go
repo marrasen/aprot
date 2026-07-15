@@ -422,6 +422,46 @@ func (s *Server) PushToUser(userID string, data any) {
 	}
 }
 
+// DisconnectUser closes every active connection currently associated with
+// userID (set via [Conn.SetUserID]) and returns the number of connections it
+// closed. Each connection is closed gracefully — a close frame where the
+// transport supports one — and its in-flight requests are canceled with
+// [ErrConnectionClosed]; disconnect hooks then run through the normal
+// teardown path as each connection's read loop exits. Safe for concurrent
+// use; a no-op returning 0 for an unknown user ID.
+//
+// Use it to evict a user whose account has been removed or whose access has
+// been revoked, so a previously authenticated socket cannot linger.
+func (s *Server) DisconnectUser(userID string) int {
+	if userID == "" {
+		return 0
+	}
+
+	// Snapshot under the lock, close outside it (same discipline as
+	// PushToUser): transport teardown must not run while holding s.mu.
+	s.mu.RLock()
+	conns := make([]*Conn, 0, len(s.userConns[userID]))
+	for conn := range s.userConns[userID] {
+		conns = append(conns, conn)
+	}
+	s.mu.RUnlock()
+
+	closed := 0
+	for _, conn := range conns {
+		// Same identity re-check as PushToUser: a mid-session SetUserID can
+		// leave the snapshot momentarily stale, and a disconnect aimed at one
+		// user must never close a connection that has since re-authenticated
+		// as a different user.
+		if conn.UserID() != userID {
+			continue
+		}
+		if conn.closeWithCause(ErrConnectionClosed, true) {
+			closed++
+		}
+	}
+	return closed
+}
+
 // associateUser registers a connection with a user ID.
 func (s *Server) associateUser(conn *Conn, userID string) {
 	s.mu.Lock()
