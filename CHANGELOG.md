@@ -10,6 +10,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `Server.DisconnectUser(userID) int` — gracefully closes every connection
+  currently associated with a user id (the identity set via `Conn.SetUserID`)
+  and returns the number of connections closed. Each connection gets a close
+  frame where the transport supports one, its in-flight requests are canceled
+  with `ErrConnectionClosed`, and disconnect hooks run through the normal
+  teardown path. A no-op returning `0` for unknown ids; safe for concurrent
+  use; never closes a connection that has since re-authenticated as a
+  different user. Use it to evict removed users whose authenticated sockets
+  would otherwise linger.
+
 ## [0.49.1] - 2026-07-14
 
 ### Fixed
