@@ -638,9 +638,13 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// (e.g. package "settings" + handler "Settings" both -> "settings.ts"), the
 	// handler file — written later — would silently overwrite the shared file,
 	// dropping its type/enum definitions and leaving every referencing file
-	// importing a type nobody defines (issue #206). Give any colliding shared
-	// file a distinct "{pkg}.types" base instead. A kebab-cased handler file
-	// name can never contain a dot, so the alternate base is collision-free.
+	// importing a type nobody defines (issue #206). The same collision happens
+	// against a file a runtime's OnGenerate hook writes — e.g. a shared type in
+	// package "tasks" lands in "tasks.ts", which the task runtime overwrites
+	// wholesale — so reserved client files (see ReserveClientFile) are treated
+	// like handler files here. Give any colliding shared file a distinct
+	// "{pkg}.types" base instead. A kebab-cased handler file name can never
+	// contain a dot, so the alternate base is collision-free.
 	handlerFileNames := make(map[string]bool)
 	for _, group := range g.registry.Groups() {
 		handlerFileNames[g.naming().FileName(group.Name)] = true
@@ -648,7 +652,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	pkgBase := make(map[string]string, len(sortedPkgs))
 	for _, pkg := range sortedPkgs {
 		base := pkg
-		if handlerFileNames[base] {
+		if handlerFileNames[base] || g.registry.reservedClientFiles[base] {
 			base = pkg + ".types"
 		}
 		pkgBase[pkg] = base

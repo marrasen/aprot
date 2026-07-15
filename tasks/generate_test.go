@@ -62,6 +62,81 @@ func TestGenerateWithTasks(t *testing.T) {
 	}
 }
 
+// taskRefStarterA and taskRefStarterB are two separate handler groups that both
+// return *TaskRef. Because the shared type is used by more than one group, the
+// main generator promotes TaskRef to a shared per-package file. That package's
+// short name is "tasks", which collides with the reserved task-runtime tasks.ts
+// — the convenience hook overwrites tasks.ts wholesale, so before the fix the
+// TaskRef declaration was dropped, leaving every consumer with a dangling
+// `import type { TaskRef } from './tasks'`.
+type taskRefStarterA struct{}
+
+func (h *taskRefStarterA) StartA(ctx context.Context) (*TaskRef, error) { return &TaskRef{}, nil }
+
+type taskRefStarterB struct{}
+
+func (h *taskRefStarterB) StartB(ctx context.Context) (*TaskRef, error) { return &TaskRef{}, nil }
+
+// TestGenerateSharedTaskRefFileRuntimeCollision guards the fix for a shared
+// tasks-package type colliding with the reserved task-runtime tasks.ts. TaskRef
+// must be declared in exactly one file, that file must not be the overwritten
+// tasks.ts, and every import of TaskRef must resolve to the defining file.
+func TestGenerateSharedTaskRefFileRuntimeCollision(t *testing.T) {
+	registry := aprot.NewRegistry()
+	registry.Register(&taskRefStarterA{})
+	registry.Register(&taskRefStarterB{})
+	Enable(registry)
+
+	results, err := aprot.NewGenerator(registry).Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	defFiles := make([]string, 0)
+	for name, content := range results {
+		if strings.Contains(content, "export interface TaskRef {") {
+			defFiles = append(defFiles, name)
+		}
+	}
+	if len(defFiles) != 1 {
+		names := make([]string, 0, len(results))
+		for name := range results {
+			names = append(names, name)
+		}
+		t.Fatalf("expected TaskRef defined in exactly one file, found in %v (files: %v)", defFiles, names)
+	}
+	if defFiles[0] == "tasks.ts" {
+		t.Fatalf("TaskRef declared in tasks.ts, which the task-runtime hook overwrites wholesale")
+	}
+	defModule := "./" + strings.TrimSuffix(defFiles[0], ".ts")
+
+	// Every import of TaskRef must resolve to the defining module — no dangling
+	// import, no file importing the type from itself.
+	for name, content := range results {
+		selfModule := "./" + strings.TrimSuffix(name, ".ts")
+		for _, line := range strings.Split(content, "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "import") || !strings.Contains(line, "TaskRef") {
+				continue
+			}
+			from := "from '"
+			i := strings.LastIndex(line, from)
+			if i < 0 {
+				continue
+			}
+			module := line[i+len(from):]
+			if j := strings.IndexByte(module, '\''); j >= 0 {
+				module = module[:j]
+			}
+			if module == selfModule {
+				t.Errorf("%s imports TaskRef from itself (%q)", name, module)
+			}
+			if module != defModule {
+				t.Errorf("%s imports TaskRef from %q, but it is defined in %q", name, module, defModule)
+			}
+		}
+	}
+}
+
 // TestGenerateWithTasksMultiFile verifies multi-file generation with tasks enabled.
 // The generator must create a tasks.ts file with task convenience code and must
 // not modify client.ts with any task-specific code.

@@ -43,6 +43,10 @@ func Enable(r *aprot.Registry, opts ...EnableOption) {
 	r.RegisterPushEventFor(handler, RequestTaskTreeEvent{})
 	r.RegisterPushEventFor(handler, RequestTaskOutputEvent{})
 	r.RegisterPushEventFor(handler, RequestTaskProgressEvent{})
+	// The convenience hook below writes tasks.ts wholesale; reserve that file
+	// so a shared type in the tasks package (e.g. a handler returning
+	// *tasks.TaskRef) is emitted as tasks.types.ts instead of being clobbered.
+	r.ReserveClientFile("tasks")
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
 		appendTaskConvenienceCode(results, mode, nil)
 	})
@@ -80,6 +84,9 @@ func EnableWithMeta[M any](r *aprot.Registry, opts ...EnableOption) {
 	r.RegisterPushEventFor(handler, RequestTaskTreeEvent{})
 	r.RegisterPushEventFor(handler, RequestTaskOutputEvent{})
 	r.RegisterPushEventFor(handler, RequestTaskProgressEvent{})
+	// See Enable: reserve tasks.ts so a shared tasks-package type (e.g. a
+	// handler returning *tasks.TaskRef) is not clobbered by the convenience hook.
+	r.ReserveClientFile("tasks")
 	r.OnGenerate(func(results map[string]string, mode aprot.OutputMode) {
 		appendTaskConvenienceCode(results, mode, metaType)
 	})

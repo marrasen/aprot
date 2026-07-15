@@ -171,6 +171,11 @@ type Registry struct {
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 	validator       StructValidator                                    // optional struct validator (nil = disabled)
 	restGroups      map[string]bool                                    // groups registered via RegisterREST
+	// reservedClientFiles are generated client file bases (without .ts) owned
+	// by a runtime's OnGenerate hook — e.g. the task system owns "tasks". The
+	// shared per-package type file namer steers clear of these, so a hook that
+	// writes the reserved file can never clobber a shared type declaration.
+	reservedClientFiles map[string]bool
 	// fieldTypeOverrides maps a struct type and Go field name to the concrete
 	// type code generation should use in place of the field's declared dynamic
 	// (interface) type. Codegen-only: runtime serialization is unaffected.
@@ -180,16 +185,17 @@ type Registry struct {
 // NewRegistry creates a new handler registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		handlers:           make(map[string]*HandlerInfo),
-		groups:             make(map[string]*HandlerGroup),
-		pushEvents:         []PushEventInfo{},
-		pushEventTypes:     make(map[reflect.Type]string),
-		errorCodes:         []ErrorCodeInfo{},
-		errorMappings:      []errorMapping{},
-		nextErrorCode:      1000, // Start custom codes at 1000
-		enumTypes:          make(map[reflect.Type]*EnumInfo),
-		restGroups:         make(map[string]bool),
-		fieldTypeOverrides: make(map[reflect.Type]map[string]reflect.Type),
+		handlers:            make(map[string]*HandlerInfo),
+		groups:              make(map[string]*HandlerGroup),
+		pushEvents:          []PushEventInfo{},
+		pushEventTypes:      make(map[reflect.Type]string),
+		errorCodes:          []ErrorCodeInfo{},
+		errorMappings:       []errorMapping{},
+		nextErrorCode:       1000, // Start custom codes at 1000
+		enumTypes:           make(map[reflect.Type]*EnumInfo),
+		restGroups:          make(map[string]bool),
+		fieldTypeOverrides:  make(map[reflect.Type]map[string]reflect.Type),
+		reservedClientFiles: make(map[string]bool),
 	}
 }
 
@@ -644,6 +650,19 @@ func (r *Registry) SetValidator(v StructValidator) {
 // Hooks can modify existing entries or add new files.
 func (r *Registry) OnGenerate(hook func(results map[string]string, mode OutputMode)) {
 	r.generateHooks = append(r.generateHooks, hook)
+}
+
+// ReserveClientFile marks a generated client file base name (without the .ts
+// extension) as owned by a runtime — e.g. the task system, whose OnGenerate
+// hook writes tasks.ts, reserves "tasks". A shared per-package type file whose
+// Go package short name matches a reserved base is emitted as "{pkg}.types.ts"
+// instead, so the hook can never overwrite the shared file and strand its type
+// declarations (which would leave consumers importing a type nobody exports).
+func (r *Registry) ReserveClientFile(base string) {
+	if r.reservedClientFiles == nil {
+		r.reservedClientFiles = make(map[string]bool)
+	}
+	r.reservedClientFiles[base] = true
 }
 
 // OnServerInit registers a hook called during NewServer after the server is
