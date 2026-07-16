@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-07-16
+
 ### Added
 
 - `ServerOptions.Logger` (`*slog.Logger`; nil uses `slog.Default()`) — receives
