@@ -436,6 +436,12 @@
 // fast and non-blocking. For gauge-style values, [Server.Stats] returns a
 // pull-based snapshot of active connection and subscription counts.
 //
+// Set [ServerOptions.Logger] (a *slog.Logger; nil uses slog.Default) to
+// receive server-side error logs. Currently logged: response-encode failures —
+// a handler result that cannot be marshaled is reported to the client as an
+// internal error and logged with the method name, so the failure leaves a
+// trace operators can find.
+//
 // # Push Events
 //
 // Push events are server-to-client messages broadcast to all connected clients
@@ -846,6 +852,12 @@
 // time.Duration has no default JSON representation in the v2 encoder and is
 // rejected at generation time; add a json format option (e.g.
 // `json:"d,format:nano"`) or use a different type.
+//
+// Per-field `format:` tags are supported on every marshal/unmarshal path
+// (results, params, push/refresh payloads, stream items): aprot opts in to
+// go-json-experiment/json's format-tag support internally, so consumers do
+// not need to pin the json/v2 snapshot or set
+// json.ExperimentalGlobalSupportFormatTag themselves.
 //
 // # Wire Protocol
 //

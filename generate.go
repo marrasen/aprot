@@ -52,13 +52,14 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 		return nil
 	}
 
-	// json.Marshaler: create zero value and marshal it.
+	// json.Marshaler: create zero value and marshal it. Use the shared wire
+	// options so the probe sees the same semantics as the runtime.
 	var data []byte
 	func() {
 		defer func() { _ = recover() }() // guard against panics on zero-value marshal
 		v := reflect.New(t)
 		var err error
-		data, err = json.Marshal(v.Interface())
+		data, err = marshalJSON(v.Interface())
 		if err != nil {
 			data = nil
 		}

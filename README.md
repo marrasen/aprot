@@ -952,6 +952,16 @@ Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, sub
 - **Cardinality** — `Method` is bounded by your handler set, but per-user / per-connection labels can explode a metrics backend; aggregate those.
 - **Gauges** — `server.Stats()` returns a pull-based snapshot (`Connections`, `Subscriptions`) for periodic scraping, rather than tracking those from events.
 
+### Server-side error logging
+
+Set `ServerOptions.Logger` (a `*slog.Logger`) to receive server-side error logs; nil uses `slog.Default()`. Currently logged: response-encode failures — a handler result that cannot be marshaled (e.g. a NaN float) is reported to the client as an internal error *and* logged with the method name, so operators see the failure even when no client surfaces it.
+
+```go
+server := aprot.NewServer(registry, aprot.ServerOptions{
+    Logger: slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+})
+```
+
 ## REST Adapter
 
 Serve your handlers as REST/HTTP endpoints alongside WebSocket. Use `RegisterREST` for REST-only handlers, or `EnableREST` to expose a WebSocket handler via REST as well:

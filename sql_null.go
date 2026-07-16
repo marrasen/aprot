@@ -186,12 +186,27 @@ var sqlNullOptions = json.JoinOptions(
 	json.WithUnmarshalers(sqlNullUnmarshalers),
 )
 
-// marshalJSON marshals v to JSON with sql.Null* type support.
+// wireJSONOptions is the single options set applied everywhere aprot marshals
+// or unmarshals user data: response results, request params, push/refresh
+// payloads, stream items, the $blob JSON fallback, and the codegen's
+// zero-value marshaling probes. It combines the sql.Null* overrides with the
+// go-json-experiment/json opt-in for per-field `format:` struct tags:
+// snapshots since 2026-06 reject format-tagged fields at marshal/unmarshal
+// time unless this option is set, and aprot's codegen requires such tags on
+// some types (e.g. `json:"d,format:nano"` on time.Duration).
+var wireJSONOptions = json.JoinOptions(
+	sqlNullOptions,
+	json.ExperimentalSupportFormatTag(true),
+)
+
+// marshalJSON marshals v to JSON with aprot's wire semantics: sql.Null* type
+// support and `format:` struct tag support.
 func marshalJSON(v any) ([]byte, error) {
-	return json.Marshal(v, sqlNullOptions)
+	return json.Marshal(v, wireJSONOptions)
 }
 
-// unmarshalJSON unmarshals data into v with sql.Null* type support.
+// unmarshalJSON unmarshals data into v with aprot's wire semantics: sql.Null*
+// type support and `format:` struct tag support.
 func unmarshalJSON(data []byte, v any) error {
-	return json.Unmarshal(data, v, sqlNullOptions)
+	return json.Unmarshal(data, v, wireJSONOptions)
 }

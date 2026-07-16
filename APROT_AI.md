@@ -45,6 +45,8 @@ Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{Max
 
 **Observability**: set `ServerOptions.Observer` to an `aprot.Observer` (embed `aprot.NoopObserver`, override what you need) — nil disables it with zero hot-path cost. Events: `ConnectionOpened/Closed(*Conn)`, `RequestCompleted(RequestEvent{Method, Subscribe, Duration, Code})` (Code 0 = success; fires for client requests/subscribes, not server refreshes), `SubscriptionRegistered/Unregistered(*Conn, method, id)`, `RefreshFanout(key, matched)`, `SendBufferFull(*Conn)` (backpressure; frame not dropped), `WriteTimedOut(*Conn)`. Callbacks are synchronous on hot paths + may run concurrently — keep them fast/non-blocking. Pull-based gauges: `server.Stats()` → `ServerStats{Connections, Subscriptions}`. Streaming handlers hold their slot until stream end; `RequestCompleted.Duration` spans the full iteration.
 
+**Server-side error logging**: set `ServerOptions.Logger` (`*slog.Logger`; nil → `slog.Default()`). Currently logged at error level: response-encode failures (unmarshalable handler results), with the method name — the same failures the client sees as `CodeInternalError`.
+
 ### 3. TypeScript Generation
 ```go
 gen := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
@@ -557,6 +559,7 @@ Other type-mapping notes:
 - `map[bool]V` → `Partial<Record<"true" | "false", V>>` (boolean isn't a valid TS index type).
 - `json.RawMessage` → `unknown`.
 - `time.Duration` has no default JSON representation in the v2 encoder and is **rejected at generation time** — add a json format option (e.g. `json:"d,format:nano"`) or use a different type.
+- Per-field `format:` tags work on every runtime marshal/unmarshal path (results, params, push/refresh payloads, stream items): aprot opts in to go-json-experiment/json's format-tag support internally (json/v2 snapshots since 2026-06 made it opt-in), so consumers don't need to pin the json/v2 snapshot or call `json.ExperimentalGlobalSupportFormatTag` themselves.
 - Field names and handler param names that aren't valid TS identifiers are quoted (`"my-field"`) or suffixed (`new_`) automatically.
 
 ## Naming Plugins

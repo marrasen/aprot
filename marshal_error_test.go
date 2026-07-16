@@ -1,10 +1,13 @@
 package aprot
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"math"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,6 +74,59 @@ func TestResponseMarshalFailureSendsError(t *testing.T) {
 	resp := readMessageOfType(t, ws, TypeResponse, 3*time.Second)
 	if resp.ID != "2" {
 		t.Errorf("expected response for request 2, got %q", resp.ID)
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer: the server logs from request
+// goroutines while the test reads from its own.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// An encode failure must be logged server-side (with the method name) in
+// addition to the CodeInternalError sent to the client — the client-facing
+// error alone leaves operators with no trace in the logs.
+func TestResponseMarshalFailureIsLogged(t *testing.T) {
+	var logs syncBuffer
+	registry := NewRegistry()
+	registry.Register(&MarshalHandlers{})
+	server := NewServer(registry, ServerOptions{
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	ts := httptest.NewServer(server)
+	t.Cleanup(ts.Close)
+
+	ws := connectWS(t, ts)
+	defer ws.Close()
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "MarshalHandlers.NaN", Params: jsontext.Value(`[{"message":"hi"}]`)}); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	errMsg := readMessageOfType(t, ws, TypeError, 3*time.Second)
+	if errMsg.Code != CodeInternalError {
+		t.Errorf("expected CodeInternalError, got %d", errMsg.Code)
+	}
+
+	got := logs.String()
+	if !strings.Contains(got, "failed to encode response") {
+		t.Errorf("expected encode failure in server log, got %q", got)
+	}
+	if !strings.Contains(got, "MarshalHandlers.NaN") {
+		t.Errorf("expected method name in server log, got %q", got)
 	}
 }
 

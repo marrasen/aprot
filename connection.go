@@ -321,9 +321,9 @@ func (c *Conn) sendJSONCtx(ctx context.Context, v any) error {
 	return c.transport.SendCtx(ctx, data)
 }
 
-func (c *Conn) sendResponse(id string, result any) {
+func (c *Conn) sendResponse(id, method string, result any) {
 	if blob, ok := asBlob(result); ok {
-		c.sendBlobResponse(id, blob)
+		c.sendBlobResponse(id, method, blob)
 		return
 	}
 	msg := ResponseMessage{
@@ -335,6 +335,9 @@ func (c *Conn) sendResponse(id string, result any) {
 	if err != nil {
 		// A result that cannot be marshaled (e.g. a NaN float) must not leave
 		// the request pending forever: surface it as an internal error instead.
+		// Log it too — the client-facing error alone leaves no server-side
+		// trace for operators.
+		c.server.logger().Error("aprot: failed to encode response", "method", method, "id", id, "error", err)
 		c.sendError(id, CodeInternalError, "failed to encode response: "+err.Error())
 		return
 	}
@@ -367,7 +370,7 @@ type blobFallbackResult struct {
 	Blob Blob `json:"$blob"`
 }
 
-func (c *Conn) sendBlobResponse(id string, blob Blob) {
+func (c *Conn) sendBlobResponse(id, method string, blob Blob) {
 	if !c.transport.SupportsBinary() {
 		msg := ResponseMessage{
 			Type:   TypeResponse,
@@ -376,6 +379,7 @@ func (c *Conn) sendBlobResponse(id string, blob Blob) {
 		}
 		data, err := marshalJSON(msg)
 		if err != nil {
+			c.server.logger().Error("aprot: failed to encode response", "method", method, "id", id, "error", err)
 			c.sendError(id, CodeInternalError, "failed to encode response: "+err.Error())
 			return
 		}
@@ -388,6 +392,7 @@ func (c *Conn) sendBlobResponse(id string, blob Blob) {
 		ContentType: blob.ContentType,
 	}, blob.Data)
 	if err != nil {
+		c.server.logger().Error("aprot: failed to encode binary response", "method", method, "id", id, "error", err)
 		c.sendError(id, CodeInternalError, "failed to encode binary response: "+err.Error())
 		return
 	}
@@ -723,7 +728,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 		return
 	}
 
-	c.sendResponse(msg.ID, result)
+	c.sendResponse(msg.ID, msg.Method, result)
 
 	// Process batched refresh triggers after response is sent
 	c.server.processRefreshQueue(rq)
@@ -999,7 +1004,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 		}
 	}
 
-	c.sendResponse(msg.ID, result)
+	c.sendResponse(msg.ID, msg.Method, result)
 
 	// Process batched refresh triggers after response is sent
 	c.server.processRefreshQueue(rq)
@@ -1084,7 +1089,7 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 		c.server.subscriptions.updateKeys(c.id, sub.id, keys)
 	}
 
-	c.sendResponse(sub.id, result)
+	c.sendResponse(sub.id, sub.method, result)
 }
 
 func (c *Conn) handleUnsubscribe(id string) {
