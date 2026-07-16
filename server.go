@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -87,6 +88,11 @@ type ServerOptions struct {
 	// send-buffer events for metrics/observability. Nil (the default) disables
 	// all observation with no hot-path cost. See [Observer].
 	Observer Observer
+	// Logger receives server-side error logs — currently response-encode
+	// failures, which are also reported to the client as CodeInternalError but
+	// would otherwise leave no server-side trace. Nil (the default) uses
+	// [slog.Default].
+	Logger *slog.Logger
 	// AuthTimeout is how long a connection may stay unauthenticated after
 	// connecting when an [AuthHook] is registered via [Server.OnAuth]. A
 	// connection that has not sent a valid auth frame within this window is
@@ -216,6 +222,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.Observer != nil {
 			options.Observer = opt.Observer
 		}
+		if opt.Logger != nil {
+			options.Logger = opt.Logger
+		}
 		if opt.AuthTimeout != 0 {
 			options.AuthTimeout = opt.AuthTimeout
 		}
@@ -273,6 +282,15 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 
 	go s.run()
 	return s
+}
+
+// logger returns the configured [ServerOptions.Logger], falling back to
+// [slog.Default].
+func (s *Server) logger() *slog.Logger {
+	if s.options.Logger != nil {
+		return s.options.Logger
+	}
+	return slog.Default()
 }
 
 // Use adds middleware to the chain.

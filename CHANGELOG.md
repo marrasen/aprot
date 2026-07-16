@@ -10,6 +10,28 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `ServerOptions.Logger` (`*slog.Logger`; nil uses `slog.Default()`) — receives
+  server-side error logs. Currently logged at error level: response-encode
+  failures, with the method name and error. These were previously reported to
+  the client as `CodeInternalError` but left no server-side trace, so an
+  incident could produce zero log lines.
+
+### Fixed
+
+- Compatibility with go-json-experiment/json snapshots from 2026-06 onward,
+  which made per-field `format:` struct tags opt-in. aprot's codegen requires
+  such tags on some types (e.g. `json:"d,format:nano"` on `time.Duration`),
+  so any consumer that resolved a newer snapshot via MVS had every response
+  containing a format-tagged struct fail with ``Go struct field … has
+  unsupported `format` tag option``. aprot now opts in on every path that
+  marshals or unmarshals user data (response results, request params,
+  push/refresh payloads, stream items, the `$blob` JSON fallback, and the
+  codegen's zero-value probes) and requires the 2026-06-23 snapshot or newer.
+  Consumers that pinned go-json-experiment/json back to aprot's previous
+  version as a workaround can drop the pin.
+
 ## [0.51.0] - 2026-07-15
 
 ### Added

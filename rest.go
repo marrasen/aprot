@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 )
 
@@ -343,7 +342,7 @@ func marshalJSONParams(params []any) (jsontext.Value, error) {
 		if raw, ok := p.(jsontext.Value); ok {
 			parts = append(parts, string(raw))
 		} else {
-			data, err := json.Marshal(p)
+			data, err := marshalJSON(p)
 			if err != nil {
 				return nil, err
 			}
@@ -408,7 +407,8 @@ func writeJSONErrorData(w http.ResponseWriter, status int, code int, message str
 		Message: message,
 		Data:    data,
 	}
-	out, _ := json.Marshal(resp)
+	// Data may carry user error payloads, so use the shared wire options.
+	out, _ := marshalJSON(resp)
 	_, _ = w.Write(out)
 }
 

@@ -12,7 +12,7 @@ func TestSendResponseByteSliceStaysJSON(t *testing.T) {
 	rt := &recordingTransport{}
 	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
 
-	c.sendResponse("req-1", []byte("hello"))
+	c.sendResponse("req-1", "Test.Method", []byte("hello"))
 
 	messages := rt.Messages()
 	if len(messages) != 1 {
@@ -38,7 +38,7 @@ func TestSendResponseNilBlobPointerIsJSONNull(t *testing.T) {
 	rt := &recordingTransport{}
 	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
 
-	c.sendResponse("req-1", (*Blob)(nil))
+	c.sendResponse("req-1", "Test.Method", (*Blob)(nil))
 
 	messages := rt.Messages()
 	if len(messages) != 1 {
@@ -67,7 +67,7 @@ func TestSendResponseBlobFallsBackToJSONWithoutBinarySupport(t *testing.T) {
 	rt := &noBinaryRecordingTransport{}
 	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
 
-	c.sendResponse("req-1", Blob{ContentType: "text/plain", Data: []byte("hello")})
+	c.sendResponse("req-1", "Test.Method", Blob{ContentType: "text/plain", Data: []byte("hello")})
 
 	messages := rt.Messages()
 	if len(messages) != 1 {
@@ -101,7 +101,7 @@ func TestSendResponseBlobUsesBinaryFrameWhenSupported(t *testing.T) {
 	rt := &recordingTransport{}
 	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
 
-	c.sendResponse("req-1", Blob{ContentType: "text/plain", Data: []byte("hello")})
+	c.sendResponse("req-1", "Test.Method", Blob{ContentType: "text/plain", Data: []byte("hello")})
 
 	messages := rt.Messages()
 	if len(messages) != 1 {
