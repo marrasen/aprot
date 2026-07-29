@@ -95,6 +95,11 @@
 // another struct, streamed as an item, or used as a parameter travels as
 // ordinary JSON ({contentType?, data}).
 //
+// Hand-written WebSocket clients must decode the binary frame; one that
+// handles only text frames drops Blob responses silently, leaving the call
+// pending with no server-side trace. See docs/binary-frames.md for the frame
+// format and a reference decoder.
+//
 // # Input Transformation
 //
 // Request struct fields can be normalized before handler dispatch using

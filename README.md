@@ -659,6 +659,8 @@ imgEl.src = URL.createObjectURL(avatar); // avatar.type === 'image/png'
 
 Over WebSocket the payload travels as a binary frame (a 4-byte header length, a small JSON header, then the raw bytes). Transports without binary frames (SSE, byte-stream) fall back to a JSON envelope carrying base64 data, which the client converts back into a `Blob` automatically — the resolved type never depends on the transport. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) deliver `Blob`s the same way.
 
+If you are writing your own WebSocket client rather than using the generated one, see **[docs/binary-frames.md](docs/binary-frames.md)** for the frame format and a reference decoder. A client that handles only text frames silently drops `Blob` responses: the call never settles and there is no server-side trace, which is easily mistaken for a server deadlock.
+
 Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
 
 ## Subscription Patches

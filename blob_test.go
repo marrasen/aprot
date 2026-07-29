@@ -97,6 +97,16 @@ func TestSendResponseBlobFallsBackToJSONWithoutBinarySupport(t *testing.T) {
 	}
 }
 
+// TestBinaryFrameVersionMatchesDocumentedFormat guards docs/binary-frames.md,
+// which specifies version 1 for third-party client implementers. Bumping the
+// constant is a wire-format change: update that document (and give clients a
+// way to recognize the new version) in the same change.
+func TestBinaryFrameVersionMatchesDocumentedFormat(t *testing.T) {
+	if binaryFrameVersion != 1 {
+		t.Fatalf("binaryFrameVersion = %d, but docs/binary-frames.md documents version 1", binaryFrameVersion)
+	}
+}
+
 func TestSendResponseBlobUsesBinaryFrameWhenSupported(t *testing.T) {
 	rt := &recordingTransport{}
 	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
