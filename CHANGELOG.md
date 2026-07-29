@@ -10,6 +10,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Documentation
+
+- `docs/binary-frames.md` documents the WebSocket binary frame format used for
+  `Blob` results — layout, header fields, reference decoders (JS and Python),
+  and the JSON `$blob` fallback — for anyone writing a WebSocket client other
+  than the generated TypeScript one. A client that handles only text frames
+  drops `Blob` responses silently: the call never settles, and because the
+  server considers the request complete there is no error and no server-side
+  trace, which is easily mistaken for a server deadlock. Subscriptions to a
+  `Blob`-returning method have the same failure with no hang at all — the
+  refreshes just never arrive. (#279)
+
 ## [0.52.0] - 2026-07-16
 
 ### Added

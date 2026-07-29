@@ -128,6 +128,8 @@ func (h *H) GetAvatar(ctx context.Context, userID string) (aprot.Blob, error) {
 ```
 Return `aprot.Blob` / `*aprot.Blob` as the **top-level result** and the generated method is typed `Promise<Blob>`, resolving a DOM `Blob` on every transport: WS sends a raw binary frame (no base64); SSE/stream fall back to a `{"$blob": {contentType, data}}` JSON envelope that the client converts back automatically. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) also deliver `Blob`s. Opt-in only: a plain `[]byte` result stays a base64 string, and a `Blob` nested in a struct, streamed, or used as a param travels as JSON `{ contentType?: string; data: string }`. Do not name your own generated type `Blob` — the DOM type is used verbatim.
 
+**Non-generated WS clients must decode the binary frame** (`[4-byte BE header length][JSON header][raw payload]`, header `{version, type, id, contentType}`) — a client that handles only text frames drops `Blob` responses silently, so the call hangs forever with no server-side trace, and `Blob` subscriptions just stop refreshing. Format spec + reference decoder: `docs/binary-frames.md`.
+
 ## Input Transformation
 
 `transform:"…"` ops run after JSON decoding, before validation. Statically checked at `Register` time.
