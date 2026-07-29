@@ -130,6 +130,8 @@ Return `aprot.Blob` / `*aprot.Blob` as the **top-level result** and the generate
 
 **Non-generated WS clients must decode the binary frame** (`[4-byte BE header length][JSON header][raw payload]`, header `{version, type, id, contentType}`) — a client that handles only text frames drops `Blob` responses silently, so the call hangs forever with no server-side trace, and `Blob` subscriptions just stop refreshing. Format spec + reference decoder: `docs/binary-frames.md`.
 
+**Opting out (#279):** dial with `?binary=0` (`wss://host/ws?binary=0`) and that connection gets `Blob` results as the JSON `$blob` envelope instead — same shape SSE/stream use, costs base64 inflation. Values `1/true/yes/on` and `0/false/no/off`, case-insensitive; anything else fails the upgrade with `400` (a typo must not silently restore the hang). The `config` frame now carries `binaryFrames: bool` (always emitted, `false` on SSE/stream) so a client can confirm the negotiated mode before its first call; a missing field means a server predating the negotiation. Generated TS clients always take binary and need no changes.
+
 ## Input Transformation
 
 `transform:"…"` ops run after JSON decoding, before validation. Statically checked at `Register` time.

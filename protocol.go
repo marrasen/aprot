@@ -152,4 +152,11 @@ type ConfigMessage struct {
 	ReconnectInterval    int         `json:"reconnectInterval,omitempty"`
 	ReconnectMaxInterval int         `json:"reconnectMaxInterval,omitempty"`
 	ReconnectMaxAttempts int         `json:"reconnectMaxAttempts,omitempty"`
+	// BinaryFrames reports whether Blob results will arrive on this connection
+	// as binary frames rather than the JSON $blob envelope. Deliberately not
+	// omitempty: false is the informative value, and a client that must decode
+	// binary frames needs to learn that before the first Blob response rather
+	// than by hanging on one. An absent field means a server predating the
+	// negotiation, i.e. binary frames on WebSocket.
+	BinaryFrames bool `json:"binaryFrames"`
 }

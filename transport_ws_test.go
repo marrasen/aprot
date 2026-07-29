@@ -51,7 +51,7 @@ func newWSPair(t *testing.T) (server, client *websocket.Conn) {
 func TestWSTransport_CloseDeliversQueuedFrames(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		server, client := newWSPair(t)
-		tr := newWSTransport(server, ServerOptions{})
+		tr := newWSTransport(server, ServerOptions{}, true)
 
 		// Enqueue, then close, before the pump runs — the ordering every
 		// send-then-close caller (e.g. handleAuth) produces, with the pump

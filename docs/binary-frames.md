@@ -7,6 +7,9 @@ probes, bindings for other languages, quick tooling — can decode them.
 If you are using the generated TypeScript client, you do not need any of this;
 it decodes these frames already.
 
+If you would rather not decode binary at all, you can decline it per
+connection — see [Opting out](#opting-out-of-binary-frames).
+
 ## When aprot sends a binary frame
 
 Every aprot message is a **text** frame carrying JSON, with exactly one
@@ -113,18 +116,59 @@ refreshes silently never arrive and the client shows stale data forever.
 If a single RPC hangs while every other call on the same connection works,
 check whether that method returns a `Blob`.
 
-Two defenses:
+Three defenses:
 
 - Handle binary frames, per the decoder above.
+- Or decline them with `?binary=0`, and check the `config` frame to confirm.
 - Reject unknown frames instead of ignoring them. Since the header always
   carries an `id`, a client that cannot make sense of a frame can still fail
   the corresponding pending request with a clear error rather than leaving the
   caller to hang.
 
+## Opting out of binary frames
+
+A WebSocket client can decline binary frames for the lifetime of a connection
+by passing `binary=0` on the upgrade URL:
+
+```js
+const ws = new WebSocket('wss://example.com/ws?binary=0');
+```
+
+`Blob` results then arrive as ordinary text frames carrying the JSON `$blob`
+envelope below, exactly as they do on SSE and byte-stream. Nothing else about
+the connection changes. Accepted values are `1`/`true`/`yes`/`on` and
+`0`/`false`/`no`/`off`, case-insensitive; omitting the parameter means binary
+frames. **An unrecognized value fails the upgrade with `400 Bad Request`** —
+a typo that quietly re-enabled binary frames would reinstate the silent hang
+this parameter exists to prevent.
+
+The cost is base64: the payload inflates by about a third and both ends pay to
+encode and decode it. If you are moving images or files of any size, implement
+the decoder above instead.
+
+### Confirming what you negotiated
+
+The `config` frame the server sends immediately after the upgrade — before any
+request can be made — reports the mode in effect:
+
+```json
+{ "type": "config", "binaryFrames": false }
+```
+
+Read it rather than assuming. `binaryFrames` is always present on a server that
+supports negotiation, so a missing field means an older server, i.e. binary
+frames on WebSocket. On SSE and byte-stream it is always `false`.
+
+This is the one signal available before a `Blob` response can hang you: a
+client that cannot decode binary frames should check `binaryFrames` at connect
+time and fail loudly if it is `true`. aprot cannot detect a dropped frame, so
+there is no server-side equivalent.
+
 ## JSON fallback
 
-Transports without a native binary channel (SSE, byte-stream) deliver the same
-value as an ordinary text `response` frame whose result is a one-key envelope:
+Transports without a native binary channel (SSE, byte-stream) — and WebSocket
+connections that passed `binary=0` — deliver the same value as an ordinary
+text `response` frame whose result is a one-key envelope:
 
 ```json
 {

@@ -661,6 +661,14 @@ Over WebSocket the payload travels as a binary frame (a 4-byte header length, a 
 
 If you are writing your own WebSocket client rather than using the generated one, see **[docs/binary-frames.md](docs/binary-frames.md)** for the frame format and a reference decoder. A client that handles only text frames silently drops `Blob` responses: the call never settles and there is no server-side trace, which is easily mistaken for a server deadlock.
 
+A client that would rather not decode binary at all can decline it for the lifetime of the connection by passing `binary=0` on the upgrade URL:
+
+```js
+const ws = new WebSocket('wss://example.com/ws?binary=0');
+```
+
+`Blob` results then arrive as the same JSON `$blob` envelope SSE and stream use, at the cost of base64 inflation. The `config` frame the server sends immediately after the upgrade reports the mode in effect as `binaryFrames`, so a client can confirm what it negotiated before making its first call rather than discovering it by hanging. An unrecognized value fails the upgrade with `400 Bad Request` — a typo that silently re-enabled binary frames would reinstate the very hang the parameter prevents.
+
 Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
 
 ## Subscription Patches

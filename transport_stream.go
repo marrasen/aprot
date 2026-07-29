@@ -233,7 +233,7 @@ func (s *Server) ServeStream(ctx context.Context, rw io.ReadWriteCloser, info Co
 	// peer that isn't reading yet — a raw stream has no write deadline to
 	// bound a direct write. The send buffer is empty here, so this never
 	// blocks; the write pump flushes it once the connection is accepted.
-	if cfgData, err := json.Marshal(configMessage(s.options)); err == nil {
+	if cfgData, err := json.Marshal(configMessage(s.options, false)); err == nil {
 		_ = st.Send(cfgData)
 	}
 
