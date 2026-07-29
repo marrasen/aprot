@@ -2,8 +2,10 @@ package aprot
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -547,6 +549,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Negotiate before upgrading so a malformed value is reported as a plain
+	// HTTP error the client can actually read.
+	binaryFrames, err := wsBinaryFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -554,7 +564,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	connID := atomic.AddUint64(&s.nextConnID, 1)
 	ctx := r.Context()
-	wst := newWSTransport(ws, s.options)
+	wst := newWSTransport(ws, s.options, binaryFrames)
 	conn := newConn(wst, s, connID, connInfoFromRequest(r), ctx)
 	// Give the transport a back-reference so it can report send-buffer pressure
 	// and write timeouts to the observer. Set before the pumps start.
@@ -580,7 +590,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send config directly before pumps start
-	sendConfigWS(ws, s.options)
+	sendConfigWS(ws, s.options, binaryFrames)
 
 	// Register the connection, but don't block forever if the server has
 	// already shut down (run() has exited and will never read s.register).
@@ -783,13 +793,37 @@ func connectionRejectedMessage(err error) ErrorMessage {
 
 // configMessage builds the server-pushed configuration frame sent to every
 // new connection before message processing starts. Shared by all transports.
-func configMessage(opts ServerOptions) ConfigMessage {
+func configMessage(opts ServerOptions, binaryFrames bool) ConfigMessage {
 	return ConfigMessage{
 		Type:                 TypeConfig,
 		ReconnectInterval:    opts.ReconnectInterval,
 		ReconnectMaxInterval: opts.ReconnectMaxInterval,
 		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
+		BinaryFrames:         binaryFrames,
 	}
+}
+
+// wsBinaryFromRequest reports whether a WebSocket connection accepts binary
+// frames, honoring an optional "binary" query parameter on the upgrade URL.
+// Absent means yes, which keeps every existing client on the efficient path.
+//
+// A client that only decodes text frames passes binary=0 and gets Blob results
+// as the JSON $blob envelope instead — the same representation SSE and stream
+// already use. An unrecognized value is an error rather than a silent default:
+// the whole point of the parameter is avoiding a silent hang, and a typo that
+// quietly re-enabled binary frames would reinstate exactly that.
+func wsBinaryFromRequest(r *http.Request) (bool, error) {
+	q := r.URL.Query()
+	if !q.Has("binary") {
+		return true, nil
+	}
+	switch strings.ToLower(q.Get("binary")) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("aprot: invalid binary query parameter %q: want one of 1/true/yes/on or 0/false/no/off", q.Get("binary"))
 }
 
 func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
@@ -799,7 +833,7 @@ func sendConnectionRejectedWS(ws *websocket.Conn, err error) {
 
 // sendConfigWS sends the server configuration directly to a WebSocket connection.
 // Called before the pumps are started.
-func sendConfigWS(ws *websocket.Conn, opts ServerOptions) {
-	data, _ := json.Marshal(configMessage(opts))
+func sendConfigWS(ws *websocket.Conn, opts ServerOptions, binaryFrames bool) {
+	data, _ := json.Marshal(configMessage(opts, binaryFrames))
 	_ = ws.WriteMessage(websocket.TextMessage, data)
 }

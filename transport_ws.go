@@ -19,6 +19,10 @@ type wsTransport struct {
 	send chan outboundFrame
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 	opts ServerOptions // read limit, write timeout, and keepalive settings
+	// binary reports whether this connection accepts binary frames. Negotiated
+	// per-connection at upgrade time rather than fixed per-transport, so a
+	// client that only decodes text can take the JSON $blob fallback path.
+	binary bool
 	// conn is a back-reference used only to report send-buffer pressure and
 	// write timeouts to the server's observer. Set after construction, before
 	// the pumps start; nil in transports created without a connection.
@@ -39,12 +43,13 @@ func (t *wsTransport) observer() Observer {
 	return t.conn.server.observer
 }
 
-func newWSTransport(ws *websocket.Conn, opts ServerOptions) *wsTransport {
+func newWSTransport(ws *websocket.Conn, opts ServerOptions, binary bool) *wsTransport {
 	return &wsTransport{
-		ws:   ws,
-		send: make(chan outboundFrame, 256),
-		done: make(chan struct{}),
-		opts: opts,
+		ws:     ws,
+		send:   make(chan outboundFrame, 256),
+		done:   make(chan struct{}),
+		opts:   opts,
+		binary: binary,
 	}
 }
 
@@ -56,13 +61,21 @@ func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
 }
 
-func (t *wsTransport) SupportsBinary() bool { return true }
+func (t *wsTransport) SupportsBinary() bool { return t.binary }
 
 func (t *wsTransport) SendBinary(data []byte) error {
-	return t.sendFrame(context.Background(), outboundFrame{messageType: websocket.BinaryMessage, data: data})
+	return t.SendBinaryCtx(context.Background(), data)
 }
 
+// SendBinaryCtx refuses to write when the connection declined binary frames.
+// The interface already requires callers to check SupportsBinary first; a
+// missed check would otherwise put a frame on the wire that the peer has told
+// us it cannot decode, which is the silent-drop failure this negotiation
+// exists to prevent. Failing here surfaces it as an error instead.
 func (t *wsTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
+	if !t.binary {
+		return errBinaryUnsupported
+	}
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.BinaryMessage, data: data})
 }
 

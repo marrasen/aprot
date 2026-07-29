@@ -10,6 +10,27 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- Per-connection opt-out from WebSocket binary frames. A client that does not
+  decode binary can dial with `?binary=0` on the upgrade URL and receive `Blob`
+  results as the JSON `{"$blob": {contentType, data}}` envelope instead — the
+  same representation SSE and byte-stream already use — at the cost of base64
+  inflation. Accepted values are `1`/`true`/`yes`/`on` and `0`/`false`/`no`/
+  `off` (case-insensitive); an unrecognized value fails the upgrade with
+  `400 Bad Request` rather than silently defaulting to binary, since a typo
+  that re-enabled binary frames would reinstate the hang the parameter exists
+  to prevent. Omitting the parameter keeps the existing behavior, so generated
+  TypeScript clients are unaffected. (#279)
+- `ConfigMessage.BinaryFrames` (`binaryFrames` on the wire) reports whether
+  `Blob` results will arrive as binary frames on this connection. Always
+  emitted, including when false, and always false on SSE and byte-stream. It
+  reaches the client before any request can be made, which makes it the one
+  point at which a client that cannot decode binary frames can fail loudly
+  instead of hanging on the first `Blob` response — aprot cannot detect a
+  dropped frame server-side. A missing field means a server predating the
+  negotiation. (#279)
+
 ### Documentation
 
 - `docs/binary-frames.md` documents the WebSocket binary frame format used for

@@ -100,6 +100,15 @@
 // pending with no server-side trace. See docs/binary-frames.md for the frame
 // format and a reference decoder.
 //
+// Such a client can instead decline binary frames for the lifetime of the
+// connection with a "binary=0" query parameter on the upgrade URL, which
+// routes Blob results to the JSON $blob envelope described above. Accepted
+// values are 1/true/yes/on and 0/false/no/off; an unrecognized value fails
+// the upgrade with 400 rather than silently defaulting. The config frame the
+// server sends immediately after the upgrade reports the negotiated mode as
+// "binaryFrames" (always false on SSE and stream), so a client can verify it
+// before making its first call.
+//
 // # Input Transformation
 //
 // Request struct fields can be normalized before handler dispatch using

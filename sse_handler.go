@@ -105,7 +105,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	sseT.sendEvent("connected", connData)
 
 	// Send config
-	configData, _ := json.Marshal(configMessage(h.server.options))
+	configData, _ := json.Marshal(configMessage(h.server.options, false))
 	sseT.sendEvent("config", configData)
 
 	// Register connection
