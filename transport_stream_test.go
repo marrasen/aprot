@@ -95,13 +95,13 @@ func startStreamServer(ctx context.Context, server *Server, info ConnInfo) (net.
 	return clientEnd, errCh
 }
 
-func newStreamTestServer(t *testing.T) *Server {
+func newStreamTestServer(t *testing.T, opts ...ServerOptions) *Server {
 	t.Helper()
 	registry := NewRegistry()
 	handlers := &StreamServeHandlers{}
 	registry.Register(handlers)
 	registry.RegisterPushEventFor(handlers, &NotificationEvent{})
-	server := NewServer(registry)
+	server := NewServer(registry, opts...)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -294,6 +294,58 @@ func TestServeStreamAuth(t *testing.T) {
 	result, _ := resp["result"].(map[string]any)
 	if result["message"] != "late" {
 		t.Errorf("result.message = %v, want late", result["message"])
+	}
+}
+
+// With AllowAnonymous, a stream connection may issue requests without ever
+// authenticating, outlives AuthTimeout, and can upgrade its identity later.
+func TestServeStreamAnonymous(t *testing.T) {
+	server := newStreamTestServer(t, ServerOptions{
+		AllowAnonymous: true,
+		AuthTimeout:    150 * time.Millisecond,
+	})
+	server.OnAuth(func(ctx context.Context, conn *Conn, token string) error {
+		if token != "sesame" {
+			return ErrAuthFailed("bad token")
+		}
+		conn.SetUserID("alice")
+		return nil
+	})
+
+	clientEnd, _ := startStreamServer(context.Background(), server, ConnInfo{})
+	defer clientEnd.Close()
+	client := newStreamTestClient(t, clientEnd)
+	client.readFrameOfType("config")
+
+	// Past the auth timeout window, an unauthenticated request still works.
+	time.Sleep(450 * time.Millisecond)
+
+	client.send(IncomingMessage{
+		Type:   TypeRequest,
+		ID:     "1",
+		Method: "StreamServeHandlers.Echo",
+		Params: jsontext.Value(`[{"message":"anon"}]`),
+	})
+	resp := client.readFrameOfType("response")
+	if result, _ := resp["result"].(map[string]any); result["message"] != "anon" {
+		t.Errorf("anonymous result.message = %v, want anon", result["message"])
+	}
+
+	// The connection carries no identity until it authenticates.
+	var userIDs []string
+	server.ForEachConn(func(conn *Conn) { userIDs = append(userIDs, conn.UserID()) })
+	if len(userIDs) != 1 || userIDs[0] != "" {
+		t.Errorf("anonymous connection user IDs = %q, want one empty entry", userIDs)
+	}
+
+	// A later auth frame upgrades the live session.
+	client.send(IncomingMessage{Type: TypeAuth, Token: "sesame"})
+	client.readFrameOfType("auth_ok")
+
+	userIDs = nil
+	server.ForEachConn(func(conn *Conn) { userIDs = append(userIDs, conn.UserID()) })
+	if len(userIDs) != 1 || userIDs[0] != "alice" {
+		t.Errorf("user IDs after late auth = %q, want [alice]", userIDs)
 	}
 }
 

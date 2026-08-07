@@ -38,6 +38,21 @@ func (h *EchoHandlers) GetEcho(ctx context.Context, count int, flag bool, label 
 	return &EchoResult{Count: count, Flag: flag, Label: label, Note: note}, nil
 }
 
+// ConnHandlers exposes connection metadata so client-side tests can assert what
+// actually reached the server on the upgrade request — in particular the query
+// string the client built from getConnectParams (#283).
+type ConnHandlers struct{}
+
+// ConnURLResult carries the connection's request URL, query string included.
+type ConnURLResult struct {
+	URL string `json:"url"`
+}
+
+// GetConnURL returns the URL of this connection's upgrade request.
+func (h *ConnHandlers) GetConnURL(ctx context.Context) (*ConnURLResult, error) {
+	return &ConnURLResult{URL: aprot.Connection(ctx).Info().URL}, nil
+}
+
 // SignupHandlers is registered over WebSocket to exercise the validation ->
 // getValidationErrors round-trip from the generated client.
 type SignupHandlers struct{}
@@ -183,6 +198,7 @@ func (h *PatchHandlers) GetListExecutions(ctx context.Context) (int, error) {
 // tags are unaffected (validation is a no-op for them).
 func Register(registry *aprot.Registry) {
 	registry.RegisterREST(&EchoHandlers{})
+	registry.Register(&ConnHandlers{})
 	registry.Register(&SignupHandlers{})
 	registry.Register(&FixedArrayHandlers{})
 	registry.Register(NewBlobHandlers())

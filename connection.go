@@ -522,7 +522,9 @@ func (c *Conn) handleIncomingMessage(data []byte) {
 	}
 
 	// While a connection with an auth hook is still pending authentication,
-	// reject every non-auth frame rather than run any handler.
+	// reject every non-auth frame rather than run any handler. Under
+	// AllowAnonymous authRequired() is false, so unauthenticated frames run as
+	// anonymous calls instead.
 	if c.server.authRequired() && !c.isAuthenticated() {
 		c.sendAuthError("authentication required")
 		return
@@ -561,8 +563,13 @@ func (c *Conn) sendAuthError(message string) {
 //
 // With no auth hook registered, an auth frame is accepted as a no-op auth_ok so
 // clients configured with getAuthToken still get a clean handshake.
+//
+// The gate is authEnabled, not authRequired: under
+// [ServerOptions.AllowAnonymous] auth is optional but a token that *is* offered
+// must still go through the hook, and the failure rules above apply unchanged —
+// so a rejected token never silently degrades into a working anonymous session.
 func (c *Conn) handleAuth(token string) {
-	if !c.server.authRequired() {
+	if !c.server.authEnabled() {
 		c.sendAuthOK()
 		return
 	}

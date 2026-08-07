@@ -156,6 +156,12 @@ class SSETransport implements ClientTransport {
  * Requests issued while fully disconnected reject with a ConnectionError.
  * After the first successful connect(), auto-reconnect (when enabled)
  * handles drops — connect() never needs to be called again.
+ *
+ * NOTE: this single-file output is a legacy build (Generator.GenerateTo) whose
+ * client has drifted from the multi-file one. First-message auth
+ * (getAuthToken/refreshAuth), onConnectionRejected, reconnectOnRejected and
+ * getLastRejection are accepted as options but not implemented here. Use the
+ * multi-file generator for those.
  */
 export class ApiClient {
     private transport: ClientTransport;
@@ -216,11 +222,23 @@ export class ApiClient {
         return this.doConnect();
     }
 
-    private doConnect(): Promise<void> {
+    private async doConnect(): Promise<void> {
         this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
+        // getConnectParams is resolved per attempt so every reconnect can
+        // carry a freshly minted short-lived token.
+        let url = this.url;
+        try {
+            if (this.options.getConnectParams) {
+                url = appendQueryParams(url, await this.options.getConnectParams());
+            }
+        } catch {
+            this.handleClose({ wasClean: false });
+            return;
+        }
+
         return this.transport.connect(
-            this.url,
+            url,
             (data) => this.handleMessage(data),
             (info) => this.handleClose(info),
         ).then(() => {

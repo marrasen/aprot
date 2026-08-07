@@ -37,7 +37,9 @@ type DisconnectHook func(ctx context.Context, conn *Conn)
 // Registering a hook (via [Server.OnAuth]) puts every new connection into a
 // pending-auth state: it is rejected (auth_error) for any frame other than auth
 // until a token is accepted, and closed if none arrives within
-// [ServerOptions.AuthTimeout].
+// [ServerOptions.AuthTimeout]. Set [ServerOptions.AllowAnonymous] to admit
+// unauthenticated connections instead, for apps that mix public and protected
+// APIs on one endpoint.
 type AuthHook func(ctx context.Context, conn *Conn, token string) error
 
 // ServerOptions configures the server behavior.
@@ -98,11 +100,32 @@ type ServerOptions struct {
 	// AuthTimeout is how long a connection may stay unauthenticated after
 	// connecting when an [AuthHook] is registered via [Server.OnAuth]. A
 	// connection that has not sent a valid auth frame within this window is
-	// closed. Ignored when no auth hook is set. Default: 10s. Set to -1 to
-	// disable the timeout — but note that a disabled timeout lets unauthenticated
-	// connections linger indefinitely, which is a DoS vector on public endpoints;
-	// keep a bounded timeout there.
+	// closed. Ignored when no auth hook is set, and when AllowAnonymous is set
+	// (no timeout is armed there — unauthenticated is a valid steady state).
+	// Default: 10s. Set to -1 to disable the timeout — but note that a disabled
+	// timeout lets unauthenticated connections linger indefinitely, which is a
+	// DoS vector on public endpoints; keep a bounded timeout there.
 	AuthTimeout time.Duration
+	// AllowAnonymous admits unauthenticated connections even when an [AuthHook]
+	// is registered via [Server.OnAuth]. Instead of entering the pending-auth
+	// state, a new connection may issue requests and subscribes immediately as
+	// an anonymous caller — [Conn.UserID] is "" until it authenticates — and no
+	// [ServerOptions.AuthTimeout] is armed. A client that does send an auth
+	// frame is validated by the hook exactly as in strict mode, either at
+	// connect time or later to upgrade a live anonymous session in place; a
+	// failed attempt still closes a connection that is not yet authenticated.
+	//
+	// Use this for apps that mix public and protected APIs on one endpoint,
+	// instead of teaching the hook to accept an empty token. Gate the protected
+	// handlers themselves on [Conn.UserID] / middleware — admitting the
+	// connection is not authorizing the call. Anonymous connections carry no
+	// user ID, so [Server.PushToUser] and [Server.DisconnectUser] cannot reach
+	// them until they authenticate ([Server.Broadcast] and [Server.ForEachConn]
+	// still do). Note the flip side of skipping the timeout: unauthenticated
+	// connections may linger indefinitely, so keep [Server.SetCheckOrigin] and
+	// the concurrency/subscription caps in place on public endpoints. Ignored
+	// when no auth hook is registered. Default: false.
+	AllowAnonymous bool
 	// StreamChunking batches consecutive items yielded by streaming handlers
 	// into stream_chunk frames instead of sending one frame per item, cutting
 	// framing and syscall overhead for large streamed collections. Nil (the
@@ -230,6 +253,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.AuthTimeout != 0 {
 			options.AuthTimeout = opt.AuthTimeout
 		}
+		// Bool with a false default: the zero value and the default coincide,
+		// so copy unconditionally rather than testing for "set".
+		options.AllowAnonymous = opt.AllowAnonymous
 		if opt.StreamChunking != nil {
 			// Copy so later mutation of the caller's struct can't race the
 			// server, and fill defaults for unset thresholds.
@@ -331,6 +357,10 @@ func (s *Server) OnStop(hook func()) {
 // hook. With no hook registered, connections behave as before (authenticate via
 // [Server.OnConnect] / URL token if desired).
 //
+// Set [ServerOptions.AllowAnonymous] to keep the hook but admit unauthenticated
+// connections: they run as anonymous callers (no pending-auth state, no auth
+// timeout) and may authenticate later to upgrade the session.
+//
 //	server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
 //	    claims, err := verify(token)
 //	    if err != nil {
@@ -343,9 +373,18 @@ func (s *Server) OnAuth(hook AuthHook) {
 	s.authHook = hook
 }
 
-// authRequired reports whether an auth hook is registered (pending-auth enabled).
-func (s *Server) authRequired() bool {
+// authEnabled reports whether an auth hook is registered, i.e. whether auth
+// frames are validated by the hook rather than accepted as a no-op. This is
+// independent of whether authentication is *required* to use the connection.
+func (s *Server) authEnabled() bool {
 	return s.authHook != nil
+}
+
+// authRequired reports whether new connections enter the pending-auth state: an
+// auth hook is registered and anonymous connections are not admitted. It gates
+// both the auth timeout and the pre-auth frame rejection.
+func (s *Server) authRequired() bool {
+	return s.authHook != nil && !s.options.AllowAnonymous
 }
 
 // ForEachConn iterates over a snapshot of the active connections. The
@@ -604,6 +643,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// When an auth hook is registered, the connection is pending until it sends
 	// a valid auth frame; close it if that doesn't happen within AuthTimeout.
+	// Under AllowAnonymous no timeout is armed — staying unauthenticated is a
+	// valid steady state there.
 	if s.authRequired() {
 		conn.armAuthTimeout(s.options.AuthTimeout)
 	}

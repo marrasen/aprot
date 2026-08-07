@@ -128,6 +128,7 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// When an auth hook is registered, the client must authenticate over a
 	// POST /rpc auth frame; close the stream if it doesn't within AuthTimeout.
+	// Under AllowAnonymous no timeout is armed.
 	if h.server.authRequired() {
 		conn.armAuthTimeout(h.server.options.AuthTimeout)
 	}

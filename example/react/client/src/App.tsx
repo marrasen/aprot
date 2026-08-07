@@ -19,8 +19,13 @@ import { useNumbers } from './api/streaming-handlers'
 import type { SharedTaskState } from './api/tasks-handler'
 import { useSharedTasks, cancelSharedTask } from './api/tasks'
 
-// Initialize client
+// Initialize client. Create it and start connecting at module scope, then
+// provide it synchronously below — never gate rendering on the connect promise.
+// Under StrictMode's double mount that would race a disconnected client into
+// the tree and leave the UI waiting forever. Requests issued while connecting
+// are buffered and flushed once the connection is ready. See docs/auth.md.
 const client = new ApiClient(`ws://${window.location.host}/ws`)
+client.connect()
 
 function ConnectionStatus() {
   const { isConnected } = useConnection()
@@ -791,29 +796,28 @@ function AppContent() {
   )
 }
 
+// A slim banner beats unmounting the app while the connection is down: the UI
+// stays interactive, buffered requests flush on reconnect, and the state comes
+// straight from useConnection().
+function ConnectionBanner() {
+  const { state, rejection } = useConnection()
+  if (state === 'connected') return null
+  return (
+    <div className="status disconnected">
+      {rejection
+        ? `Session ended: ${rejection.message}`
+        : state === 'reconnecting'
+          ? 'Reconnecting…'
+          : 'Connecting…'}
+    </div>
+  )
+}
+
 export default function App() {
-  const [connected, setConnected] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    client.connect().then(() => setConnected(true)).catch((err: Error) => setError(err.message))
-  }, [])
-
-  if (error) {
-    return (
-      <div className="card">
-        <h2>Connection Error</h2>
-        <p style={{ color: 'red' }}>{error}</p>
-        <button onClick={() => window.location.reload()}>Retry</button>
-      </div>
-    )
-  }
-
-  if (!connected) return <div className="card"><h2>Connecting...</h2></div>
-
   return (
     <ApiClientProvider value={client}>
       <ApiClientErrorProvider>
+        <ConnectionBanner />
         <AppContent />
       </ApiClientErrorProvider>
     </ApiClientProvider>

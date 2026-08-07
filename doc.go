@@ -401,6 +401,26 @@
 // / a URL token if desired). The generated TypeScript client drives this with a
 // getAuthToken option and a refreshAuth(token) method.
 //
+// [ServerOptions.AllowAnonymous] keeps the hook but admits unauthenticated
+// connections, for apps that mix public and protected APIs on one endpoint.
+// Anonymous connections skip the pending-auth state and the auth timeout, and
+// run with [Conn.UserID] "" until they authenticate; a client that sends an
+// auth frame later upgrades the live session in place, and a token that is
+// offered and rejected still closes an unauthenticated connection. Admitting a
+// connection is not authorizing the call — gate protected handlers on the user
+// ID or middleware. Anonymous connections carry no user ID, so
+// [Server.PushToUser] and [Server.DisconnectUser] cannot reach them until they
+// authenticate.
+//
+//	server := aprot.NewServer(registry, aprot.ServerOptions{AllowAnonymous: true})
+//	server.OnAuth(authHook) // anonymous clients simply omit getAuthToken
+//
+// On the client, a short-lived credential must be minted per connection
+// attempt: the getConnectParams option (and a URL function) is resolved on
+// every attempt, including auto-reconnects, and reconnectOnRejected opts into
+// retrying a rejected connection instead of treating it as terminal. See
+// docs/auth.md for the full recipe, including React StrictMode wiring.
+//
 // # Connection Lifecycle
 //
 // [Server.OnConnect] and [Server.OnDisconnect] hooks react to connection
@@ -419,6 +439,13 @@
 // Each [Conn] has a unique ID, HTTP request info captured at connection time
 // (via [Conn.Info]), and key-value storage (via [Conn.Set], [Conn.Get],
 // [Conn.Load]) for caching authentication state or other per-connection data.
+//
+// On the TypeScript side, the connection URL is resolved per connection
+// attempt: passing a function instead of a string to the ApiClient
+// constructor, or supplying the getConnectParams option, re-runs it on every
+// attempt — the initial connect, every auto-reconnect, and every page-wake
+// reconnect. That is the contract short-lived credentials rely on, so each
+// attempt carries a freshly minted token rather than replaying a stale one.
 //
 // [Conn.SetUserID] / [Conn.UserID] is a routing identity used for push
 // targeting ([Server.PushToUser]). It is not a security boundary — use the
@@ -568,7 +595,8 @@
 //
 //	'offline'         — navigator.onLine was false at failure time.
 //	'server-rejected' — server sent ApiError with code ConnectionRejected
-//	                    before closing; the original ApiError is attached as
+//	                    before closing, or a first-message auth_error failed
+//	                    the handshake; the original ApiError is attached as
 //	                    err.cause.
 //	'server-closed'   — transport closed cleanly after the WebSocket upgrade
 //	                    completed; err.closeCode and err.closeReason carry
@@ -588,6 +616,17 @@
 // The 'server-rejected' bucket is also surfaced via the existing
 // onConnectionRejected ApiClientOption callback — both fire for the same
 // underlying event, kept for backward compatibility.
+//
+// A rejection stops auto-reconnect, which is the right response to a real
+// sign-out. For short-lived credentials, where a rejection is usually an
+// expired token, session propagation lag, or clock skew, the
+// reconnectOnRejected option retries instead — {delayMs, maxAttempts}, or true
+// for the defaults — and disconnect() cancels a pending retry.
+// client.getLastRejection() returns the ApiError from the most recent
+// rejection (null after the next successful connect), so a UI can tell
+// "session expired" from "server unreachable" even after later transport
+// failures overwrite getLastConnectionError(). The React useConnection() hook
+// exposes it as `rejection`.
 //
 // # Enum Support
 //

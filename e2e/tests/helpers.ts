@@ -27,6 +27,10 @@ export function wsRejectUrl(): string {
     return `ws://${getServerAddr()}/ws-reject`;
 }
 
+export function wsTokenUrl(): string {
+    return `ws://${getServerAddr()}/ws-token`;
+}
+
 export function sseUrl(): string {
     return `http://${getServerAddr()}/sse`;
 }

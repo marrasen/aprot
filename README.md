@@ -151,9 +151,9 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
-- **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout and mid-session token refresh; works over WebSocket and SSE
+- **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs; works over WebSocket and SSE
 - **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
-- **Automatic reconnection** — page visibility + network-aware, with exponential backoff; supports dynamic URL functions for token refresh on reconnect
+- **Automatic reconnection** — page visibility + network-aware, with exponential backoff; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, and `reconnectOnRejected` opts into retrying a rejected connection
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
 - **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
@@ -374,15 +374,18 @@ const effective = selectWithPreviousData(prev, { data, error, isLoading });
 
 The returned snapshot carries the previous `data` through the reload's null gap but always the **current** `error` and `isLoading` flags — kept data never masks the loading or error state, which is the invariant worth centralizing.
 
-**With auth tokens** (dynamic URL for automatic token refresh on reconnect):
+**With auth tokens** — `getConnectParams` is resolved on *every* connection attempt, including auto-reconnects, so short-lived tokens (Clerk etc.) stay fresh while the base URL stays static:
 
 ```typescript
-const client = new ApiClient(async () => {
-    const token = await getAuthToken();
-    return `${getWebSocketUrl()}?token=${encodeURIComponent(token)}`;
+const client = new ApiClient(getWebSocketUrl(), {
+    getConnectParams: async () => ({ token: await getToken() }),
 });
-await client.connect();
+client.connect();
 ```
+
+Passing a URL *function* instead of a string works the same way and is still supported. A plain string URL freezes the token at construction time — the first connect succeeds and every reconnect after expiry is rejected.
+
+> Short-lived JWTs, rejection retries, first-message auth and React StrictMode wiring: **[docs/auth.md](docs/auth.md)**.
 
 **Vanilla:**
 
@@ -824,7 +827,7 @@ Reasons:
 | Reason | When |
 |---|---|
 | `offline` | `navigator.onLine` was `false` at failure time. |
-| `server-rejected` | The server sent an `ApiError` with code `ConnectionRejected` (e.g. invalid session) before closing. The original `ApiError` is attached as `err.cause`. |
+| `server-rejected` | The server sent an `ApiError` with code `ConnectionRejected` (e.g. invalid session) before closing, or a first-message `auth_error` failed the handshake. The original `ApiError` is attached as `err.cause`. |
 | `server-closed` | Transport closed cleanly after the WebSocket upgrade completed. `err.closeCode` and `err.closeReason` carry the WebSocket `CloseEvent` fields. |
 | `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. |
 | `manual` | The caller invoked `client.disconnect()`. |
@@ -841,6 +844,19 @@ const off = client.onConnectionError((err) => {
     else hideOfflineBanner();
 });
 ```
+
+**Rejections are terminal by default** — after a `server-rejected` failure the client stops auto-reconnecting, which is the right response to a real sign-out. For short-lived credentials, where a rejection is usually an expired token, propagation lag just after sign-in, or clock skew, opt into retries with `reconnectOnRejected` (pair it with `getConnectParams` / `getAuthToken` so each retry carries a fresh token):
+
+```typescript
+const client = new ApiClient(getWebSocketUrl(), {
+    getConnectParams: async () => ({ token: await getToken() }),
+    reconnectOnRejected: { delayMs: 2000, maxAttempts: 5 }, // or just `true`
+});
+```
+
+`getLastRejection()` returns the `ApiError` from the most recent rejection (`null` after the next successful connect), so a UI can tell "session expired, sign in again" from "server unreachable" — unlike `getLastConnectionError()`, it is not overwritten by later transport failures. In React, `useConnection()` exposes it as `rejection`. `disconnect()` cancels any pending retry.
+
+> Full recipe for short-lived JWTs (Clerk etc.), including React StrictMode wiring: **[docs/auth.md](docs/auth.md)**.
 
 ## Server Hardening & Security
 
@@ -925,6 +941,14 @@ await client.refreshAuth(freshToken);
 - **Mid-session refresh** — the same `auth` frame on a live connection updates the token/identity without reconnecting. A *failed* refresh keeps the existing session (a live connection is never downgraded).
 - **Both transports** — WebSocket sends the `auth` frame directly; SSE sends it in the first `POST /rpc` body (the `EventSource` GET can't set headers). `auth_ok`/`auth_error` arrive over the stream either way.
 - **Backward compatible** — with no `OnAuth` hook, connections behave exactly as before (URL-token via `OnConnect` still works). `ErrAuthFailed` uses code `-32005`; the TS client exposes `err.isAuthFailed()`.
+- **Anonymous-friendly mode** — `ServerOptions.AllowAnonymous` keeps the hook but admits unauthenticated connections, for apps that mix public and protected APIs on one endpoint. Anonymous connections run immediately with `conn.UserID() == ""` and no auth timeout; a client that authenticates later upgrades the live session in place, and a token that *is* offered and rejected still closes the connection. Gate protected handlers on `UserID` / middleware — admitting the connection is not authorizing the call.
+
+```go
+server := aprot.NewServer(registry, aprot.ServerOptions{AllowAnonymous: true})
+server.OnAuth(authHook) // anonymous viewers simply omit getAuthToken client-side
+```
+
+> Short-lived JWTs (Clerk etc.), rejection retries and React StrictMode wiring: **[docs/auth.md](docs/auth.md)**.
 
 ### Revoking access mid-session (`DisconnectUser`)
 
