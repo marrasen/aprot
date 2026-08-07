@@ -43,7 +43,13 @@ describe('useConnection (React)', () => {
             () => expect(screen.getByText('rejection: invalid session')).toBeTruthy(),
             { timeout: 10000 },
         );
-        expect(screen.getByText('state: disconnected')).toBeTruthy();
+        // The rejection frame is recorded while the transport is still open —
+        // the close follows a moment later — so wait for the settled state
+        // rather than asserting it in the same tick.
+        await waitFor(
+            () => expect(screen.getByText('state: disconnected')).toBeTruthy(),
+            { timeout: 10000 },
+        );
     });
 
     test('reports no rejection on a healthy connection', async () => {
