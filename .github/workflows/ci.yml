@@ -108,12 +108,11 @@ jobs:
       - name: Generate vanilla client
         run: cd example/vanilla/tools/generate && go run main.go
 
+      - name: Install vanilla example deps
+        run: cd example/vanilla/client && npm ci
+
       - name: Check vanilla client compiles
-        run: |
-          cd example/vanilla/client/static/api
-          npm init -y > /dev/null 2>&1
-          npm install typescript@^5.7.0 --save-dev > /dev/null 2>&1
-          npx tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck *.ts
+        run: cd example/vanilla/client && npx tsc --noEmit
 
       - name: Generate react client
         run: cd example/react/tools/generate && go run main.go

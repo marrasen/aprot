@@ -49,6 +49,23 @@ updates:
         patterns: ["*"]
 
   # npm packages for the example/e2e clients (only directories with a lockfile).
+  #
+  # The three TypeScript-consuming projects sit on different major versions
+  # (vanilla 5.x, e2e 6.x, react client 7.x). Generated clients are the
+  # library's public surface, so compiling them across three majors is the only
+  # signal we have that codegen output works for consumers on older toolchains.
+  # The vanilla client is pinned to 5.x by hand to hold the low end of that
+  # range; e2e and the react client still take TypeScript majors from Dependabot.
+  - package-ecosystem: npm
+    directory: /example/vanilla/client
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
   - package-ecosystem: npm
     directory: /e2e
     schedule:
