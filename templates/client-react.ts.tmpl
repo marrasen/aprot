@@ -155,7 +155,12 @@ class SSETransport implements ClientTransport {
  * while connecting are buffered and flushed once the connection is ready.
  * Requests issued while fully disconnected reject with a ConnectionError.
  * After the first successful connect(), auto-reconnect (when enabled)
- * handles drops — connect() never needs to be called again.
+ * handles drops, so connect() does not have to be called again — but calling
+ * it again is cheap and idempotent: a no-op while connected or connecting,
+ * and an immediate attempt otherwise, including while a reconnect backoff is
+ * pending. Call it whenever the connection needs to be live rather than
+ * caching an "already connected" flag — such a flag skips the call exactly
+ * when the socket has dropped.
  *
  * NOTE: this single-file output is a legacy build (Generator.GenerateTo) whose
  * client has drifted from the multi-file one. First-message auth
@@ -190,6 +195,9 @@ export class ApiClient {
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    // connectInFlight is the attempt doConnect() is currently running, so a
+    // second caller joins it instead of opening a competing socket.
+    private connectInFlight: Promise<void> | null = null;
     private manualDisconnect = false;
     private pendingRejection: ApiError | null = null;
     private lastConnectionError: ConnectionError | null = null;
@@ -209,20 +217,67 @@ export class ApiClient {
     /**
      * Opens the connection to the server. This is a required manual step:
      * it is never called automatically — not by the constructor, not by
-     * <ApiClientProvider>, not by the generated hooks/functions. Call it
-     * once after constructing the client. No-op when already connected or
-     * connecting; auto-reconnect takes over after the first successful call.
+     * <ApiClientProvider>, not by the generated hooks/functions.
+     *
+     * It is cheap and idempotent, so call it whenever the connection needs to
+     * be live (after signing in, on resume) rather than remembering that it
+     * was called: it is a no-op while connected or connecting, and otherwise
+     * attempts a connection immediately — including while a reconnect backoff
+     * is pending, in which case the backoff is abandoned rather than waited
+     * out. Auto-reconnect takes over after the first successful call.
      */
     connect(): Promise<void> {
         if (this.state === 'connected' || this.state === 'connecting') {
             return Promise.resolve();
         }
+        return this.startConnect();
+    }
+
+    /**
+     * Abandons any pending reconnect backoff and attempts a connection now,
+     * keeping in-flight requests — unlike disconnect() + connect(), which
+     * rejects them.
+     *
+     * connect() already does this, so reach for reconnectNow() only when the
+     * client may be in a state connect() reads as "nothing to do": a socket
+     * the runtime left half-open still reports 'connected' until its close
+     * event lands. Resolves when the attempt finishes, connected or not, and
+     * joins an attempt already in flight rather than starting a second one.
+     */
+    reconnectNow(): Promise<void> {
+        return this.startConnect();
+    }
+
+    // startConnect is the manual-connect path behind connect() and
+    // reconnectNow(): a fresh start followed by an immediate attempt.
+    private startConnect(): Promise<void> {
         this.manualDisconnect = false;
+        this.reconnectAttempts = 0;
+        // Drop a pending backoff. The caller wants a connection now, and a
+        // timer left armed would fire a second doConnect() on top of the
+        // connection this call is about to establish.
+        this.clearReconnectTimer();
         this.setupPageListeners();
         return this.doConnect();
     }
 
-    private async doConnect(): Promise<void> {
+    // doConnect serializes connection attempts: at most one runs at a time,
+    // and a live socket is never replaced. A second attempt would leave the
+    // first socket open behind it, and that socket's eventual close then tears
+    // down the connection that replaced it.
+    private doConnect(): Promise<void> {
+        if (this.state === 'connected' && this.transport.isConnected()) {
+            return Promise.resolve();
+        }
+        if (this.connectInFlight) return this.connectInFlight;
+        const attempt = this.runConnect().finally(() => {
+            if (this.connectInFlight === attempt) this.connectInFlight = null;
+        });
+        this.connectInFlight = attempt;
+        return attempt;
+    }
+
+    private async runConnect(): Promise<void> {
         this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         // getConnectParams is resolved per attempt so every reconnect can
@@ -339,6 +394,13 @@ export class ApiClient {
         }
     }
 
+    private clearReconnectTimer(): void {
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+    }
+
     private scheduleReconnect(): void {
         if (this.reconnectTimer) return;
 
@@ -359,10 +421,7 @@ export class ApiClient {
         if (this.manualDisconnect) return;
         this.manualDisconnect = true;
         this.teardownPageListeners();
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        this.clearReconnectTimer();
 
         // Reject in-flight requests synchronously: the server may still
         // respond between transport.disconnect() and the close event
@@ -467,10 +526,7 @@ export class ApiClient {
         if (this.state === 'connected' && this.transport.isConnected()) return;
         if (this.state === 'connecting') return;
 
-        if (this.reconnectTimer) {
-            clearTimeout(this.reconnectTimer);
-            this.reconnectTimer = null;
-        }
+        this.clearReconnectTimer();
         this.reconnectAttempts = 0;
         this.doConnect().catch(() => {});
     }

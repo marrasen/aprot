@@ -153,7 +153,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
 - **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs; works over WebSocket and SSE
 - **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
-- **Automatic reconnection** — page visibility + network-aware, with exponential backoff; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, and `reconnectOnRejected` opts into retrying a rejected connection
+- **Automatic reconnection** — page visibility + network-aware, with exponential backoff; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
 - **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
@@ -328,6 +328,8 @@ function UsersList() {
 ```
 
 > **⚠️ The client never connects automatically.** `new ApiClient(...)` only configures it, and `<ApiClientProvider>` is a plain context provider — neither opens the connection. If you skip `client.connect()`, nothing works: every hook and request fails with a `ConnectionError` (`'Not connected'`). Calling `client.connect()` without `await` (e.g. at module scope, as above) is fine — requests issued while connecting are buffered and flushed once the connection is ready. After the first successful `connect()`, auto-reconnect handles drops.
+>
+> `connect()` is cheap and idempotent: a no-op while connected or connecting, and an immediate attempt otherwise — including while a reconnect backoff is pending, in which case the backoff is abandoned rather than waited out. So call it whenever the connection needs to be live (after signing in, on resume) instead of caching an "already connected" flag; such a flag skips the call exactly when the socket has since dropped, and nothing opens a new one. `client.reconnectNow()` does the same without the connected/connecting no-op, for the rarer case where a socket the runtime left half-open still reports `'connected'`. Neither clears subscriptions or rejects in-flight requests the way `disconnect()` + `connect()` does.
 
 > aprot does **not** generate per-handler mutation hooks. Either compose mutations through a query hook's `mutate(action)` helper (above), or call the generated function directly with `useApiClient()` (see [TypeScript Mutation Patterns](#typescript-mutation-patterns)). If you're upgrading from a version that generated `useXxxMutation()`, see [`MIGRATION_MUTATION_HOOKS.md`](MIGRATION_MUTATION_HOOKS.md) for an agent-runnable rewrite prompt.
 

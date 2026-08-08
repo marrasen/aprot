@@ -671,6 +671,16 @@
 //	const client = new ApiClient(getWebSocketUrl());
 //	await client.connect(); // REQUIRED — never called automatically
 //
+// connect() is cheap and idempotent: a no-op while connected or connecting,
+// and an immediate attempt otherwise — including while a reconnect backoff is
+// pending, in which case the backoff is abandoned rather than waited out. Call
+// it whenever the connection needs to be live (after signing in, on resume)
+// rather than caching an "already connected" flag, which skips the call
+// exactly when the socket has since dropped. client.reconnectNow() does the
+// same without the connected/connecting no-op, for a socket the runtime left
+// half-open that still reports 'connected'. Neither clears subscriptions or
+// rejects in-flight requests the way disconnect() + connect() does.
+//
 // The generator creates split files: client.ts (base client), one file per
 // handler group, and optional shared type files for types used across groups.
 // A shared file is named after its Go package (e.g. api.ts); if that name
