@@ -259,6 +259,7 @@ func (s *Server) ServeStream(ctx context.Context, rw io.ReadWriteCloser, info Co
 
 	// When an auth hook is registered, the connection is pending until it
 	// sends a valid auth frame; close it if that doesn't happen in time.
+	// Under AllowAnonymous no timeout is armed.
 	if s.authRequired() {
 		conn.armAuthTimeout(s.options.AuthTimeout)
 	}

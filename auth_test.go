@@ -309,6 +309,145 @@ func TestAuth_FailedRefreshKeepsSession(t *testing.T) {
 	}
 }
 
+// --- WebSocket: AllowAnonymous ---
+
+// anonymousOptions enables anonymous connections with an auth timeout short
+// enough that any accidental arming shows up as a closed connection.
+func anonymousOptions() ServerOptions {
+	return ServerOptions{AllowAnonymous: true, AuthTimeout: 150 * time.Millisecond}
+}
+
+// With AllowAnonymous, a connection that never authenticates may issue requests
+// and is seen by handlers as an anonymous caller (empty user ID).
+func TestAuthAnonymous_RequestSucceedsWithEmptyUserID(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "authHandlers.WhoAmI"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f := readFrame(t, ws, 3*time.Second)
+	if f.Type != string(TypeResponse) {
+		t.Fatalf("expected an anonymous request to succeed, got type=%q message=%q", f.Type, f.Message)
+	}
+	if f.Result == nil || f.Result.Message != "" {
+		t.Fatalf("expected empty user ID for an anonymous caller, got %+v", f.Result)
+	}
+}
+
+// No auth timeout is armed for anonymous connections: the connection outlives
+// AuthTimeout and keeps serving requests.
+func TestAuthAnonymous_SurvivesPastTimeout(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	time.Sleep(450 * time.Millisecond) // 3x AuthTimeout
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "authHandlers.Ping"}); err != nil {
+		t.Fatalf("write after the auth timeout window: %v", err)
+	}
+	// Any armed timeout would have sent auth_error and closed the connection
+	// before this response.
+	f := readFrame(t, ws, 3*time.Second)
+	if f.Type != string(TypeResponse) || f.Result == nil || f.Result.Message != "pong" {
+		t.Fatalf("expected the anonymous connection to outlive AuthTimeout, got type=%q message=%q", f.Type, f.Message)
+	}
+}
+
+// An anonymous connection can authenticate later, upgrading the live session's
+// identity in place.
+func TestAuthAnonymous_LateAuthUpgradesIdentity(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "authHandlers.WhoAmI"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if f := readFrame(t, ws, 3*time.Second); f.Result == nil || f.Result.Message != "" {
+		t.Fatalf("expected anonymous identity before auth, got %+v", f.Result)
+	}
+
+	sendAuth(t, ws, "good:alice")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
+		t.Fatalf("expected auth_ok on late auth, got type=%q message=%q", f.Type, f.Message)
+	}
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "2", Method: "authHandlers.WhoAmI"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if f := readFrame(t, ws, 3*time.Second); f.Result == nil || f.Result.Message != "alice" {
+		t.Fatalf("expected identity upgraded to alice, got %+v", f.Result)
+	}
+}
+
+// A token that is offered and rejected still closes an unauthenticated
+// connection under AllowAnonymous: a bad credential must not silently degrade
+// into a working anonymous session.
+func TestAuthAnonymous_FailedAuthClosesConnection(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	sendAuth(t, ws, "nope")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthError) {
+		t.Fatalf("expected auth_error for a bad token, got type=%q", f.Type)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var f wsFrame
+	if err := ws.ReadJSON(&f); err == nil {
+		t.Fatalf("expected the connection to close after a failed auth, but read succeeded: %+v", f)
+	}
+}
+
+// The keep-the-session rule for a failed refresh keys on the authenticated
+// state, not on the mode: once authenticated, a bad refresh is not a downgrade.
+func TestAuthAnonymous_FailedRefreshKeepsAuthenticatedSession(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	sendAuth(t, ws, "good:alice")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
+		t.Fatalf("expected auth_ok, got type=%q", f.Type)
+	}
+
+	sendAuth(t, ws, "nope")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthError) {
+		t.Fatalf("expected auth_error on a bad refresh, got type=%q", f.Type)
+	}
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "authHandlers.WhoAmI"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f := readFrame(t, ws, 3*time.Second)
+	if f.Type != string(TypeResponse) || f.Result == nil || f.Result.Message != "alice" {
+		t.Fatalf("expected the session kept as alice after a failed refresh, got type=%q result=%+v", f.Type, f.Result)
+	}
+}
+
+// AllowAnonymous without an auth hook is a no-op: connections already work, and
+// an auth frame still gets the no-op auth_ok.
+func TestAuthAnonymous_NoHook(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), nil)
+	ws := connectWSPath(t, ts, "/ws")
+	defer ws.Close()
+
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "authHandlers.Ping"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeResponse) {
+		t.Fatalf("expected a response with no hook registered, got type=%q", f.Type)
+	}
+
+	sendAuth(t, ws, "anything")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
+		t.Fatalf("expected the no-op auth_ok with no hook registered, got type=%q", f.Type)
+	}
+}
+
 // --- SSE ---
 
 func postAuthSSE(t *testing.T, ts *httptest.Server, connectionID, token string) *http.Response {
@@ -380,6 +519,51 @@ func TestAuthSSE_Flow(t *testing.T) {
 	}
 	if m, _ := msg2.Result.(map[string]any); m == nil || m["message"] != "bob" {
 		t.Fatalf("expected identity refreshed to bob over SSE, got %v", msg2.Result)
+	}
+}
+
+// SSE: with AllowAnonymous, a request before any auth frame succeeds as an
+// anonymous caller, the stream outlives AuthTimeout, and a later auth frame
+// upgrades the identity.
+func TestAuthSSE_Anonymous_Flow(t *testing.T) {
+	ts := newAuthServer(t, anonymousOptions(), tokenHook)
+	resp, reader, connID := connectSSE(t, ts)
+	defer resp.Body.Close()
+
+	// Past the auth timeout window, an unauthenticated request still works.
+	time.Sleep(450 * time.Millisecond) // 3x AuthTimeout
+
+	postRPC(t, ts, connID, "1", "authHandlers.WhoAmI", "[]")
+	ev, err := reader.readEvent()
+	if err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	if ev.Event != string(TypeResponse) {
+		t.Fatalf("expected an anonymous SSE request to succeed, got %q data=%q", ev.Event, ev.Data)
+	}
+	var msg ResponseMessage
+	if err := json.Unmarshal([]byte(ev.Data), &msg); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if m, _ := msg.Result.(map[string]any); m == nil || m["message"] != "" {
+		t.Fatalf("expected an empty user ID for an anonymous SSE caller, got %v", msg.Result)
+	}
+
+	// A later auth frame upgrades the identity on the live stream.
+	postAuthSSE(t, ts, connID, "good:bob")
+	if ev, err = reader.readEvent(); err != nil || ev.Event != string(TypeAuthOK) {
+		t.Fatalf("expected auth_ok on late SSE auth, got %q err=%v", ev.Event, err)
+	}
+	postRPC(t, ts, connID, "2", "authHandlers.WhoAmI", "[]")
+	if ev, err = reader.readEvent(); err != nil {
+		t.Fatalf("read event: %v", err)
+	}
+	var msg2 ResponseMessage
+	if err := json.Unmarshal([]byte(ev.Data), &msg2); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if m, _ := msg2.Result.(map[string]any); m == nil || m["message"] != "bob" {
+		t.Fatalf("expected identity upgraded to bob over SSE, got %v", msg2.Result)
 	}
 }
 

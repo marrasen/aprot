@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/marrasen/aprot"
 	"github.com/marrasen/aprot/e2e/e2eapi"
@@ -42,9 +43,24 @@ func main() {
 		return aprot.ErrConnectionRejected("invalid session")
 	})
 
+	// Token-gated server — rejects unless the connection URL carries
+	// ?token=good, so rejection-retry tests can present a stale token first and
+	// a fresh one on the retry (#283).
+	tokenRegistry := aprot.NewRegistry()
+	e2eapi.Register(tokenRegistry)
+	tokenServer := aprot.NewServer(tokenRegistry)
+	tokenServer.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+		u, err := url.Parse(conn.Info().URL)
+		if err != nil || u.Query().Get("token") != "good" {
+			return aprot.ErrConnectionRejected("invalid session")
+		}
+		return nil
+	})
+
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server)
 	mux.Handle("/ws-reject", rejectServer)
+	mux.Handle("/ws-token", tokenServer)
 	mux.Handle("/sse", http.StripPrefix("/sse", sseHandler))
 	mux.Handle("/sse/", http.StripPrefix("/sse", sseHandler))
 	mux.Handle("/api/", http.StripPrefix("/api", restAdapter))

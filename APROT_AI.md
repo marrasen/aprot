@@ -39,7 +39,7 @@ Hardening (all optional, sane defaults, `-1` disables): `aprot.ServerOptions{Max
 
 **CORS for SSE/REST** (plain HTTP, so origin check doesn't apply): wrap the transport with `aprot.CORS(aprot.CORSOptions{AllowedOrigins, AllowedMethods, AllowedHeaders, ExposedHeaders, AllowCredentials, MaxAge})` — a `func(http.Handler) http.Handler` closed by default. Handles `OPTIONS` preflight (204). `AllowCredentials: true` must pair with explicit (non-`*`) origins; with `*`+credentials it echoes the concrete origin. E.g. `http.Handle("/api/", http.StripPrefix("/api", cors(rest)))`, `http.Handle("/sse", cors(server.HTTPTransport()))`.
 
-**First-message auth** (token over the connection, not the URL): `server.OnAuth(func(ctx, conn *aprot.Conn, token string) error { ...; conn.SetUserID(id); return nil })` — return `aprot.ErrAuthFailed(msg)` (code -32005) to reject. Registering a hook makes every new connection **pending**: it must send `{"type":"auth","token":"..."}` and get `auth_ok` before any request/subscribe runs; earlier frames get `auth_error`; a connection unauthenticated within `ServerOptions.AuthTimeout` (default 10s, `-1` disables) is closed. The same auth frame on a live connection refreshes identity (a failed refresh keeps the session — no downgrade). WebSocket sends the frame directly; SSE sends it in the first `POST /rpc` body (`{type:"auth",connectionId,token}`), with `auth_ok`/`auth_error` over the stream. No hook → unchanged (URL-token via `OnConnect` still works). TS client: `new ApiClient(url, {getAuthToken: () => token})` and `client.refreshAuth(token)`; `err.isAuthFailed()`.
+**First-message auth** (token over the connection, not the URL): `server.OnAuth(func(ctx, conn *aprot.Conn, token string) error { ...; conn.SetUserID(id); return nil })` — return `aprot.ErrAuthFailed(msg)` (code -32005) to reject. Registering a hook makes every new connection **pending**: it must send `{"type":"auth","token":"..."}` and get `auth_ok` before any request/subscribe runs; earlier frames get `auth_error`; a connection unauthenticated within `ServerOptions.AuthTimeout` (default 10s, `-1` disables) is closed. The same auth frame on a live connection refreshes identity (a failed refresh keeps the session — no downgrade). WebSocket sends the frame directly; SSE sends it in the first `POST /rpc` body (`{type:"auth",connectionId,token}`), with `auth_ok`/`auth_error` over the stream. No hook → unchanged (URL-token via `OnConnect` still works). TS client: `new ApiClient(url, {getAuthToken: () => token})` and `client.refreshAuth(token)`; `err.isAuthFailed()`. **`ServerOptions{AllowAnonymous: true}`** keeps the hook but admits unauthenticated connections (mixed public/protected apps, #283): no pending state, no auth timeout, `conn.UserID() == ""` until a later auth frame upgrades the live session in place; an offered-and-rejected token still closes the connection; anonymous conns are unreachable by `PushToUser`/`DisconnectUser`. Still gate protected handlers on `UserID`/middleware. Replaces the old empty-token dance (`getAuthToken: () => ''` + hook treating `""` as anonymous). Full recipe: `docs/auth.md`.
 
 **Byte-stream transport** (Electron/desktop embedding, stdio, Unix sockets, named pipes): `server.ServeStream(ctx, rw io.ReadWriteCloser, aprot.ConnInfo{...})` serves one connection over any byte stream using newline-delimited JSON (one protocol message per line, both directions). Blocks until the connection ends; returns nil on normal close (EOF/ctx cancel/Stop), or the rejection error (connect hook / `ErrServerShutdown`). Full feature parity: hooks, first-message auth, middleware, subscriptions, streaming, push. Caller supplies `ConnInfo` (all fields optional — no HTTP request exists). `MaxMessageSize` bounds line length; `PingInterval`/`PongTimeout`/`WriteTimeout` do NOT apply (no ping frames or write deadlines on raw streams — liveness is the stream's lifetime). stdio: `server.ServeStream(ctx, struct{io.Reader; io.WriteCloser}{os.Stdin, os.Stdout}, aprot.ConnInfo{})`; listener: `go server.ServeStream(ctx, c, aprot.ConnInfo{RemoteAddr: c.RemoteAddr().String()})` per `Accept()`. TS side: `ApiClientOptions.transport` accepts a custom `ClientTransport` instance (exported interface) in addition to `'websocket' | 'sse'` — implement it to bridge e.g. an Electron MessagePort to the Go child's stdio.
 
@@ -75,6 +75,10 @@ client.connect(); // REQUIRED once. `await` optional: requests issued while conn
 ```
 
 React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. `connect()` is a no-op when already connected/connecting; after the first successful call, auto-reconnect handles drops — never call it again for reconnection.
+
+**StrictMode rule (#283):** create + `connect()` fire-and-forget + provide the client **synchronously**. Never gate rendering on the connect promise (`connect().then(() => setClient(c))` / `setConnected(true)`) — StrictMode's double mount can leave a disconnected client in the tree and the UI waiting forever. Requests buffer while connecting, so render immediately and show a slim banner driven by `useConnection()` instead of unmounting the app.
+
+**Short-lived tokens (Clerk etc.):** `getConnectParams: async () => ({token: await getToken({skipCache: true})})` — resolved on *every* connection attempt (initial, auto-reconnect, rejection retry, page wake) with a static base URL; a URL *function* has the same per-attempt guarantee. A plain string URL freezes the token. `reconnectOnRejected: {delayMs, maxAttempts} | true` retries a rejected connection instead of treating it as terminal. See `docs/auth.md`.
 
 Custom transport: `new ApiClient('bridge:', { transport: myClientTransport })` — any object implementing the exported `ClientTransport` interface (`connect(url, onMessage, onClose)`, `send(message)`, `disconnect()`, `isConnected()`). Deliver inbound protocol messages to `onMessage` as JSON strings; call `onClose` exactly once per established connection; instances must be reusable across reconnects.
 
@@ -339,7 +343,7 @@ Two distinct error types on the generated TS client:
   | reason            | meaning                                                                      |
   | ----------------- | ---------------------------------------------------------------------------- |
   | `offline`         | `navigator.onLine` was false at failure time                                 |
-  | `server-rejected` | server sent `ApiError` with code `ConnectionRejected`; original on `.cause`  |
+  | `server-rejected` | server sent `ApiError` with code `ConnectionRejected`, or first-message `auth_error`; original on `.cause` |
   | `server-closed`   | clean post-upgrade close; `.closeCode` and `.closeReason` carry CloseEvent   |
   | `network-error`   | pre-upgrade failure or close code 1006 (refused/unreachable/TLS/HTTP error)  |
   | `manual`          | caller invoked `client.disconnect()`                                         |
@@ -349,7 +353,7 @@ In-flight requests reject with a `ConnectionError` when the connection drops; ca
 client.onConnectionError(err => showBanner(err.reason));
 const last = client.getLastConnectionError(); // or null
 ```
-The `'server-rejected'` bucket is also surfaced via the older `onConnectionRejected` `ApiClientOption` callback (kept for backward compatibility).
+The `'server-rejected'` bucket is also surfaced via the older `onConnectionRejected` `ApiClientOption` callback (kept for backward compatibility). A rejection is **terminal by default** (stops auto-reconnect — correct for a real sign-out); `reconnectOnRejected: {delayMs, maxAttempts} | true` opts into retrying it (expired token / propagation lag / clock skew), and `disconnect()` cancels a pending retry. `client.getLastRejection()` returns the rejection's `ApiError` (null after the next successful connect) and, unlike `getLastConnectionError()`, is not overwritten by later transport failures — that's the "session expired" vs "server unreachable" distinction.
 
 ## TypeScript Hooks (React Output)
 
@@ -495,10 +499,12 @@ Errors propagate to the nearest error boundary. Mutations stay on the generated 
 
 ### Connection / loading hooks
 ```tsx
-import { useConnection, useIsLoading } from './api/client';
+import { useConnection, useConnectionError, useConnectionRejection, useIsLoading } from './api/client';
 
-const { isConnected, state } = useConnection(); // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
-const isLoading = useIsLoading();               // any in-flight request anywhere
+const { isConnected, state, error, rejection } = useConnection(); // state: 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+const err = useConnectionError();       // ConnectionError | null (same as client.getLastConnectionError())
+const rejected = useConnectionRejection(); // ApiError | null — session expired vs server unreachable
+const isLoading = useIsLoading();       // any in-flight request anywhere
 ```
 
 ### Generic primitives

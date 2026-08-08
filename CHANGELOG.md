@@ -31,8 +31,77 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   dropped frame server-side. A missing field means a server predating the
   negotiation. (#279)
 
+- `ServerOptions.AllowAnonymous` admits unauthenticated connections while an
+  `OnAuth` hook is registered, for apps that mix public and protected APIs on
+  one endpoint. Registering a hook otherwise puts *every* connection into the
+  pending-auth state, so anonymous viewers on a public page are closed by
+  `AuthTimeout` — the workaround was an empty-token dance (`getAuthToken: () =>
+  ''` plus a hook treating `""` as anonymous), which is no longer needed.
+  Anonymous connections skip the pending state and the auth timeout and run
+  with `Conn.UserID()` `""`; a client that authenticates later upgrades the
+  live session in place, and a token that is offered and rejected still closes
+  an unauthenticated connection, so a bad credential never degrades into a
+  working anonymous session. Admitting a connection is not authorizing the
+  call — keep gating protected handlers on the user ID or middleware. (#283)
+- `reconnectOnRejected` (`boolean | {delayMs, maxAttempts}`) on the generated
+  TypeScript client retries a rejected connection instead of treating the
+  rejection as terminal. Terminal remains the default because it is the right
+  answer to a real sign-out, but with short-lived JWTs (Clerk and friends) a
+  rejection is usually an expired token, session propagation lag just after
+  sign-in, or clock skew — cases where retrying with a freshly minted token is
+  correct. Every consumer was hand-rolling `onConnectionRejected` plus
+  `setTimeout(connect, 2000)`, which is easy to get subtly wrong: the timer has
+  to die on `disconnect()` or a torn-down client resurrects itself. The delay
+  is fixed rather than backed off (a rejection means the server is reachable
+  and answered), `maxAttempts` bounds consecutive rejections, and a retry that
+  fails at the network level falls through to the normal reconnect backoff.
+  (#283)
+- `getConnectParams` on the generated TypeScript client returns query
+  parameters merged into the connection URL, resolved fresh on every connection
+  attempt — the initial connect, every auto-reconnect, every rejection retry,
+  and page-wake reconnects. Carrying a short-lived token previously meant
+  passing a URL *function* and hand-encoding the query, which conflates
+  addressing with credentials; the base URL can now stay static. A thrown error
+  fails the attempt like a transport error, so a token-service blip goes
+  through the normal reconnect path instead of silently halting reconnection —
+  which is what a throwing URL function used to do. (#283)
+- `client.getLastRejection()` returns the `ApiError` from the most recent
+  connection rejection (server rejection or failed first-message auth), or null
+  after the next successful connect. Unlike `getLastConnectionError()` it is not
+  overwritten by later transport failures, so a UI can keep rendering "session
+  expired, sign in again" distinctly from "server unreachable" while retries
+  run. React gains `useConnectionRejection()` and `useConnectionError()`, and
+  `useConnection()` now also returns `error` and `rejection`. (#283)
+
+### Fixed
+
+- `useConnectionState` (and `useConnection`, which wraps it) could report a
+  stale state forever. It seeded `useState` from the client at first render and
+  only subscribed in an effect, so a connection that completed in between was
+  missed — and because connection state is sticky, nothing later corrected it.
+  The recommended wiring makes this the common case rather than a rare race:
+  the client is created and connected outside React, so it is frequently
+  already `connected` before the effect runs, leaving the UI permanently
+  showing "Disconnected". Both hooks (and `useIsLoading`, which had the same
+  subscribe-after-render gap and could strand a spinner) now read through
+  `useSyncExternalStore`, which re-reads the snapshot after subscribing. (#283)
+
 ### Documentation
 
+- `docs/auth.md` is the recipe for authenticating the generated TypeScript
+  client with short-lived JWTs (Clerk, Auth0, Firebase). Two consumer apps
+  independently hit the same three traps and one shipped the broken version:
+  a static URL freezes the token so every reconnect after expiry is rejected;
+  a rejection is terminal, so one network blip permanently kills the session;
+  and awaiting `connect()` before providing the client races React StrictMode's
+  double mount into a zombie the UI waits on forever. It documents the
+  per-attempt resolution of `getConnectParams` and URL functions as a
+  guarantee, when terminal-on-rejection is right versus wrong, the
+  StrictMode-safe provider wiring, and first-message auth including
+  `AllowAnonymous` for mixed public/protected apps. Linked from README,
+  `doc.go` and `APROT_AI.md`. The React example is rewired to the recommended
+  pattern — it previously demonstrated the racy one — and the superseded
+  internal design note `docs/issue-websocket-auth.md` is removed. (#283)
 - `docs/binary-frames.md` documents the WebSocket binary frame format used for
   `Blob` results — layout, header fields, reference decoders (JS and Python),
   and the JSON `$blob` fallback — for anyone writing a WebSocket client other
