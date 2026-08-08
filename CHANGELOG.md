@@ -72,9 +72,26 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   expired, sign in again" distinctly from "server unreachable" while retries
   run. React gains `useConnectionRejection()` and `useConnectionError()`, and
   `useConnection()` now also returns `error` and `rejection`. (#283)
+- `client.reconnectNow()` on the generated TypeScript client: abandon a pending
+  reconnect backoff and attempt a connection immediately, keeping subscriptions
+  and in-flight requests. `connect()` already does this; `reconnectNow()` adds
+  only the case `connect()` reads as "nothing to do" — a socket the runtime
+  left half-open still reports `'connected'` until its close event lands. Until
+  now the only way to cut a backoff short was `disconnect()` + `connect()`,
+  which drops every subscription and rejects in-flight requests. (#287)
 
 ### Fixed
 
+- `connect()` called during a reconnect backoff left the pending timer armed.
+  It connected immediately, as intended, but up to `reconnectMaxInterval` later
+  (30 s by default) the timer fired and replaced the live socket. The transport
+  detaches the replaced socket's handlers, so its close was never reported and
+  any request in flight at that moment never settled — it neither resolved nor
+  rejected. A manual `connect()` now cancels the backoff, and connection
+  attempts are serialized: at most one runs at a time, and a live socket is
+  never replaced. Requests bound to a socket that *is* replaced (the page-wake
+  path, where the runtime left it half-open) now reject with a
+  `ConnectionError` instead of hanging. (#287)
 - `useConnectionState` (and `useConnection`, which wraps it) could report a
   stale state forever. It seeded `useState` from the client at first render and
   only subscribed in an effect, so a connection that completed in between was
@@ -88,6 +105,15 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Documentation
 
+- The `connect()` docs said it is called "once after constructing the client"
+  and "never needs to be called again". True for keeping a connection alive,
+  misleading for "make sure we are connected now" — it led a consumer app to
+  wrap it in a module-level `if (connected) return` cache, which no-ops exactly
+  when the socket has dropped and the client is in a backoff. The symptom was a
+  ~30 s sign-in with no `/ws` request in the network panel at all. `README.md`,
+  `doc.go`, `APROT_AI.md`, `docs/auth.md` and the generated client's own doc
+  comments now state that `connect()` is cheap and idempotent and should be
+  called whenever the connection needs to be live. (#287)
 - `docs/auth.md` is the recipe for authenticating the generated TypeScript
   client with short-lived JWTs (Clerk, Auth0, Firebase). Two consumer apps
   independently hit the same three traps and one shipped the broken version:

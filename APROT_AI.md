@@ -74,7 +74,9 @@ const client = new ApiClient(getWebSocketUrl());
 client.connect(); // REQUIRED once. `await` optional: requests issued while connecting are buffered and flushed on ready.
 ```
 
-React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. `connect()` is a no-op when already connected/connecting; after the first successful call, auto-reconnect handles drops — never call it again for reconnection.
+React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. After the first successful call, auto-reconnect handles drops, so no reconnect loop of your own is needed.
+
+`connect()` is cheap and idempotent — a no-op while connected/connecting, and an immediate attempt otherwise, **including while a reconnect backoff is pending** (the backoff is abandoned rather than waited out). Call it whenever the connection needs to be live (after signing in, on resume) rather than caching an "already connected" flag: such a flag skips the call exactly when the socket has since dropped, and nothing opens a new one — the symptom is a UI that waits with no `/ws` request in the network panel. `client.reconnectNow()` is the same thing without the connected/connecting no-op; reach for it only when a socket the runtime left half-open still reports `'connected'`. Neither drops subscriptions or rejects in-flight requests, unlike `disconnect()` + `connect()`.
 
 **StrictMode rule (#283):** create + `connect()` fire-and-forget + provide the client **synchronously**. Never gate rendering on the connect promise (`connect().then(() => setClient(c))` / `setConnected(true)`) — StrictMode's double mount can leave a disconnected client in the tree and the UI waiting forever. Requests buffer while connecting, so render immediately and show a slim banner driven by `useConnection()` instead of unmounting the app.
 

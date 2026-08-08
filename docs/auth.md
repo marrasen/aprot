@@ -106,7 +106,7 @@ function ConnectionBanner() {
 
 > **The anti-pattern:** `client.connect().then(() => setClient(client))` — or any `setConnected(true)` that gates the tree. Under StrictMode's double mount, the effect runs twice and a disconnected client can win the race, leaving the UI waiting on a zombie forever. It is also unnecessary: requests issued while connecting are **buffered** and flushed once the connection is ready, so nothing is lost by rendering immediately.
 
-Prefer a slim banner over unmounting the app while disconnected: the UI stays interactive, in-flight work is preserved, and reconnects become invisible. `connect()` is idempotent and auto-reconnect handles drops, so it never needs calling again.
+Prefer a slim banner over unmounting the app while disconnected: the UI stays interactive, in-flight work is preserved, and reconnects become invisible. `connect()` is idempotent and auto-reconnect handles drops, so it does not need calling again — though calling it again is safe and is the right move whenever the connection needs to be live *now* (right after signing in, say). What is not safe is wrapping it in a module-level `if (connected) return` cache: that skips the call exactly when the socket has dropped and the client is sitting in a backoff, so nothing opens a socket at all and the UI waits with no `/ws` request in the network panel. Call `connect()` itself — it cancels the pending backoff and attempts immediately.
 
 Deriving the client from React state (a user id, a workspace) is fine — build it in a `useMemo`, call `connect()` in the same effect that creates it, and `disconnect()` in the cleanup. The rule is only that you never *wait* on the promise before providing the client.
 
@@ -177,6 +177,6 @@ The recipe leans on these documented behaviors:
 - A URL **function** and `getConnectParams` are both resolved on **every** connection attempt, including auto-reconnects, rejection retries, and page-wake reconnects.
 - `getAuthToken` is likewise re-invoked on every reconnect, and buffered work flushes only after `auth_ok`.
 - Requests issued while `connecting` / `reconnecting` are buffered and flushed once ready; requests issued while fully disconnected reject with a `ConnectionError`.
-- `connect()` is idempotent — a no-op while connected or connecting — and never needs to be called again after the first success.
+- `connect()` is idempotent — a no-op while connected or connecting — and does not need to be called again after the first success. Calling it during a reconnect backoff cancels the backoff and attempts immediately, so it is also the way to say "connect now" after a token refresh. `reconnectNow()` is the same without the connected/connecting no-op.
 - A rejection stops auto-reconnect unless `reconnectOnRejected` is set; `disconnect()` always cancels a pending retry.
 - `getLastRejection()` is cleared only by the next successful connect.
