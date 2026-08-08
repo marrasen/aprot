@@ -16,7 +16,7 @@
     "@types/ws": "^8.18.1",
     "eslint": "^10.8.0",
     "eventsource": "^4.1.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "typescript": "^6.0.3",
