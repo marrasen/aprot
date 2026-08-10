@@ -114,6 +114,9 @@ jobs:
       - name: Check vanilla client compiles
         run: cd example/vanilla/client && npx tsc --noEmit
 
+      - name: Lint vanilla client
+        run: cd example/vanilla/client && npm run lint
+
       - name: Generate react client
         run: cd example/react/tools/generate && go run main.go
 
@@ -122,6 +125,9 @@ jobs:
 
       - name: Check react client compiles
         run: cd example/react/client && npx tsc --noEmit
+
+      - name: Lint react client
+        run: cd example/react/client && npm run lint
 
   e2e-tests:
     runs-on: ubuntu-latest
