@@ -1162,9 +1162,15 @@ git config core.hooksPath .githooks
 # Go (requires golangci-lint v2)
 golangci-lint run ./...
 
-# TypeScript (E2E tests)
+# TypeScript (oxlint)
 cd e2e && npm run lint
+cd example/vanilla/client && npm run lint
+cd example/react/client && npm run lint
 ```
+
+TypeScript linting uses [oxlint](https://oxc.rs/docs/guide/usage/linter.html), configured per package in
+`.oxlintrc.json`. Generated client code (`api/`, `react-api/`, `src/api/`, `static/api/`) is excluded — regenerate it
+instead of editing it. All TypeScript packages build against TypeScript 7.
 
 ### CI
 
@@ -1173,8 +1179,8 @@ GitHub Actions runs five jobs on every push/PR to `master`:
 1. **go-fmt** — verifies all Go files are formatted with `gofmt`
 2. **go-tests** — Go unit and integration tests with race detection
 3. **go-lint** — runs golangci-lint across all Go modules
-4. **typescript-compile** — verifies generated TypeScript compiles for both vanilla and React modes
-5. **e2e-tests** — runs the full E2E suite (with ESLint) against a live server
+4. **typescript-compile** — verifies generated TypeScript compiles and lints for both vanilla and React modes
+5. **e2e-tests** — runs the full E2E suite (with oxlint) against a live server
 
 ## License
 

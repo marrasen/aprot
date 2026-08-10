@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "build": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020",
-    "watch": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020 --watch"
+    "watch": "esbuild static/app.ts --bundle --outfile=static/app.js --format=iife --target=es2020 --watch",
+    "lint": "oxlint"
   },
   "devDependencies": {
     "esbuild": "^0.28.0",
-    "typescript": "^5.9.3"
+    "oxlint": "^1.78.0",
+    "typescript": "^7.0.2"
   }
 }
