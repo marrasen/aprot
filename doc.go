@@ -357,11 +357,20 @@
 // browsers with cookies must restrict origins with [Server.SetCheckOrigin] —
 // otherwise any website a logged-in user visits can open an authenticated
 // WebSocket to the server from the user's browser (cross-site WebSocket
-// hijacking):
+// hijacking). [SameOriginCheck] is the recommended argument: it accepts the
+// server's own origin (Origin host == request Host, case-insensitive, port
+// included) plus any extra origins listed verbatim (for dev proxies that
+// rewrite Host while forwarding the browser's Origin), and rejects a missing,
+// unparseable, or "null" Origin — the sharp edges (substring look-alikes,
+// port confusion, sandboxed-iframe "null") that hand-written checks tend to
+// get wrong:
 //
-//	server.SetCheckOrigin(func(r *http.Request) bool {
-//	    return r.Header.Get("Origin") == "https://app.example.com"
-//	})
+//	server.SetCheckOrigin(aprot.SameOriginCheck())                        // production
+//	server.SetCheckOrigin(aprot.SameOriginCheck("http://localhost:5173")) // with a dev proxy
+//
+// Because it rejects requests without an Origin header, SameOriginCheck suits
+// browser-facing deployments; keep a custom func for deployments that mix
+// browser and non-browser clients on one endpoint.
 //
 // The SSE and REST transports are plain HTTP, so cross-origin browser clients
 // need CORS response headers and OPTIONS preflight handling instead. [CORS]

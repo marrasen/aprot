@@ -558,11 +558,11 @@ func (s *Server) disassociateUser(conn *Conn) {
 // The default accepts any Origin so non-browser clients work out of the box.
 // Deployments that authenticate browsers with cookies MUST restrict origins,
 // otherwise any website can open an authenticated WebSocket to this server
-// from a visitor's browser (cross-site WebSocket hijacking):
+// from a visitor's browser (cross-site WebSocket hijacking). [SameOriginCheck]
+// is the recommended argument — hand-written checks tend to get host, port,
+// and "null"-Origin handling subtly wrong:
 //
-//	server.SetCheckOrigin(func(r *http.Request) bool {
-//	    return r.Header.Get("Origin") == "https://app.example.com"
-//	})
+//	server.SetCheckOrigin(aprot.SameOriginCheck())
 func (s *Server) SetCheckOrigin(f func(r *http.Request) bool) {
 	s.upgrader.CheckOrigin = f
 }
