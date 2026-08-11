@@ -887,11 +887,21 @@ Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 
 ### Origin checking (cross-site WebSocket hijacking)
 
-By default the WebSocket upgrader accepts **any** `Origin` header so non-browser clients work out of the box. If your deployment authenticates browsers with **cookies**, you must restrict origins — otherwise any website a logged-in user visits can open an authenticated WebSocket to your server from their browser:
+By default the WebSocket upgrader accepts **any** `Origin` header so non-browser clients work out of the box. If your deployment authenticates browsers with **cookies**, you must restrict origins — otherwise any website a logged-in user visits can open an authenticated WebSocket to your server from their browser. `SameOriginCheck` is the recommended argument:
+
+```go
+server.SetCheckOrigin(aprot.SameOriginCheck())                          // production
+server.SetCheckOrigin(aprot.SameOriginCheck("http://localhost:5173"))   // with a dev proxy
+```
+
+It accepts a request when the `Origin` header's host equals the request's `Host` (case-insensitive, port included), or when the whole origin matches one of the extra origins verbatim (case-insensitive, trailing slash tolerated). The extras exist for dev proxies — Vite's `changeOrigin: true` rewrites `Host` to the backend while forwarding the browser's `:5173` origin, so strict same-origin alone would break the dev loop. A missing, unparseable, or `null` Origin is rejected, and `null` cannot be allowlisted.
+
+Hand-rolled checks are easier to get wrong than they look — substring or suffix matching lets `app.example.com.evil.com` through, `https://host:9999` must not match `host`, and `Origin: null` from sandboxed iframes must not count as same-origin — which is why the helper exists. The one sharp edge it keeps: browsers always send `Origin` on a WebSocket handshake, so rejecting a missing header is correct for browser-facing deployments, but it will reject non-browser clients that omit it. Deployments mixing both on one endpoint should keep a custom func:
 
 ```go
 server.SetCheckOrigin(func(r *http.Request) bool {
-    return r.Header.Get("Origin") == "https://app.example.com"
+    return r.Header.Get("Origin") == "" || // non-browser clients send no Origin
+        aprot.SameOriginCheck()(r)
 })
 ```
 
