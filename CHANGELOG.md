@@ -10,6 +10,41 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-08-11
+
+### Added
+
+- `SameOriginCheck(extraOrigins ...string)` returns a ready-made origin check
+  for `Server.SetCheckOrigin`, so cookie-authenticated deployments no longer
+  have to hand-roll one. It accepts the server's own origin — the `Origin`
+  header's host equals the request's `Host`, compared case-insensitively with
+  the port included — plus any extra origins matched verbatim (also
+  case-insensitive, trailing slash tolerated) for dev proxies such as Vite's
+  `changeOrigin: true`, which rewrites `Host` to the backend while forwarding
+  the browser's `:5173` origin. Without that escape hatch consumers tend to
+  give up on the check entirely. The hand-written version is easier to get
+  quietly wrong than it looks: substring or suffix matching admits
+  `https://app.example.com.evil.com` against host `app.example.com`,
+  `https://host:9999` must not match host `host` while `https://host:8443`
+  must match `host:8443`, and `Origin: null` from a sandboxed iframe is not
+  same-origin. Each of those is a place where the result is "cookies accepted
+  from any origin". A missing, unparseable, or `null` Origin is rejected, and
+  `null` cannot be allowlisted through `extraOrigins`. Rejecting a missing
+  header is correct for browsers (they always send `Origin` on a WebSocket
+  handshake) but excludes non-browser clients, so the helper is opt-in and the
+  server default stays allow-all — nothing changes for existing users, and
+  endpoints serving both client kinds should keep a custom func. (#298)
+
+### Changed
+
+- The e2e and example TypeScript packages moved to TypeScript 7 and replaced
+  ESLint with oxlint. `typescript-eslint@8` declares a peer range excluding
+  TS7, which held the e2e package on TS6; oxlint uses its own Rust parser and
+  has no TypeScript peer dependency. Existing rules were ported to per-package
+  `.oxlintrc.json`, generated client output stays excluded from linting, and
+  CI now lints both example clients. Repo tooling only — the generated client
+  and the library API are unaffected. (#265)
+
 ## [0.53.0] - 2026-08-08
 
 ### Added
@@ -484,7 +519,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.53.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.54.0...HEAD
+[0.54.0]: https://github.com/marrasen/aprot/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/marrasen/aprot/compare/v0.52.0...v0.53.0
 [0.52.0]: https://github.com/marrasen/aprot/compare/v0.51.0...v0.52.0
 [0.51.0]: https://github.com/marrasen/aprot/compare/v0.50.0...v0.51.0
