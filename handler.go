@@ -132,6 +132,37 @@ type EnumValueInfo struct {
 	Value any    // e.g., "pending" (string) or 0 (int)
 }
 
+// EnumNamer lets an enum value say what its generated member should be called.
+//
+// A string enum's member name is otherwise its value with the first letter
+// capitalised, which reads well for "pending" and says nothing at all for a
+// value that is one character: an enum stored as "F", "O" and "B" generates as
+// .F, .O and .B, while the Go constants it came from are Filled, Outline and
+// BoundingRect. Registration only receives the values, so the names cannot be
+// recovered from the slice; the type has to carry them.
+//
+// Implement it on the enum type to name the members after the constants:
+//
+//	func (d DrawOption) EnumMemberName() string {
+//		switch d {
+//		case DrawOptionFilled:
+//			return "Filled"
+//		...
+//		}
+//	}
+//
+// Deliberately not fmt.Stringer. Int enums already use that to name their
+// members, but a string enum may well implement String() to return its own
+// value, and honouring it there would rename members of every such enum
+// without anyone asking. This interface cannot be satisfied by accident.
+//
+// The name must be unique within the enum and is used verbatim; registration
+// panics if two values ask for the same one, because the alternative is a
+// generated object literal with a duplicate key.
+type EnumNamer interface {
+	EnumMemberName() string
+}
+
 // EnumInfo describes a registered enum type.
 type EnumInfo struct {
 	Name     string       // e.g., "StrState"
@@ -574,6 +605,11 @@ func (r *Registry) buildEnumInfo(values any) EnumInfo {
 	stringerType := reflect.TypeOf((*fmt.Stringer)(nil)).Elem()
 	hasStringer := reflect.PointerTo(elemType).Implements(stringerType)
 
+	// EnumNamer names the members explicitly; see the interface for why a
+	// string enum needs it and why it is not fmt.Stringer.
+	namerType := reflect.TypeOf((*EnumNamer)(nil)).Elem()
+	hasNamer := reflect.PointerTo(elemType).Implements(namerType)
+
 	enumInfo := EnumInfo{
 		Name:     enumName,
 		Type:     elemType,
@@ -581,15 +617,24 @@ func (r *Registry) buildEnumInfo(values any) EnumInfo {
 		Values:   make([]EnumValueInfo, 0, v.Len()),
 	}
 
+	seen := make(map[string]any, v.Len())
+
 	for i := 0; i < v.Len(); i++ {
 		elem := v.Index(i)
 		var name string
 		var value any
 
 		if isString {
-			// String-based: capitalize first letter for name
+			// String-based: the type may name its members, otherwise the value
+			// capitalised.
 			strVal := elem.String()
-			name = capitalize(strVal)
+			if hasNamer {
+				ptr := reflect.New(elemType)
+				ptr.Elem().Set(elem)
+				name = ptr.Interface().(EnumNamer).EnumMemberName()
+			} else {
+				name = capitalize(strVal)
+			}
 			value = strVal
 		} else {
 			// Int-based: use String() method if available
@@ -604,6 +649,15 @@ func (r *Registry) buildEnumInfo(values any) EnumInfo {
 			}
 			value = elem.Int()
 		}
+
+		// Two values asking for one member name generate an object literal
+		// with a duplicate key, where the second silently wins and one value
+		// becomes unreachable from the client. Said here, where the enum that
+		// caused it is still known.
+		if other, clash := seen[name]; clash {
+			panic(fmt.Sprintf("aprot: enum %s names both %v and %v %q", enumName, other, value, name))
+		}
+		seen[name] = value
 
 		enumInfo.Values = append(enumInfo.Values, EnumValueInfo{
 			Name:  name,
