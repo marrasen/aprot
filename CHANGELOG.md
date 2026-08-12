@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-08-12
+
 ### Added
 
 - `EnumNamer` lets a string enum say what its generated members should be
@@ -30,7 +32,7 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   every such enum without anyone asking. Registration now also panics when two
   values ask for the same member name, which would otherwise generate an
   object literal with a duplicate key and make one value unreachable from the
-  client.
+  client. (#301)
 
 ## [0.54.0] - 2026-08-11
 
@@ -541,7 +543,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.54.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.55.0...HEAD
+[0.55.0]: https://github.com/marrasen/aprot/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/marrasen/aprot/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/marrasen/aprot/compare/v0.52.0...v0.53.0
 [0.52.0]: https://github.com/marrasen/aprot/compare/v0.51.0...v0.52.0
