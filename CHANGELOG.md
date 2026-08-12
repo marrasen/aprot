@@ -10,6 +10,28 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `EnumNamer` lets a string enum say what its generated members should be
+  called. `RegisterEnum` receives only the values, so a member's name is the
+  value with its first letter capitalised — which reads well for `"pending"`
+  and says nothing at all when the values are one character each. An enum
+  stored as `"F"`, `"O"` and `"B"` generated as `DrawOption.F`, `.O` and `.B`
+  while the Go constants it came from were `DrawOptionFilled`,
+  `DrawOptionOutline` and `DrawOptionBoundingRect`; the names existed but not
+  in the slice, so the type has to carry them. Implementing
+  `EnumMemberName() string` on the enum type names the members after the
+  constants. The wire value is untouched — this renames the member, not the
+  data.
+
+  Opt-in, and deliberately not `fmt.Stringer`: int enums already use that to
+  name their members, but a string enum may well implement `String()` to
+  return its own value, and honouring it there would rename the members of
+  every such enum without anyone asking. Registration now also panics when two
+  values ask for the same member name, which would otherwise generate an
+  object literal with a duplicate key and make one value unreachable from the
+  client.
+
 ## [0.54.0] - 2026-08-11
 
 ### Added
