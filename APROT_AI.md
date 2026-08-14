@@ -443,7 +443,7 @@ function AddTodoButton() {
 
 You manage `isLoading` / `error` / `AbortController` yourself. The trade-off is honest: the generated function is a typed `Promise<TRes>` that resolves with the actual value or throws — no hidden state machine.
 
-**Pattern 3 — global error capture with `<ApiClientErrorProvider>`.** Drop in a provider, read errors from `useApiClientError()`. Inside the provider, `useApiClient()` returns a `Proxy`-wrapped client that reports errors from `request` / `subscribe` / `requestStream` to the provider in addition to throwing as before. Generated hooks (`useQuery`, `mutate`, `useStream`) all flow through `useApiClient()` internally, so their errors surface here too without per-hook wiring.
+**Pattern 3 — global error capture with `<ApiClientErrorProvider>`.** Drop in a provider, read errors from `useApiClientError()`. The client reports its own failures — every failed `request` / `subscribe` / `requestStream` is announced through `client.onRequestError`, and the provider subscribes to that. Generated hooks (`useQuery`, `mutate`, `useStream`) surface here without per-hook wiring, and so does a module that imports the client directly and never touches React: reporting belongs to the client, not to how you obtained it.
 
 ```tsx
 import {
@@ -476,7 +476,15 @@ function ErrorBanner() {
 
 `source: { struct, method } | null` is parsed from the wire name on the first dot — `'Todos.CreateTodo'` becomes `{ struct: 'Todos', method: 'CreateTodo' }`. It is `null` exactly when `error` is `null`. Wire names with no dot put the full string in `method` and leave `struct` as `''`.
 
-Latest error wins (newer replaces older); `clear()` resets both `error` and `source` to `null`. The provider does **not** swallow — calls still throw, so `try/catch` and per-hook `error` fields keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client and `useApiClientError()` throws — adoption is fully opt-in.
+Latest error wins (newer replaces older); `clear()` resets both `error` and `source` to `null`. The provider does **not** swallow — calls still throw, so `try/catch` and per-hook `error` fields keep working. Without an `<ApiClientErrorProvider>` above, nothing subscribes and `useApiClientError()` throws — adoption is fully opt-in.
+
+**Pattern 3b — `client.onRequestError` (no React, works in vanilla output).** The mechanism behind the provider is public. `client.onRequestError((err, source) => ...)` fires for every failed call the client makes, receives the `{ struct, method }` source, returns an unsubscribe function, and supports multiple listeners. It is an observer, not a handler — the error is still thrown to the caller.
+
+```ts
+const stop = client.onRequestError((err, source) => {
+  logger.warn(`${source.struct}.${source.method} failed: ${err.message}`);
+});
+```
 
 ### Migrating from `useXxxMutation()` (removed)
 

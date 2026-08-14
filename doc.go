@@ -787,8 +787,10 @@
 // API error inside a single hook, instead of wiring per-call try/catch. Errors
 // from imperative client.request() / requestStream() / subscribe() calls AND
 // from generated query / stream / mutate hooks all flow through the provider,
-// because every hook retrieves its client via useApiClient() and useApiClient()
-// returns a Proxy-wrapped client when the provider is mounted above it:
+// because the client reports its own failures through
+// ApiClient.onRequestError and the provider subscribes to that. A module that
+// imports the client directly and never touches React reports the same way a
+// component does:
 //
 //	import { ApiClientProvider, ApiClientErrorProvider, useApiClient,
 //	         useApiClientError } from './api/client';
@@ -812,10 +814,20 @@
 //
 // Only the latest error is held (newer overrides older); clear() resets both
 // error and source. The provider observes errors but does not swallow them —
-// wrapped client calls still throw, so per-hook `error` fields and explicit
-// try/catch keep working. Without <ApiClientErrorProvider> above,
-// useApiClient() returns the raw client unchanged and useApiClientError()
-// throws — adoption is opt-in.
+// calls still throw, so per-hook `error` fields and explicit try/catch keep
+// working. Without <ApiClientErrorProvider> above, nothing subscribes and
+// useApiClientError() throws — adoption is opt-in.
+//
+// The same reporting is available without React. client.onRequestError(fn)
+// registers a listener for every failed call the client makes — a rejected
+// request, a subscription error, or a stream that throws — receiving the error
+// and the { struct, method } source. It returns an unsubscribe function, and
+// multiple listeners are supported. Use it to route failures to a logger or a
+// toast in vanilla output, where the provider is not available:
+//
+//	const stop = client.onRequestError((err, source) => {
+//	    console.error(`${source.struct}.${source.method} failed`, err);
+//	});
 //
 // # React Suspense
 //

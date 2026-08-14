@@ -10,6 +10,37 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-08-14
+
+### Added
+
+- `ApiClient.onRequestError(listener)` on the generated TypeScript client
+  observes every failed call the client makes — a rejected request, a
+  subscription error, or a stream that throws — passing the error and the
+  `{ struct, method }` source parsed from the wire name. Returns an
+  unsubscribe function; multiple listeners are supported. It is an observer,
+  not a handler: the error is still thrown to the caller, so per-call
+  `try/catch` and per-hook `error` fields keep working. Available in vanilla
+  output too, where the React provider is not. (#304)
+
+- `TestGeneratedClientsTypecheck` compiles the generated TypeScript of every
+  output mode — single-file and multi-file, vanilla and React — with `tsc`.
+  Nothing compiled the generated output before, which is why the drift below
+  survived. The test skips unless the React example's dependencies are
+  installed (`cd example/react/client && npm ci`); CI installs them and runs
+  it in the `typescript-compile` job. (#307)
+
+### Changed
+
+- `<ApiClientErrorProvider>` now subscribes to the client's `onRequestError`
+  instead of handing components a `Proxy`-wrapped client through
+  `useApiClient()`. A wrapper only covered callers who asked React for the
+  client; a module that imported the client directly reported nothing. An
+  observer on the client itself cannot be sidestepped that way. Visible
+  difference: `useApiClient()` now returns the client itself in all cases,
+  identity-stable, so code comparing it by reference or reaching past it no
+  longer sees a Proxy. (#304)
+
 ### Fixed
 
 - `Generator.GenerateTo` (single-file output) emitted a client that did not
@@ -29,16 +60,7 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   `onConnectionRejected` / `reconnectOnRejected` / `getLastRejection` (accepted
   as options before but never implemented), and a function-valued client URL.
   Single-file React hooks now wire `_subscribe` and carry the `.method` tag, so
-  auto-refetch and `useQuerySuspense` work there too.
-
-### Added
-
-- `TestGeneratedClientsTypecheck` compiles the generated TypeScript of every
-  output mode — single-file and multi-file, vanilla and React — with `tsc`.
-  Nothing compiled the generated output before, which is why the drift above
-  survived. The test skips unless the React example's dependencies are
-  installed (`cd example/react/client && npm ci`); CI installs them and runs
-  it in the `typescript-compile` job.
+  auto-refetch and `useQuerySuspense` work there too. (#307)
 
 ## [0.55.0] - 2026-08-12
 
