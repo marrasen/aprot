@@ -948,8 +948,8 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	for _, event := range g.registry.PushEvents() {
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
-			HandlerName: g.naming().HandlerName(event.Name),
-			HookName:    g.naming().HookName(event.Name),
+			HandlerName: tsSafeIdent(g.naming().HandlerName(event.Name)),
+			HookName:    tsSafeIdent(g.naming().HookName(event.Name)),
 			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
@@ -1019,10 +1019,13 @@ func (g *Generator) buildMethodData(info *HandlerInfo, wireMethod, shortName str
 	}
 
 	return methodData{
-		Name:          shortName,
-		WireMethod:    wireMethod,
-		MethodName:    g.naming().MethodName(shortName),
-		HookName:      g.naming().HookName(shortName),
+		Name:       shortName,
+		WireMethod: wireMethod,
+		// Escaped after the naming plugin runs: both are emitted as bare
+		// function declarations, so a custom plugin must not be able to
+		// reintroduce a reserved word (issue #309).
+		MethodName:    tsSafeIdent(g.naming().MethodName(shortName)),
+		HookName:      tsSafeIdent(g.naming().HookName(shortName)),
 		SubscribeName: "subscribe" + shortName,
 		ResponseType:  respType,
 		ItemKeyType:   keyType,
@@ -1071,8 +1074,8 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 	for _, event := range group.PushEvents {
 		data.PushEvents = append(data.PushEvents, pushEventData{
 			Name:        event.Name,
-			HandlerName: g.naming().HandlerName(event.Name),
-			HookName:    g.naming().HookName(event.Name),
+			HandlerName: tsSafeIdent(g.naming().HandlerName(event.Name)),
+			HookName:    tsSafeIdent(g.naming().HookName(event.Name)),
 			DataType:    sanitizeTSIdent(event.DataType.Name()),
 		})
 	}
@@ -1204,8 +1207,10 @@ func tsObjectKey(s string) string {
 }
 
 // tsReservedWords are JavaScript/TypeScript keywords and reserved words that
-// cannot be used as a bare parameter identifier in generated code. A Go param
-// whose name collides with one of these is renamed (see tsSafeParamName).
+// cannot be used as a bare identifier in generated code. A generated param or
+// function name that collides with one of these is renamed (see tsSafeIdent).
+// The strict-mode-only words ("let", "static", "yield", "await") are included
+// because generated modules are always strict.
 var tsReservedWords = map[string]bool{
 	"break": true, "case": true, "catch": true, "class": true, "const": true,
 	"continue": true, "debugger": true, "default": true, "delete": true, "do": true,
@@ -1219,12 +1224,16 @@ var tsReservedWords = map[string]bool{
 	"static": true, "yield": true, "await": true,
 }
 
-// tsSafeParamName returns a parameter name safe to emit in generated TypeScript.
+// tsSafeIdent returns an identifier safe to emit in generated TypeScript.
 // Names that collide with a reserved word, or that aren't valid JS identifiers,
-// are suffixed with "_" (parameter positions are matched by order in the
-// generated client, so the rename is purely cosmetic and stays consistent
-// across the signature, body, and call site).
-func tsSafeParamName(name string) string {
+// are suffixed with "_".
+//
+// Applied to parameter names and to every generated function name (methods,
+// hooks, push-event handlers). Neither reaches the wire — parameters are
+// matched by position and methods are dispatched by their qualified wire name
+// — so the rename is purely cosmetic and stays consistent across the
+// declaration, body, and every call site.
+func tsSafeIdent(name string) string {
 	if tsReservedWords[name] || !isValidJSIdent(name) {
 		return name + "_"
 	}
@@ -1986,7 +1995,7 @@ func (g *Generator) buildParamData(info *HandlerInfo, meta *sourceMeta) []paramD
 		if i < len(astNames) {
 			name = astNames[i]
 		}
-		name = tsSafeParamName(name)
+		name = tsSafeIdent(name)
 		tsType := g.goTypeToTS(p.Type)
 		if p.Variadic {
 			tsType = tsType + "[]"

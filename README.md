@@ -281,6 +281,8 @@ func main() {
 
 If you need the whole client as one file instead of a directory, `gen.GenerateTo(w io.Writer)` writes the same code unsplit — the same `ApiClient`, the same per-method functions, `subscribeX` helpers and (in React mode) hooks, rendered from the same templates. `Generate()` is still the better default: shared type files, Zod schemas, and stale-file cleanup all require a directory.
 
+Generated names that would collide with a TypeScript reserved word get a trailing underscore, so a handler named `Delete` emits `export function delete_(...)` instead of a file that doesn't parse. This covers method, hook and push-handler names, applies on top of whatever a custom `NamingPlugin` returns, and is cosmetic only — the wire method stays `Handlers.Delete`. Handler parameter names are escaped the same way and are matched by position, so they never reach the wire either.
+
 Generated output contains no `any`: Go fields declared as `any` / `interface{}` (and other types with no static TypeScript shape) are emitted as `unknown`. When such a field in practice always carries one concrete type, refine it with `Registry.OverrideFieldType` — a codegen-only override that leaves runtime serialization untouched:
 
 ```go

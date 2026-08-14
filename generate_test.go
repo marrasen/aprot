@@ -4179,3 +4179,108 @@ func TestOverrideFieldTypePanics(t *testing.T) {
 		registry.OverrideFieldType(OverrideEvent{}, "Payload", nil)
 	})
 }
+
+// --- Reserved-word method names (issue #309) ------------------------------
+
+type reservedNameHandlers struct{}
+
+// Reserved everywhere — "export function delete(...)" is a syntax error.
+func (h *reservedNameHandlers) Delete(_ context.Context, id string) error { return nil }
+
+func (h *reservedNameHandlers) New(_ context.Context) (*CreateUserResponse, error) {
+	return &CreateUserResponse{}, nil
+}
+
+// Reserved in strict-mode code only; generated modules are always strict.
+func (h *reservedNameHandlers) Static(_ context.Context) (*CreateUserResponse, error) {
+	return &CreateUserResponse{}, nil
+}
+
+// reservedNaming returns a reserved word from every name hook, standing in for
+// an arbitrary custom NamingPlugin: escaping runs after the plugin, so a plugin
+// cannot reintroduce the problem.
+type reservedNaming struct{ DefaultNaming }
+
+func (reservedNaming) MethodName(string) string { return "delete" }
+func (reservedNaming) HookName(string) string   { return "class" }
+
+// A generated function name that collides with a TypeScript reserved word does
+// not parse, so it is escaped with a trailing underscore. The wire method is
+// unaffected. See issue #309.
+func TestGenerateEscapesReservedFunctionNames(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&reservedNameHandlers{})
+
+	for _, mode := range []OutputMode{OutputVanilla, OutputReact} {
+		t.Run(string(mode), func(t *testing.T) {
+			var buf bytes.Buffer
+			gen := NewGenerator(registry).WithOptions(GeneratorOptions{Mode: mode})
+			if err := gen.GenerateTo(&buf); err != nil {
+				t.Fatalf("Generate failed: %v", err)
+			}
+			output := buf.String()
+
+			for _, want := range []string{
+				"export function delete_(",
+				"export function new_(",
+				"export function static_(",
+			} {
+				if !strings.Contains(output, want) {
+					t.Errorf("missing escaped function %q", want)
+				}
+			}
+			for _, unwanted := range []string{
+				"export function delete(",
+				"export function new(",
+				"export function static(",
+			} {
+				if strings.Contains(output, unwanted) {
+					t.Errorf("emitted reserved word as a function name: %q", unwanted)
+				}
+			}
+			// The escape is cosmetic: the wire method keeps the Go name.
+			if !strings.Contains(output, "'reservedNameHandlers.Delete'") {
+				t.Error("wire method name should be unaffected by the escape")
+			}
+		})
+	}
+}
+
+// PascalCase names never collide, so PreserveNaming output is left alone.
+func TestGeneratePreserveNamingNeedsNoEscape(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&reservedNameHandlers{})
+
+	var buf bytes.Buffer
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{Naming: PreserveNaming{}})
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	if output := buf.String(); !strings.Contains(output, "export function Delete(") {
+		t.Error("PreserveNaming should emit Delete unchanged")
+	}
+}
+
+// Escaping is applied after the naming plugin runs, so a custom plugin that
+// returns a reserved word still produces a module that parses.
+func TestGenerateEscapesCustomNamingPluginOutput(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&reservedNameHandlers{})
+
+	var buf bytes.Buffer
+	gen := NewGenerator(registry).WithOptions(GeneratorOptions{
+		Mode:   OutputReact,
+		Naming: reservedNaming{},
+	})
+	if err := gen.GenerateTo(&buf); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+	output := buf.String()
+
+	if !strings.Contains(output, "export function delete_(") {
+		t.Error("plugin-returned method name was not escaped")
+	}
+	if !strings.Contains(output, "export function class_(") {
+		t.Error("plugin-returned hook name was not escaped")
+	}
+}
