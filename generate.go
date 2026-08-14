@@ -390,6 +390,10 @@ type templateData struct {
 	Enums            []enumTemplateData
 	BaseTypeImports  []string          // base type names to import from './client' (handler files only)
 	SharedImports    []typeImportGroup // shared type imports from package files (e.g., "./api")
+	// React reports whether the output mode is OutputReact. The shared
+	// "handler-functions" block is rendered by both the vanilla and the React
+	// templates and uses this to gate the React-only extras.
+	React bool
 }
 
 type enumTemplateData struct {
@@ -875,8 +879,14 @@ func isGeneratedByAprot(content []byte) bool {
 	return rest == "" || rest[0] == '\n' || rest[0] == '\r'
 }
 
-// GenerateTo writes TypeScript client code to a single writer.
-// This combines all handler groups into one file (legacy behavior).
+// GenerateTo writes TypeScript client code to a single writer, combining all
+// handler groups into one file.
+//
+// The result is the same client [Generator.Generate] emits, only unsplit: both
+// render the same ApiClient and the same per-method functions, subscribe
+// helpers and (in [OutputReact]) hooks, so the two layouts stay in step. Prefer
+// Generate — the split output supports shared type files, Zod schemas and
+// stale-file cleanup, none of which a single writer can express.
 func (g *Generator) GenerateTo(w io.Writer) error {
 	g.genErrors = nil
 	// Collect all types from all groups
@@ -915,6 +925,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 	data := templateData{
 		StructName: "Combined",
 		FileName:   "client.ts",
+		React:      g.options.Mode == OutputReact,
 	}
 
 	// Build interfaces
@@ -1026,6 +1037,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 	data := templateData{
 		StructName: group.Name,
 		FileName:   g.naming().FileName(group.Name) + ".ts",
+		React:      g.options.Mode == OutputReact,
 	}
 
 	// Build interfaces

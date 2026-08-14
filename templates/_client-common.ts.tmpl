@@ -1844,6 +1844,126 @@ export interface {{.Name}} {
 {{end -}}
 {{end}}
 
+{{/*
+handler-functions emits the free functions that wrap ApiClient for every
+handler method and push event: the request/stream call, the .method wire tag
+(React only — useQuerySuspense reads it), the subscribe helper, and the push
+handler. Both the multi-file handler templates and the single-file client
+templates render this block, so the two outputs cannot drift apart. $.React
+selects the React-only extras.
+*/}}
+{{define "handler-functions"}}{{range .Methods -}}
+{{- if .IsStream}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<{{.ResponseType}}> {
+    return client.requestStream<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+
+{{else if .IsStream2}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): AsyncIterable<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    return client.requestStream<[{{.ItemKeyType}}, {{.ResponseType}}]>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+
+{{else}}
+export function {{.MethodName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, options?: RequestOptions): Promise<{{.ResponseType}}> {
+    return client.request<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], options);
+}
+{{if $.React}}// Wire-method tag consumed by useQuerySuspense to key the promise cache and
+// open the matching server subscription. Stable identifier across builds
+// (unaffected by minification, unlike Function.name).
+{{.MethodName}}.method = '{{.WireMethod}}' as const;
+{{end}}
+export function {{.SubscribeName}}(client: ApiClient{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}, callback: (data: {{.ResponseType}}) => void, onError?: (error: Error) => void, options?: { onPatch?: (patch: unknown) => void }): () => void {
+    return client.subscribe<{{.ResponseType}}>('{{.WireMethod}}', [{{paramArray .Params}}], callback, onError, options);
+}
+
+{{end -}}
+{{end -}}
+{{range .PushEvents -}}
+export function {{.HandlerName}}(client: ApiClient, handler: PushHandler<{{.DataType}}>): () => void {
+    return client.onPush<{{.DataType}}>('{{.Name}}', handler);
+}
+
+{{end -}}
+{{end}}
+
+{{/*
+react-hooks emits the per-method useQuery/useStream wrappers and the per-event
+usePushEvent wrappers. Shared by the multi-file React handler template and the
+single-file React client template.
+*/}}
+{{define "react-hooks"}}{{range .Methods}}
+{{- if .IsStream}}
+/**
+ * Streams items from `{{.WireMethod}}` and accumulates them into `items`.
+ * The stream restarts when parameters change and cleans up on unmount.
+ * See {@link UseStreamResult} for return value details.
+ */
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<{{.ResponseType}}> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
+}
+{{- else if .IsStream2}}
+/**
+ * Streams [key, value] tuples from `{{.WireMethod}}` and accumulates them
+ * into `items`. The stream restarts when parameters change and cleans up
+ * on unmount. See {@link UseStreamResult} for return value details.
+ */
+export function {{.HookName}}({{if hasParams .Params}}{{paramDecl .Params}}, {{end}}options?: UseStreamOptions): UseStreamResult<[{{.ItemKeyType}}, {{.ResponseType}}]> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal{{if hasParams .Params}}, {{paramDecl .Params}}{{end}}) => {{.MethodName}}(client{{if hasParams .Params}}, {{paramNames .Params}}{{end}}, { signal }),
+        [],
+    );
+{{- if hasParams .Params}}
+    return useStream(wrappedFn, { ...(options ?? {}), params: [{{paramNames .Params}}] as [{{paramTypes .Params}}] });
+{{- else}}
+    return useStream(wrappedFn, options);
+{{- end}}
+}
+{{- else if not (hasParams .Params)}}
+/**
+ * Subscribes to `{{.WireMethod}}` and re-renders automatically when the
+ * server triggers a refresh. The subscription is cleaned up on unmount.
+ * See {@link UseQueryResult} for return value details — including the
+ * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
+ */
+export function {{.HookName}}(options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal) => {{.MethodName}}(client, { signal }),
+        [],
+    );
+    return useQuery(wrappedFn, { ...options, _subscribe: { method: '{{.WireMethod}}', params: [] } });
+}
+{{- else}}
+/**
+ * Subscribes to `{{.WireMethod}}` with the given parameters and re-renders
+ * automatically when the server triggers a refresh. When the parameters
+ * change, the previous subscription is canceled and a new one starts.
+ * See {@link UseQueryResult} for return value details — including the
+ * query-scoped `mutate(action)` helper for refetch-after-mutation flows.
+ */
+export function {{.HookName}}({{paramDecl .Params}}, options?: UseQueryOptions<{{.ResponseType}}>): UseQueryResult<{{.ResponseType}}> {
+    const wrappedFn = useCallback(
+        (client: ApiClient, signal: AbortSignal, {{paramDecl .Params}}) => {{.MethodName}}(client, {{paramNames .Params}}, { signal }),
+        [],
+    );
+    return useQuery(wrappedFn, { ...options, params: [{{paramNames .Params}}], _subscribe: { method: '{{.WireMethod}}', params: [{{paramNames .Params}}] } });
+}
+{{- end}}
+{{end}}
+{{- range .PushEvents}}
+export function {{.HookName}}(options?: { maxEvents?: number }): UsePushResult<{{.DataType}}> {
+    return usePushEvent({{.HandlerName}}, options);
+}
+{{end -}}
+{{end}}
+
 {{define "react-context"}}
 // React Context
 const ApiClientContext = createContext<ApiClient | null>(null);
