@@ -516,11 +516,21 @@ function ErrorBanner() {
 }
 ```
 
-Inside the provider, `useApiClient()` returns a `Proxy`-wrapped client whose `request`, `subscribe`, and `requestStream` calls report errors to the provider — in addition to throwing / re-surfacing them as before. Generated hooks (`useListUsers`, `useQuery`, `mutate`, `useStream`) all retrieve their client through `useApiClient()` internally, so their errors flow up too without any per-hook wiring.
+The client reports its own failures: every `request`, `subscribe`, and `requestStream` call that fails is announced through `client.onRequestError`, and the provider subscribes to that. Generated hooks (`useListUsers`, `useQuery`, `mutate`, `useStream`) flow up without per-hook wiring, and so does a module that imports the client directly and never touches React — reporting is a property of the client, not of how you got hold of it.
 
 Alongside `error`, `useApiClientError()` returns a `source: { struct, method } | null` parsed from the wire name (e.g. `'Todos.CreateTodo'` → `{ struct: 'Todos', method: 'CreateTodo' }`), so a banner can name the call that failed. `source` is `null` exactly when `error` is `null`. If a caller invokes the client with a wire name that has no dot, `struct` is `''` and `method` holds the full name.
 
-Only the latest error is held; `clear()` resets it. The provider observes errors but does **not** swallow them — wrapped client calls still throw, so per-hook `error` fields and explicit `try/catch` keep working. Without an `<ApiClientErrorProvider>` above, `useApiClient()` returns the raw client unchanged and `useApiClientError()` throws — adoption is fully opt-in.
+Only the latest error is held; `clear()` resets it. The provider observes errors but does **not** swallow them — calls still throw, so per-hook `error` fields and explicit `try/catch` keep working. Without an `<ApiClientErrorProvider>` above, nothing subscribes and `useApiClientError()` throws — adoption is fully opt-in.
+
+The same reporting is available without React, in vanilla output too. `client.onRequestError(listener)` fires for every failed call the client makes, with the error and its `{ struct, method }` source, and returns an unsubscribe function (multiple listeners are supported):
+
+```ts
+const stop = client.onRequestError((err, source) => {
+    logger.warn(`${source.struct}.${source.method} failed: ${err.message}`);
+});
+```
+
+It is an observer, not a handler: the error is still thrown to the caller afterwards.
 
 ## Streaming Handlers
 
