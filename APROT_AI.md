@@ -582,7 +582,7 @@ Other type-mapping notes:
 - `json.RawMessage` → `unknown`.
 - `time.Duration` has no default JSON representation in the v2 encoder and is **rejected at generation time** — add a json format option (e.g. `json:"d,format:nano"`) or use a different type.
 - Per-field `format:` tags work on every runtime marshal/unmarshal path (results, params, push/refresh payloads, stream items): aprot opts in to go-json-experiment/json's format-tag support internally (json/v2 snapshots since 2026-06 made it opt-in), so consumers don't need to pin the json/v2 snapshot or call `json.ExperimentalGlobalSupportFormatTag` themselves.
-- Field names and handler param names that aren't valid TS identifiers are quoted (`"my-field"`) or suffixed (`new_`) automatically.
+- Field names and handler param names that aren't valid TS identifiers are quoted (`"my-field"`) or suffixed (`new_`) automatically. The same suffix is applied to generated function names, so a handler named `Delete` emits `export function delete_(...)` instead of the unparseable `delete`. The wire method (`Group.Delete`) is unaffected.
 
 ## Naming Plugins
 
@@ -598,6 +598,8 @@ gen.WithOptions(aprot.GeneratorOptions{
 Built-in:
 - `DefaultNaming{FixAcronyms: bool}` — kebab-case files, camelCase methods. `FixAcronyms` keeps acronym runs together (`BulkXML` → `bulk-xml`).
 - `PreserveNaming` — keeps Go PascalCase names in TS.
+
+Whatever a plugin returns, generated function names (methods, hooks, push handlers) are escaped with a trailing `_` if they collide with a TS reserved word — including strict-mode-only ones (`let`, `static`, `yield`, `await`), since generated modules are always strict.
 
 Custom:
 ```go

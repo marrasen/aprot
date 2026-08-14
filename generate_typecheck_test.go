@@ -57,6 +57,14 @@ func (h *tcHandlers) Numbers(_ context.Context, count int) (iter.Seq[*tcItem], e
 	return func(yield func(*tcItem) bool) {}, nil
 }
 
+// Reserved word — the emitted function name must be escaped, or the module
+// does not parse (issue #309). "delete" is reserved everywhere.
+func (h *tcHandlers) Delete(_ context.Context, id string) error { return nil }
+
+// Reserved in strict-mode code only; generated modules are always strict, so
+// this fails the same way an unconditionally reserved word does.
+func (h *tcHandlers) Static(_ context.Context) (*tcItem, error) { return nil, nil }
+
 // iter.Seq2 — generates the keyed requestStream + useStream.
 func (h *tcHandlers) Pairs(_ context.Context) (iter.Seq2[string, *tcItem], error) {
 	return func(yield func(string, *tcItem) bool) {}, nil

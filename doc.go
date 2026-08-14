@@ -698,6 +698,16 @@
 // instead so neither overwrites the other.
 // Use [NamingPlugin] to customize TypeScript name conventions.
 //
+// Generated function names — methods, hooks and push-event handlers — are
+// escaped with a trailing underscore when they would collide with a TypeScript
+// reserved word, so a handler named Delete emits "export function delete_(...)"
+// rather than a module that does not parse. Strict-mode-only reserved words
+// (let, static, yield, await) are escaped too, because generated modules are
+// always strict. The escape runs after the [NamingPlugin], so a custom plugin
+// cannot reintroduce a reserved name, and it is cosmetic: the wire method name
+// (for example "Users.Delete") is unchanged, as are handler parameter names on
+// the wire, which are matched by position.
+//
 // [Generator.GenerateTo] writes the same client to a single io.Writer, all
 // handler groups combined into one file. Both entry points render the same
 // templates — the same ApiClient, the same per-method functions, subscribe
