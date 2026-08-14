@@ -13,13 +13,13 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@types/ws": "^8.18.1",
-    "eventsource": "^4.1.0",
-    "jsdom": "^29.1.1",
+    "eventsource": "^4.1.1",
+    "jsdom": "^30.0.1",
     "oxlint": "^1.78.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
-    "ws": "^8.21.1"
+    "ws": "^8.21.2"
   }
 }
