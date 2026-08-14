@@ -205,6 +205,25 @@ export class ConnectionError extends Error {
 {{end}}
 
 {{define "types"}}
+
+// ApiClientErrorSource identifies which generated call produced an error. The
+// wire name of every generated call is "Struct.Method" (e.g. "Todos.CreateTodo"),
+// so struct names the handler/namespace and method names the operation. If a
+// caller invokes the client with a name that has no dot, struct is the empty
+// string and method holds the full wire name.
+export interface ApiClientErrorSource {
+    struct: string;
+    method: string;
+}
+
+// parseMethodSource splits a "Struct.Method" wire name into the source object
+// reported to <ApiClientErrorProvider>. Split on the first dot only.
+function parseMethodSource(wireMethod: string): ApiClientErrorSource {
+    const dot = wireMethod.indexOf('.');
+    if (dot < 0) return { struct: '', method: wireMethod };
+    return { struct: wireMethod.slice(0, dot), method: wireMethod.slice(dot + 1) };
+}
+
 export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
@@ -660,6 +679,7 @@ export class ApiClient {
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
     private connectionErrorListeners = new Set<(error: ConnectionError) => void>();
+    private requestErrorListeners = new Set<(error: Error, source: ApiClientErrorSource) => void>();
     private lastLoadingCount = 0;
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
@@ -949,6 +969,33 @@ export class ApiClient {
                 break;
         }
         return new ConnectionError(reason, message, init);
+    }
+
+    /**
+     * onRequestError observes every failed call this client makes: a rejected
+     * request, a subscription error, or a stream that throws. The listener
+     * receives the error and which generated call produced it.
+     *
+     * Reported by the client itself rather than by a wrapper around it, so a
+     * caller cannot avoid it by holding the client some other way. A module
+     * that imports the client directly, outside React, reports exactly as a
+     * component does.
+     *
+     * The error is still thrown/surfaced to the caller afterwards, so
+     * per-call try/catch and per-hook error fields keep working. This is an
+     * observer, not a handler.
+     *
+     * Returns an unsubscribe function. Multiple listeners are supported.
+     */
+    onRequestError(listener: (error: Error, source: ApiClientErrorSource) => void): () => void {
+        this.requestErrorListeners.add(listener);
+        return () => this.requestErrorListeners.delete(listener);
+    }
+
+    private notifyRequestError(error: Error, source: ApiClientErrorSource): void {
+        for (const listener of this.requestErrorListeners) {
+            listener(error, source);
+        }
     }
 
     private notifyConnectionError(error: ConnectionError): void {
@@ -1470,6 +1517,13 @@ export class ApiClient {
     }
 
     request<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
+        return this.requestInner<T>(method, params, options).catch((err: unknown) => {
+            if (err instanceof Error) this.notifyRequestError(err, parseMethodSource(method));
+            throw err;
+        });
+    }
+
+    private requestInner<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
             const res = resolve as (value: unknown) => void;
             if (this.transport.isConnected()) {
@@ -1595,6 +1649,12 @@ export class ApiClient {
     }
 
     subscribe<T>(method: string, params: unknown[], callback: (data: T) => void, onError?: (error: Error) => void, options?: SubscribeOptions): () => void {
+        const subscribeSource = parseMethodSource(method);
+        const callerOnError = onError;
+        onError = (error: Error) => {
+            this.notifyRequestError(error, subscribeSource);
+            callerOnError?.(error);
+        };
         const id = String(++this.requestId);
         const cb = callback as (data: unknown) => void;
         const onPatch = options?.onPatch;
@@ -1636,6 +1696,24 @@ export class ApiClient {
      * rejected with an error and are NOT auto-resumed on reconnect.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
+        const inner = this.requestStreamInner<T>(method, params, options);
+        const source = parseMethodSource(method);
+        return {
+            [Symbol.asyncIterator]: (): AsyncIterator<T> => {
+                const it = inner[Symbol.asyncIterator]();
+                return {
+                    next: (...args) => it.next(...args).catch((err: unknown) => {
+                        if (err instanceof Error) this.notifyRequestError(err, source);
+                        throw err;
+                    }),
+                    return: it.return ? it.return.bind(it) : undefined,
+                    throw: it.throw ? it.throw.bind(it) : undefined,
+                };
+            },
+        };
+    }
+
+    private requestStreamInner<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
         // Arrow factory captures `this` lexically — avoids aliasing `this` to a
         // local variable (which trips @typescript-eslint/no-this-alias under
         // strict presets). All inner closures are also arrows, so they inherit
@@ -1777,30 +1855,6 @@ const ApiClientContext = createContext<ApiClient | null>(null);
 // ConnectionError.
 export const ApiClientProvider = ApiClientContext.Provider;
 
-// ApiClientErrorSource identifies which generated call produced an error. The
-// wire name of every generated call is "Struct.Method" (e.g. "Todos.CreateTodo"),
-// so struct names the handler/namespace and method names the operation. If a
-// caller invokes the client with a name that has no dot, struct is the empty
-// string and method holds the full wire name.
-export interface ApiClientErrorSource {
-    struct: string;
-    method: string;
-}
-
-// parseMethodSource splits a "Struct.Method" wire name into the source object
-// reported to <ApiClientErrorProvider>. Split on the first dot only.
-function parseMethodSource(wireMethod: string): ApiClientErrorSource {
-    const dot = wireMethod.indexOf('.');
-    if (dot < 0) return { struct: '', method: wireMethod };
-    return { struct: wireMethod.slice(0, dot), method: wireMethod.slice(dot + 1) };
-}
-
-// ApiErrorReporter is the internal callback an <ApiClientErrorProvider> installs
-// so the wrapped client can report errors up. It is intentionally not exported:
-// callers read the captured error via useApiClientError().
-type ApiErrorReporter = (err: Error, source: ApiClientErrorSource) => void;
-const ApiErrorReporterContext = createContext<ApiErrorReporter | null>(null);
-
 // ApiClientErrorState is what useApiClientError() returns: the latest captured
 // error, the source (struct + method) of the call that produced it, and a
 // clear() to reset it. Only one error is held at a time — newer errors replace
@@ -1812,96 +1866,28 @@ export interface ApiClientErrorState {
 }
 const ApiClientErrorContext = createContext<ApiClientErrorState | null>(null);
 
-// wrapClientWithErrorReporter returns a Proxy over the ApiClient that reports
-// errors from the three transport entry points (request, subscribe,
-// requestStream) to the provider, then re-throws / re-surfaces them so
-// existing per-hook error handling and try/catch sites keep working. All
-// other methods are returned bound to the original client so `this` stays
-// correct.
-function wrapClientWithErrorReporter(client: ApiClient, report: ApiErrorReporter): ApiClient {
-    return new Proxy(client, {
-        get(target, prop) {
-            const value = Reflect.get(target, prop);
-            if (typeof value !== 'function') return value;
-
-            if (prop === 'request') {
-                return function (...args: unknown[]) {
-                    const wireMethod = typeof args[0] === 'string' ? args[0] : '';
-                    const result = (value as (...a: unknown[]) => Promise<unknown>).apply(target, args);
-                    return result.catch((err: unknown) => {
-                        if (err instanceof Error) report(err, parseMethodSource(wireMethod));
-                        throw err;
-                    });
-                };
-            }
-            if (prop === 'subscribe') {
-                return function (
-                    method: string,
-                    params: unknown[],
-                    callback: (data: unknown) => void,
-                    onError?: (err: Error) => void,
-                ) {
-                    const source = parseMethodSource(method);
-                    const wrappedOnError = (err: Error) => {
-                        report(err, source);
-                        onError?.(err);
-                    };
-                    return (value as (...a: unknown[]) => () => void).apply(
-                        target,
-                        [method, params, callback, wrappedOnError],
-                    );
-                };
-            }
-            if (prop === 'requestStream') {
-                return function (method: string, params: unknown[], options?: unknown) {
-                    const source = parseMethodSource(method);
-                    const iterable = (value as (...a: unknown[]) => AsyncIterable<unknown>).apply(
-                        target,
-                        [method, params, options],
-                    );
-                    return {
-                        [Symbol.asyncIterator](): AsyncIterator<unknown> {
-                            const inner = iterable[Symbol.asyncIterator]();
-                            return {
-                                async next() {
-                                    try {
-                                        return await inner.next();
-                                    } catch (err) {
-                                        if (err instanceof Error) report(err, source);
-                                        throw err;
-                                    }
-                                },
-                                return: inner.return ? inner.return.bind(inner) : undefined,
-                                throw: inner.throw ? inner.throw.bind(inner) : undefined,
-                            };
-                        },
-                    };
-                };
-            }
-            return (value as (...a: unknown[]) => unknown).bind(target);
-        },
-    });
-}
-
 export function useApiClient(): ApiClient {
     const client = useContext(ApiClientContext);
     if (!client) {
         throw new Error('useApiClient must be used within an ApiClientProvider');
     }
-    const reporter = useContext(ApiErrorReporterContext);
-    return useMemo(
-        () => (reporter ? wrapClientWithErrorReporter(client, reporter) : client),
-        [client, reporter],
-    );
+    // The client itself, not a reporting wrapper around it. Errors are
+    // reported by the client (see onRequestError), so a component and a module
+    // holding the same client report the same way -- which a wrapper handed
+    // out only here could not achieve.
+    return client;
 }
 
-// ApiClientErrorProvider catches errors from API client calls made anywhere
-// below it — both imperative client.request() / requestStream() / subscribe()
-// calls and errors that flow through generated hooks (useQuery, useStream,
-// mutate), since those go through useApiClient() which returns the wrapped
-// client when this provider is installed. The wrapped client still throws /
-// re-surfaces errors normally, so per-hook error fields and try/catch keep
-// working — the provider just observes a copy.
+// ApiClientErrorProvider catches errors from every call the client makes,
+// whoever made it: generated hooks, imperative client.request() /
+// requestStream() / subscribe(), and modules that import the client directly
+// and never touch React. It subscribes to the client's own onRequestError
+// rather than wrapping the client it hands to components, because a wrapper
+// can be avoided by holding the client some other way and an observer on the
+// client cannot.
+//
+// The client still throws / re-surfaces errors normally, so per-hook error
+// fields and try/catch keep working — the provider just observes a copy.
 //
 // Read the latest captured error with useApiClientError(); call clear() to
 // dismiss. Only one error is held at a time (newest wins). The captured state
@@ -1914,19 +1900,19 @@ export function ApiClientErrorProvider({ children }: { children: React.ReactNode
         setError(null);
         setSource(null);
     }, []);
-    const report = useCallback<ApiErrorReporter>((err, src) => {
-        setError(err);
-        setSource(src);
-    }, []);
+    const client = useContext(ApiClientContext);
+    useEffect(() => {
+        if (!client) return;
+        return client.onRequestError((err, src) => {
+            setError(err);
+            setSource(src);
+        });
+    }, [client]);
     const state = useMemo<ApiClientErrorState>(
         () => ({ error, source, clear }),
         [error, source, clear],
     );
-    return React.createElement(
-        ApiErrorReporterContext.Provider,
-        { value: report },
-        React.createElement(ApiClientErrorContext.Provider, { value: state }, children),
-    );
+    return React.createElement(ApiClientErrorContext.Provider, { value: state }, children);
 }
 
 // useApiClientError returns the latest error captured by the nearest

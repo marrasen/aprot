@@ -519,8 +519,15 @@ func TestGenerateReactErrorProviderSource(t *testing.T) {
 	if !strings.Contains(output, "source: ApiClientErrorSource | null") {
 		t.Error("ApiClientErrorState should expose `source: ApiClientErrorSource | null`")
 	}
-	if !strings.Contains(output, "ApiErrorReporter = (err: Error, source: ApiClientErrorSource) => void") {
-		t.Error("ApiErrorReporter should carry the ApiClientErrorSource alongside the error")
+	// The client reports its own failures, so the provider observes it rather
+	// than wrapping the client it hands to components. A wrapper handed out by
+	// useApiClient() only covers callers who ask React for the client; the
+	// observer covers every caller, including modules that import it directly.
+	if !strings.Contains(output, "onRequestError(listener: (error: Error, source: ApiClientErrorSource) => void): () => void") {
+		t.Error("ApiClient should expose onRequestError carrying the ApiClientErrorSource")
+	}
+	if strings.Contains(output, "wrapClientWithErrorReporter") {
+		t.Error("The reporting Proxy should be gone: the client reports for itself")
 	}
 	if !strings.Contains(output, "parseMethodSource") {
 		t.Error("Expected a parseMethodSource helper that splits 'Struct.Method' into source")
