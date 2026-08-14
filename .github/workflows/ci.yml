@@ -138,6 +138,23 @@ jobs:
       - name: Generate vanilla client
         run: cd example/vanilla/tools/generate && go run main.go
 
+      - name: Generate react client
+        run: cd example/react/tools/generate && go run main.go
+
+      # The steps above regenerate the example clients, so everything below
+      # validates what the generator produces right now — nothing compares it
+      # against what is committed. The committed output is documentation (the
+      # README points readers at it) and it is the only artifact showing what a
+      # template change does, so it has to match. #304 changed a template
+      # without regenerating and CI stayed green through 296 lines of drift.
+      - name: Check generated clients are up to date
+        run: |
+          # Intent-to-add so a generated file that was never committed shows up
+          # as a diff instead of passing as an untracked file.
+          git add -AN example/vanilla/client/static/api example/react/client/src/api
+          git diff --exit-code -- example/vanilla/client/static/api example/react/client/src/api \
+            || { echo "::error::Generated clients are stale — run the generators (see CLAUDE.md) and commit the result"; exit 1; }
+
       - name: Install vanilla example deps
         run: cd example/vanilla/client && npm ci
 
@@ -146,9 +163,6 @@ jobs:
 
       - name: Lint vanilla client
         run: cd example/vanilla/client && npm run lint
-
-      - name: Generate react client
-        run: cd example/react/tools/generate && go run main.go
 
       - name: Install react example deps
         run: cd example/react/client && npm ci
