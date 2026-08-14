@@ -199,6 +199,25 @@ export class ConnectionError extends Error {
 
 
 
+
+// ApiClientErrorSource identifies which generated call produced an error. The
+// wire name of every generated call is "Struct.Method" (e.g. "Todos.CreateTodo"),
+// so struct names the handler/namespace and method names the operation. If a
+// caller invokes the client with a name that has no dot, struct is the empty
+// string and method holds the full wire name.
+export interface ApiClientErrorSource {
+    struct: string;
+    method: string;
+}
+
+// parseMethodSource splits a "Struct.Method" wire name into the source object
+// reported to <ApiClientErrorProvider>. Split on the first dot only.
+function parseMethodSource(wireMethod: string): ApiClientErrorSource {
+    const dot = wireMethod.indexOf('.');
+    if (dot < 0) return { struct: '', method: wireMethod };
+    return { struct: wireMethod.slice(0, dot), method: wireMethod.slice(dot + 1) };
+}
+
 export interface RequestOptions {
     signal?: AbortSignal;
     onProgress?: (current: number, total: number, message: string) => void;
@@ -654,6 +673,7 @@ export class ApiClient {
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
     private connectionErrorListeners = new Set<(error: ConnectionError) => void>();
+    private requestErrorListeners = new Set<(error: Error, source: ApiClientErrorSource) => void>();
     private lastLoadingCount = 0;
     private state: ConnectionState = 'disconnected';
     private reconnectAttempts = 0;
@@ -943,6 +963,33 @@ export class ApiClient {
                 break;
         }
         return new ConnectionError(reason, message, init);
+    }
+
+    /**
+     * onRequestError observes every failed call this client makes: a rejected
+     * request, a subscription error, or a stream that throws. The listener
+     * receives the error and which generated call produced it.
+     *
+     * Reported by the client itself rather than by a wrapper around it, so a
+     * caller cannot avoid it by holding the client some other way. A module
+     * that imports the client directly, outside React, reports exactly as a
+     * component does.
+     *
+     * The error is still thrown/surfaced to the caller afterwards, so
+     * per-call try/catch and per-hook error fields keep working. This is an
+     * observer, not a handler.
+     *
+     * Returns an unsubscribe function. Multiple listeners are supported.
+     */
+    onRequestError(listener: (error: Error, source: ApiClientErrorSource) => void): () => void {
+        this.requestErrorListeners.add(listener);
+        return () => this.requestErrorListeners.delete(listener);
+    }
+
+    private notifyRequestError(error: Error, source: ApiClientErrorSource): void {
+        for (const listener of this.requestErrorListeners) {
+            listener(error, source);
+        }
     }
 
     private notifyConnectionError(error: ConnectionError): void {
@@ -1464,6 +1511,13 @@ export class ApiClient {
     }
 
     request<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
+        return this.requestInner<T>(method, params, options).catch((err: unknown) => {
+            if (err instanceof Error) this.notifyRequestError(err, parseMethodSource(method));
+            throw err;
+        });
+    }
+
+    private requestInner<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
             const res = resolve as (value: unknown) => void;
             if (this.transport.isConnected()) {
@@ -1589,6 +1643,12 @@ export class ApiClient {
     }
 
     subscribe<T>(method: string, params: unknown[], callback: (data: T) => void, onError?: (error: Error) => void, options?: SubscribeOptions): () => void {
+        const subscribeSource = parseMethodSource(method);
+        const callerOnError = onError;
+        onError = (error: Error) => {
+            this.notifyRequestError(error, subscribeSource);
+            callerOnError?.(error);
+        };
         const id = String(++this.requestId);
         const cb = callback as (data: unknown) => void;
         const onPatch = options?.onPatch;
@@ -1630,6 +1690,24 @@ export class ApiClient {
      * rejected with an error and are NOT auto-resumed on reconnect.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
+        const inner = this.requestStreamInner<T>(method, params, options);
+        const source = parseMethodSource(method);
+        return {
+            [Symbol.asyncIterator]: (): AsyncIterator<T> => {
+                const it = inner[Symbol.asyncIterator]();
+                return {
+                    next: (...args) => it.next(...args).catch((err: unknown) => {
+                        if (err instanceof Error) this.notifyRequestError(err, source);
+                        throw err;
+                    }),
+                    return: it.return ? it.return.bind(it) : undefined,
+                    throw: it.throw ? it.throw.bind(it) : undefined,
+                };
+            },
+        };
+    }
+
+    private requestStreamInner<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
         // Arrow factory captures `this` lexically — avoids aliasing `this` to a
         // local variable (which trips @typescript-eslint/no-this-alias under
         // strict presets). All inner closures are also arrows, so they inherit
