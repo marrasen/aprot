@@ -1196,13 +1196,21 @@ instead of editing it. All TypeScript packages build against TypeScript 7.
 
 ### CI
 
-GitHub Actions runs five jobs on every push/PR to `master`:
+GitHub Actions runs these jobs on every push/PR to `master`:
 
 1. **go-fmt** — verifies all Go files are formatted with `gofmt`
 2. **go-tests** — Go unit and integration tests with race detection
 3. **go-lint** — runs golangci-lint across all Go modules
-4. **typescript-compile** — verifies generated TypeScript compiles and lints for both vanilla and React modes
-5. **e2e-tests** — runs the full E2E suite (with oxlint) against a live server
+4. **govulncheck** / **gosec** — vulnerability and security scanning
+5. **typescript-compile** — regenerates the example clients, fails if the result differs from what is committed, then verifies it compiles and lints for both vanilla and React modes
+6. **e2e-tests** — runs the full E2E suite (with oxlint) against a live server
+
+If job 5 fails on the up-to-date check, run the generators and commit the result:
+
+```bash
+cd example/vanilla/tools/generate && go run main.go
+cd example/react/tools/generate && go run main.go
+```
 
 ## License
 

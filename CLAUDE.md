@@ -9,6 +9,10 @@ go test -run TestName ./...
 
 ### Generate & verify TypeScript clients after template changes
 
+The committed example clients must match what the generator produces — CI
+regenerates them and fails on any diff, so run these and commit the result
+whenever you touch `templates/` or the generator.
+
 ```bash
 cd example/vanilla/tools/generate && go run main.go
 cd example/react/tools/generate && go run main.go
