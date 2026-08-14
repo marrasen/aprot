@@ -126,6 +126,12 @@ jobs:
       - name: Check react client compiles
         run: cd example/react/client && npx tsc --noEmit
 
+      # Compiles the generated output of every mode (single-file and
+      # multi-file, vanilla and React). Skips itself unless the React
+      # example's node_modules is present, which the step above installs.
+      - name: Typecheck generated clients (all output modes)
+        run: go test -run TestGeneratedClientsTypecheck -v .
+
       - name: Lint react client
         run: cd example/react/client && npm run lint
 

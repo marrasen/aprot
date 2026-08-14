@@ -10,6 +10,36 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Fixed
+
+- `Generator.GenerateTo` (single-file output) emitted a client that did not
+  compile whenever the registry had a streaming handler: the generated
+  functions called `client.requestStream`, and the client written by the
+  single-file templates had no such method. React single-file output was worse
+  — its generic `useQuery` hook called `client.subscribe`, also absent, so no
+  hook worked at all. `ApiClient` existed in three hand-maintained copies; the
+  two behind `GenerateTo` were reduced older versions that had drifted from the
+  one behind `Generate`. Both single-file templates now render the shared
+  `api-client-class` block, so the two layouts emit the same client and cannot
+  drift again.
+
+  Single-file output consequently gains what the multi-file client already had:
+  `subscribe()` and `requestStream()`, the generated `subscribeX()` helpers,
+  binary/Blob frames, first-message auth (`getAuthToken` / `refreshAuth`),
+  `onConnectionRejected` / `reconnectOnRejected` / `getLastRejection` (accepted
+  as options before but never implemented), and a function-valued client URL.
+  Single-file React hooks now wire `_subscribe` and carry the `.method` tag, so
+  auto-refetch and `useQuerySuspense` work there too.
+
+### Added
+
+- `TestGeneratedClientsTypecheck` compiles the generated TypeScript of every
+  output mode — single-file and multi-file, vanilla and React — with `tsc`.
+  Nothing compiled the generated output before, which is why the drift above
+  survived. The test skips unless the React example's dependencies are
+  installed (`cd example/react/client && npm ci`); CI installs them and runs
+  it in the `typescript-compile` job.
+
 ## [0.54.0] - 2026-08-11
 
 ### Added
