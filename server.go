@@ -328,6 +328,13 @@ func (s *Server) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// Logger returns the logger the server writes its error logs to: the
+// configured [ServerOptions.Logger], or [slog.Default] when unset. Adapters
+// and middleware can use it to log to the same sink as the server.
+func (s *Server) Logger() *slog.Logger {
+	return s.logger()
+}
+
 // Use adds middleware to the chain.
 // Middleware is executed in the order it is added.
 func (s *Server) Use(mw ...Middleware) {
@@ -507,14 +514,16 @@ func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Valu
 // [ProtocolError], so every transport turns it into an error response
 // instead of unwinding — on REST/MCP an unrecovered panic would reach
 // net/http and drop the connection (#325). The stack is only available at
-// this point, so it is logged here.
+// this point, so it is logged here. The client-facing message is generic:
+// a panic value can embed internal state (a token, a DSN), and REST/MCP
+// endpoints are often reachable anonymously.
 func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (result any, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger().Error("aprot: handler panicked",
 				"method", req.Method, "panic", r, "stack", string(debug.Stack()))
 			result = nil
-			err = NewError(CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+			err = NewError(CodeInternalError, "handler panicked")
 		}
 	}()
 

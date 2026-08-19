@@ -698,9 +698,55 @@ func TestRESTAdapter_HandlerPanic(t *testing.T) {
 			if errResp.Code != CodeInternalError {
 				t.Errorf("code = %d, want CodeInternalError", errResp.Code)
 			}
-			if !strings.Contains(errResp.Message, "handler panicked: nil map write") {
-				t.Errorf("message = %q", errResp.Message)
+			if errResp.Message != "handler panicked" {
+				t.Errorf("message = %q, want %q", errResp.Message, "handler panicked")
+			}
+			if strings.Contains(errResp.Message, "nil map write") {
+				t.Errorf("panic value leaked to the client: %q", errResp.Message)
 			}
 		})
+	}
+}
+
+// panicMarshalResult panics in its custom marshaler — response marshaling
+// runs after the handler-level recovers, so it needs its own coverage.
+type panicMarshalResult struct{}
+
+func (panicMarshalResult) MarshalJSON() ([]byte, error) {
+	panic("marshal boom: secret-dsn")
+}
+
+func (PanicRESTHandlers) GetWeird(ctx context.Context) (*panicMarshalResult, error) {
+	return &panicMarshalResult{}, nil
+}
+
+// TestRESTAdapter_ResponseMarshalPanic: a panic in a result type's custom
+// MarshalJSON must still be a 500 JSON error, not a dropped connection
+// (#325 review finding 1).
+func TestRESTAdapter_ResponseMarshalPanic(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&PanicRESTHandlers{})
+	adapter := NewRESTAdapter(registry)
+	server := httptest.NewServer(adapter)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/panic-rest-handlers/get-weird")
+	if err != nil {
+		t.Fatalf("GET failed (panic dropped the connection?): %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500, got %d", resp.StatusCode)
+	}
+	var errResp ErrorMessage
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if errResp.Code != CodeInternalError {
+		t.Errorf("code = %d, want CodeInternalError", errResp.Code)
+	}
+	if strings.Contains(errResp.Message, "secret-dsn") {
+		t.Errorf("panic value leaked to the client: %q", errResp.Message)
 	}
 }

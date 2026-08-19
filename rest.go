@@ -188,6 +188,24 @@ func (a *RESTAdapter) registerRoutes() {
 }
 
 func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, route *RouteInfo) {
+	// Handler panics are converted to errors further down (Server.invoke and
+	// the adapter-chain recover), but response marshaling — including custom
+	// MarshalJSON on result types — runs after those recovers. Catch anything
+	// that escapes so a panic is a 500 JSON error, not a dropped connection
+	// (#325). Response data is marshaled before the first write, so the
+	// error body here never lands on a partial response.
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger := slog.Default()
+			if srv := a.registry.attachedServer.Load(); srv != nil {
+				logger = srv.logger()
+			}
+			logger.Error("aprot: panic serving REST request",
+				"method", route.WireMethod, "panic", rec, "stack", string(debug.Stack()))
+			writeJSONError(w, http.StatusInternalServerError, CodeInternalError, "handler panicked")
+		}
+	}()
+
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, httpRequestKey{}, r)
 
@@ -274,8 +292,10 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 
 	// Server.invoke recovers handler panics, but two REST-only layers run
 	// outside it: adapter middleware, and the whole serverless fallback
-	// chain. Catch those here too, so a panic is a 500 JSON response
-	// instead of a dropped connection (#325).
+	// chain. Catch those here too, so a panic follows the normal error
+	// mapping (dropping queued refresh triggers) instead of unwinding
+	// (#325). The client-facing message is generic; the value and stack
+	// go to the log.
 	result, err := func() (result any, err error) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -286,7 +306,7 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 				logger.Error("aprot: handler panicked",
 					"method", req.Method, "panic", r, "stack", string(debug.Stack()))
 				result = nil
-				err = NewError(CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+				err = NewError(CodeInternalError, "handler panicked")
 			}
 		}()
 		return handler(ctx, req)

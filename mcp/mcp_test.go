@@ -446,7 +446,53 @@ func TestToolsCall_HandlerPanicIsToolResult(t *testing.T) {
 	}
 	content, _ := res["content"].([]any)
 	c0 := content[0].(map[string]any)
-	if !strings.Contains(c0["text"].(string), "handler panicked: nil map write") {
+	text := c0["text"].(string)
+	if !strings.Contains(text, "handler panicked") {
 		t.Errorf("error text = %v", c0)
+	}
+	// Generic message only: the panic value stays in the server log.
+	if strings.Contains(text, "nil map write") {
+		t.Errorf("panic value leaked to the client: %q", text)
+	}
+}
+
+// panicMarshalResult panics in its custom marshaler; MarshalWire runs
+// outside Server.Invoke's recover, so the adapter needs its own (#325
+// review finding 2).
+type panicMarshalResult struct{}
+
+func (panicMarshalResult) MarshalJSON() ([]byte, error) {
+	panic("marshal boom: secret-dsn")
+}
+
+// Weird returns a result whose marshaling panics.
+func (PanicHandlers) Weird(ctx context.Context) (*panicMarshalResult, error) {
+	return &panicMarshalResult{}, nil
+}
+
+func TestToolsCall_ResponseMarshalPanicIsRPCError(t *testing.T) {
+	r := aprot.NewRegistry()
+	r.RegisterMCP(&PanicHandlers{})
+	r.EnableMCP(&PanicHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{
+		"Weird": {Name: "weird"},
+	}})
+	s := aprot.NewServer(r, aprot.ServerOptions{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	a := NewAdapter(s, Options{ServerName: "panic-test"})
+
+	resp, code := rpc(t, a, "1", "tools/call", `{"name":"weird","arguments":{}}`)
+	if code != http.StatusOK {
+		t.Fatalf("expected a JSON-RPC response, got HTTP %d: %v", code, resp)
+	}
+	e, _ := resp["error"].(map[string]any)
+	if e == nil || e["code"] != float64(-32603) {
+		t.Fatalf("expected internal JSON-RPC error: %v", resp)
+	}
+	if resp["id"] != float64(1) {
+		t.Errorf("error must correlate to the request id: %v", resp)
+	}
+	if strings.Contains(fmt.Sprint(e["message"]), "secret-dsn") {
+		t.Errorf("panic value leaked to the client: %v", e)
 	}
 }

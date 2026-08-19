@@ -90,8 +90,13 @@ func TestServerInvoke_PanicRecovered(t *testing.T) {
 	if perr.Code != CodeInternalError {
 		t.Errorf("code = %d, want CodeInternalError", perr.Code)
 	}
-	if !strings.Contains(perr.Message, "handler panicked: nil map write") {
-		t.Errorf("message = %q", perr.Message)
+	// The message must be generic: the panic value can embed internal
+	// state, and it must never reach the client — only the server log.
+	if perr.Message != "handler panicked" {
+		t.Errorf("message = %q, want %q", perr.Message, "handler panicked")
+	}
+	if strings.Contains(perr.Message, "nil map write") {
+		t.Errorf("panic value leaked to the client: %q", perr.Message)
 	}
 }
 
