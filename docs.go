@@ -51,12 +51,12 @@ func (r *Registry) SetSourceDocs(docs *SourceDocs) {
 	for structName, methods := range docs.Handlers {
 		mm := make(map[string]handlerMeta, len(methods))
 		for name, h := range methods {
-			mm[name] = handlerMeta{ParamNames: h.ParamNames, Doc: h.Doc}
+			mm[name] = handlerMeta(h)
 		}
 		m.Handlers[structName] = mm
 	}
 	for typeName, t := range docs.Types {
-		m.Types[typeName] = typeMeta{Doc: t.Doc, FieldDocs: t.FieldDocs}
+		m.Types[typeName] = typeMeta(t)
 	}
 	r.sourceDocs = m
 }

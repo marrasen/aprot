@@ -126,7 +126,7 @@ func (r *Registry) MCPTools() []MCPToolInfo {
 			if !gok {
 				continue
 			}
-			info, ok = group.Handlers[methodName], true
+			info = group.Handlers[methodName]
 			if info == nil {
 				continue
 			}
