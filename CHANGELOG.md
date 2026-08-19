@@ -10,6 +10,28 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the MCP adapter no longer installs a detached connection on
+  tool calls. `aprot.Connection(ctx)` is now nil over MCP, exactly as over
+  REST, so connection presence consistently means "there is a socket here"
+  on every transport — it was never evidence of authentication, and the
+  auto-installed connection made middleware of the shape
+  `Connection(ctx) == nil → reject` admit every anonymous MCP request
+  (#329, #326). Wrappers that authenticate and install their own connection
+  via `aprot.WithConnection` are unaffected. It also fixes silent task-update
+  loss: over MCP, the tasks middleware previously took the socket delivery
+  path against the detached connection and dropped every `Push` on the
+  floor; it now skips delivery cleanly, as on REST.
+
+### Fixed
+
+- The `tasks.WithCancelAuthorizer` doc example read
+  `aprot.Connection(ctx).UserID()` without a nil check and panicked when a
+  cancel arrived over REST (where the connection is nil). The example and
+  the `CancelAuthorizer` docs now nil-check and state the transport
+  difference (#329).
+
 ## [0.59.0] - 2026-08-19
 
 ### Added

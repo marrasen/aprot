@@ -1054,7 +1054,7 @@ Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
 
 REST requests run through the same request pipeline as WebSocket/SSE, via the transport-agnostic `Server.Invoke` entry point: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, server middleware registered with `server.Use(...)` applies to REST requests too, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket/SSE clients. All of this requires a `Server` built from the same registry; without one, REST falls back to adapter + group middleware only (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
 
-For auth middleware written against `aprot.Connection(ctx)`, request-scoped transports can carry a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token). The MCP adapter does this automatically.
+On request-scoped transports `aprot.Connection(ctx)` is **nil** — connection presence means "there is a socket here", never "the caller authenticated", so don't gate auth on it. A wrapper that authenticates the request itself can still hand middleware a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token).
 
 ## MCP Adapter
 
@@ -1072,7 +1072,7 @@ server := aprot.NewServer(registry)
 http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos", ServerVersion: "1.0.0"}))
 ```
 
-The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Each request runs with a detached connection in context unless your own wrapper installed one via `aprot.WithConnection`.
+The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless your own wrapper installed one via `aprot.WithConnection` — gate protected tools on your own auth, e.g. a wrapping `http.Handler` that validates the `Authorization` header.
 
 - **Tool names** default to snake_case of the wire method (`TodoHandlers.CreateTodo` → `todo_handlers_create_todo`); override per tool.
 - **Descriptions** come from handler godoc (the same comments that feed OpenAPI and the generated TS client), overridable per tool. Struct field godoc and `validate` tags flow into the input schema via `Registry.SchemaFor`.

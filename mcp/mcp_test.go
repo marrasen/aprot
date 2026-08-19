@@ -265,19 +265,18 @@ func TestGetNotAllowed(t *testing.T) {
 	}
 }
 
-// TestMiddlewareSeesDetachedConn: server middleware — the same chain the
-// socket transports run — executes for tool calls, with a connection in
-// context so connection-shaped auth compiles and works.
-func TestMiddlewareSeesDetachedConn(t *testing.T) {
+// TestNoConnectionByDefault: tool calls carry no connection, exactly as on
+// REST — Connection(ctx) == nil is how middleware sees an anonymous
+// request-scoped call, and the adapter must not fake one (#329).
+func TestNoConnectionByDefault(t *testing.T) {
+	ran := false
 	var sawConn *aprot.Conn
 	var sawHTTP bool
 	mw := func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
+			ran = true
 			sawConn = aprot.Connection(ctx)
 			sawHTTP = aprot.HTTPRequestFromContext(ctx) != nil
-			if sawConn != nil {
-				sawConn.SetUserID("mcp-user")
-			}
 			return next(ctx, req)
 		}
 	}
@@ -285,11 +284,46 @@ func TestMiddlewareSeesDetachedConn(t *testing.T) {
 
 	resp, _ := rpc(t, a, "1", "tools/call", `{"name":"todo_handlers_list_todos","arguments":{}}`)
 	result(t, resp)
-	if sawConn == nil {
-		t.Fatal("middleware saw no connection")
+	if !ran {
+		t.Fatal("middleware did not run")
+	}
+	if sawConn != nil {
+		t.Errorf("middleware saw a connection on an anonymous tool call: %v", sawConn)
 	}
 	if !sawHTTP {
 		t.Error("middleware could not reach the HTTP request")
+	}
+}
+
+// TestWrapperInstalledConnIsKept: a wrapping http.Handler that authenticates
+// and installs a detached connection via WithConnection still hands it to
+// middleware — the documented pattern for connection-shaped auth over MCP.
+func TestWrapperInstalledConnIsKept(t *testing.T) {
+	var sawConn *aprot.Conn
+	mw := func(next aprot.Handler) aprot.Handler {
+		return func(ctx context.Context, req *aprot.Request) (any, error) {
+			sawConn = aprot.Connection(ctx)
+			return next(ctx, req)
+		}
+	}
+	server, a := newTestAdapter(t, mw)
+
+	conn := server.NewDetachedConn()
+	conn.SetUserID("mcp-user")
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.ServeHTTP(w, r.WithContext(aprot.WithConnection(r.Context(), conn)))
+	})
+
+	body := `{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"todo_handlers_list_todos","arguments":{}}}`
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	wrapped.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if sawConn != conn {
+		t.Fatalf("middleware saw %v, want the wrapper-installed connection", sawConn)
 	}
 	if sawConn.UserID() != "mcp-user" {
 		t.Errorf("UserID = %q", sawConn.UserID())

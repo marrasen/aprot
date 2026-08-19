@@ -15,9 +15,13 @@
 //	server := aprot.NewServer(registry)
 //	http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos"}))
 //
-// Each request runs with a detached connection in context (unless the caller
-// installed one via [aprot.WithConnection], e.g. from session-aware auth in
-// a wrapping http.Handler), so connection-shaped middleware works unchanged.
+// Tool calls carry no connection: [aprot.Connection] returns nil in
+// middleware and handlers, exactly as on REST. Connection presence means
+// "there is a socket", never "the caller authenticated" — gate protected
+// tools on your own auth (e.g. a wrapping http.Handler that validates the
+// Authorization header). A wrapper that authenticates may install a
+// connection via [aprot.WithConnection] (see [aprot.Server.NewDetachedConn])
+// for middleware that reads per-connection state.
 //
 // The adapter is stateless: it implements the JSON-RPC subset MCP requires
 // for tool serving (initialize, ping, tools/list, tools/call) over HTTP POST,
@@ -317,10 +321,11 @@ func (a *Adapter) callTool(r *http.Request, params jsontext.Value) (any, *rpcErr
 		return nil, rerr
 	}
 
+	// No connection is installed: aprot.Connection(ctx) is nil here, exactly
+	// as on REST, so connection presence keeps meaning "there is a socket".
+	// A wrapping http.Handler that authenticates the request can install one
+	// via aprot.WithConnection (see aprot.Server.NewDetachedConn).
 	ctx := aprot.WithHTTPRequest(r.Context(), r)
-	if aprot.Connection(ctx) == nil {
-		ctx = aprot.WithConnection(ctx, a.server.NewDetachedConn())
-	}
 
 	result, err := a.server.Invoke(ctx, tool.Method, positional)
 	if err != nil {

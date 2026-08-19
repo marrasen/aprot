@@ -341,12 +341,16 @@
 // [TriggerRefresh] over any transport refreshes subscribed WebSocket/SSE
 // clients.
 //
-// Transports without a socket still need a home for identity and
-// per-connection values: [Server.NewDetachedConn] returns a connection bound
-// to no transport, and [WithConnection] attaches it to a request context, so
-// auth middleware written against [Connection] runs unchanged over REST and
-// MCP. Detached connections never enter push fan-out; their lifetime is the
-// caller's (per request or per session), and no cleanup is needed.
+// On request-scoped transports (REST, MCP) there is no socket, and
+// [Connection] returns nil — connection presence means "there is a socket
+// here", never "the caller authenticated". Middleware that must run on
+// every transport should not gate on it. A caller that authenticates a
+// request itself (e.g. a wrapping http.Handler validating a token) can
+// still hand middleware a connection: [Server.NewDetachedConn] returns a
+// connection bound to no transport, and [WithConnection] attaches it to
+// the request context. Detached connections never enter push fan-out;
+// their lifetime is the caller's (per request or per session), and no
+// cleanup is needed.
 //
 // Handlers can also be served as MCP (Model Context Protocol) tools, so an
 // AI assistant calls them through the same pipeline, middleware and auth.
