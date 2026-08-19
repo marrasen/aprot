@@ -19,9 +19,11 @@
 // middleware and handlers, exactly as on REST. Connection presence means
 // "there is a socket", never "the caller authenticated" — gate protected
 // tools on your own auth (e.g. a wrapping http.Handler that validates the
-// Authorization header). A wrapper that authenticates may install a
-// connection via [aprot.WithConnection] (see [aprot.Server.NewDetachedConn])
-// for middleware that reads per-connection state.
+// Authorization header and attaches the resolved identity with
+// [aprot.WithPrincipal], read back via [aprot.PrincipalFrom] in middleware
+// and handlers). A wrapper may also install a connection via
+// [aprot.WithConnection] (see [aprot.Server.NewDetachedConn]) for
+// middleware that reads per-connection state.
 //
 // The adapter is stateless: it implements the JSON-RPC subset MCP requires
 // for tool serving (initialize, ping, tools/list, tools/call) over HTTP POST,

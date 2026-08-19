@@ -488,6 +488,37 @@
 // retrying a rejected connection instead of treating it as terminal. See
 // docs/auth.md for the full recipe, including React StrictMode wiring.
 //
+// # Request Identity: the Principal
+//
+// "Who is asking" is a property of each handler execution, not of a socket.
+// aprot carries a request-scoped principal — an opaque value the consumer's
+// auth resolves to — in the context: [WithPrincipal] attaches it,
+// [PrincipalFrom] reads it back (nil when anonymous). Middleware and
+// handlers authorize on the principal; they never infer identity from
+// [Connection], whose non-nil result only means "there is a socket here".
+//
+// Population depends on the transport. On sockets, register a
+// [PrincipalProvider] on the connection (typically from the [Server.OnAuth]
+// hook via [Conn.SetPrincipalProvider]); it runs once per execution —
+// requests, subscribes, and server-driven subscription refreshes — so a
+// revoked or upgraded identity takes effect without a reconnect. A provider
+// error fails the execution with that error before middleware runs. On
+// request-scoped transports (REST, MCP), a wrapping http.Handler that
+// authenticates the request attaches the resolved principal directly with
+// [WithPrincipal].
+//
+// Because the provider runs per execution, the natural way to bound
+// identity lookups is a session cache owned by the consumer: memoize the
+// resolver keyed by credential or session ID with a TTL of your choosing,
+// and revocation takes effect within that TTL on every transport at once.
+// Resolving once in OnAuth and returning the snapshot is the degenerate
+// cache (TTL = connection lifetime).
+//
+// The principal is distinct from [Conn.UserID]: UserID is an address — the
+// key push fan-out uses to decide where [Server.PushToUser] deliveries go —
+// while the principal is an authorization input. Set both when they
+// coincide.
+//
 // # Connection Lifecycle
 //
 // [Server.OnConnect] and [Server.OnDisconnect] hooks react to connection

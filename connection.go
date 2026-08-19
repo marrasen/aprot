@@ -62,6 +62,10 @@ type Conn struct {
 	// transport, never registered with the server, excluded from user
 	// association so push fan-out cannot reach it.
 	detached bool
+	// principalProvider resolves the caller's identity once per execution
+	// dispatched on this connection (request, subscribe, refresh). Set via
+	// SetPrincipalProvider, read via resolvePrincipal; guarded by mu.
+	principalProvider PrincipalProvider
 }
 
 // isAuthenticated reports whether the connection has passed first-message auth.
@@ -427,6 +431,24 @@ func (c *Conn) errorCode(err error) int {
 	return CodeInternalError
 }
 
+// sendErrorFor maps err onto the wire the way handler errors are mapped —
+// ProtocolError as-is, registered error types via the registry, anything
+// else as CodeInternalError — sends the error frame, and returns the code
+// for the request observer. Shared by the request, subscribe, and refresh
+// dispatch paths so the mapping cannot drift between them.
+func (c *Conn) sendErrorFor(id string, err error) int {
+	if perr, ok := err.(*ProtocolError); ok {
+		c.sendProtocolError(id, perr)
+		return perr.Code
+	}
+	if code, found := c.server.registry.LookupError(err); found {
+		c.sendError(id, code, err.Error())
+		return code
+	}
+	c.sendError(id, CodeInternalError, err.Error())
+	return CodeInternalError
+}
+
 func (c *Conn) sendError(id string, code int, message string) {
 	msg := ErrorMessage{
 		Type:    TypeError,
@@ -695,6 +717,15 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
 
+	// Resolve the caller's principal for this execution (no-op without a
+	// provider). A provider error aborts before middleware runs, mapped
+	// onto the wire like a handler error.
+	var authErr error
+	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		reqCode = c.sendErrorFor(msg.ID, authErr)
+		return
+	}
+
 	// Add handler info to context for middleware
 	ctx = withHandlerInfo(ctx, info)
 
@@ -740,14 +771,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 
 	if err != nil {
-		reqCode = c.errorCode(err)
-		if perr, ok := err.(*ProtocolError); ok {
-			c.sendProtocolError(msg.ID, perr)
-		} else if code, found := c.server.registry.LookupError(err); found {
-			c.sendError(msg.ID, code, err.Error())
-		} else {
-			c.sendError(msg.ID, CodeInternalError, err.Error())
-		}
+		reqCode = c.sendErrorFor(msg.ID, err)
 		return
 	}
 
@@ -960,6 +984,15 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	progress := newProgressReporter(c, msg.ID)
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
+
+	// Resolve the caller's principal for this execution (no-op without a
+	// provider); a provider error rejects the subscribe before middleware.
+	var authErr error
+	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		reqCode = c.sendErrorFor(msg.ID, authErr)
+		return
+	}
+
 	ctx = withHandlerInfo(ctx, info)
 
 	req := &Request{
@@ -989,14 +1022,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	}
 
 	if err != nil {
-		reqCode = c.errorCode(err)
-		if perr, ok := err.(*ProtocolError); ok {
-			c.sendProtocolError(msg.ID, perr)
-		} else if code, found := c.server.registry.LookupError(err); found {
-			c.sendError(msg.ID, code, err.Error())
-		} else {
-			c.sendError(msg.ID, CodeInternalError, err.Error())
-		}
+		reqCode = c.sendErrorFor(msg.ID, err)
 		return
 	}
 
@@ -1088,6 +1114,18 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	progress := newProgressReporter(c, sub.id)
 	ctx = withProgress(ctx, progress)
 	ctx = withConnection(ctx, c)
+
+	// Re-resolve the caller's principal for this server-driven execution:
+	// refreshes run on the server's schedule, so this is where identity
+	// changes (a revoked role, an upgraded session) take effect without a
+	// reconnect. A provider error becomes an error frame; the subscription
+	// stays registered, so a later refresh re-resolves.
+	var authErr error
+	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		_ = c.sendErrorFor(sub.id, authErr)
+		return
+	}
+
 	ctx = withHandlerInfo(ctx, info)
 
 	req := &Request{
@@ -1112,13 +1150,7 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	}
 
 	if err != nil {
-		if perr, ok := err.(*ProtocolError); ok {
-			c.sendProtocolError(sub.id, perr)
-		} else if code, found := c.server.registry.LookupError(err); found {
-			c.sendError(sub.id, code, err.Error())
-		} else {
-			c.sendError(sub.id, CodeInternalError, err.Error())
-		}
+		_ = c.sendErrorFor(sub.id, err)
 		return
 	}
 
