@@ -1062,4 +1062,15 @@
 // cancel, subscribe, unsubscribe. Server-to-client: response, error, progress,
 // push, config, subscription_patch, connected (SSE only). Streaming adds
 // stream_item / stream_chunk / stream_end.
+//
+// # Design Scope
+//
+// aprot owns transport concerns — how a call arrives, how a credential
+// travels on the wire, and where identity is stashed so middleware reads it
+// the same way on every execution path. It does not own policy — what a
+// credential means, how to resolve it, how long to trust it, or what it is
+// allowed to do; those stay with the consumer, and aprot ships the seam
+// that makes the consumer's implementation one obvious line (the principal
+// carrier is in; a session cache is not). The rule, and the standing
+// decisions made under it, are recorded in docs/scope.md in the repository.
 package aprot

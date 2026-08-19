@@ -174,6 +174,10 @@ go get github.com/marrasen/aprot
 - **[`aprot`](https://pkg.go.dev/github.com/marrasen/aprot)** — core library: handlers, registry, server, middleware, subscriptions, code generation
 - **[`aprot/tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks)** — hierarchical task trees, shared tasks, output streaming
 
+**Design** — what belongs in aprot and what stays consumer-owned, and the standing decisions behind the API:
+
+- **[docs/scope.md](docs/scope.md)** — the transport-vs-policy rule: aprot owns how a call and its identity travel; it never owns what a credential means or what a caller may do
+
 **Generated TypeScript** — the examples include committed generated code you can browse directly:
 
 - **[React client](example/react/client/src/api/)** — query / stream / push hooks plus standalone async functions ([`client.ts`](example/react/client/src/api/client.ts), [`handlers.ts`](example/react/client/src/api/handlers.ts))
