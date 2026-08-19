@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gorilla/websocket"
 )
 
@@ -455,6 +456,67 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 	}
 
 	return handler
+}
+
+// Invoke executes a registered unary method through the full server request
+// pipeline — handler info and request context, refresh queue, server and
+// handler-group middleware — exactly as a request arriving over WebSocket or
+// SSE. It is the transport-agnostic entry point (#316): request-scoped
+// transports (REST, MCP, custom HTTP surfaces) call Invoke instead of
+// re-assembling the pipeline, so aprot.TriggerRefresh, HandlerInfoFromContext
+// and RequestFromContext behave identically on every transport.
+//
+// Params must be a JSON array of positional arguments (or empty for
+// no-params handlers), the same wire shape the socket transports use.
+// Refresh triggers queued by the handler are flushed after it returns
+// successfully and dropped when it errors. Method resolution failures and
+// streaming handlers return a *ProtocolError; streaming is socket-only
+// because its iterator outlives the call.
+//
+// Invoke does not install a connection: aprot.Connection(ctx) returns nil
+// unless the caller attached one via [WithConnection] (see
+// [Server.NewDetachedConn] for request-scoped transports).
+func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Value) (any, error) {
+	info, ok := s.registry.Get(method)
+	if !ok {
+		return nil, NewError(CodeMethodNotFound, "method not found: "+method)
+	}
+	if info.Kind != HandlerKindUnary {
+		return nil, NewError(CodeInvalidRequest, "streaming handlers cannot be invoked: "+method)
+	}
+	return s.invoke(ctx, info, &Request{Method: method, Params: params})
+}
+
+// invoke is the shared unary execution seam behind every transport. It
+// installs the request-scoped context values (handler info, request, refresh
+// queue) and runs the server + group middleware chain around the handler.
+//
+// If the caller already installed a refresh queue (the socket dispatch and
+// REST paths do, so their middleware can queue triggers and control flush
+// timing relative to the response), invoke reuses it and leaves flushing to
+// the caller. Otherwise invoke owns the queue and flushes it on success.
+// Subscription re-execution deliberately bypasses invoke: it must run with
+// no refresh queue at all so refreshes cannot cascade.
+func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (any, error) {
+	ctx = withHandlerInfo(ctx, info)
+	ctx = withRequest(ctx, req)
+
+	rq, _ := ctx.Value(refreshQueueKey).(*refreshQueue)
+	owned := rq == nil
+	if owned {
+		rq = &refreshQueue{server: s}
+		ctx = withRefreshQueue(ctx, rq)
+	}
+
+	handler := s.buildHandler(info)
+	result, err := handler(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		s.processRefreshQueue(rq)
+	}
+	return result, nil
 }
 
 // PushToUser sends a push message to all connections for a specific user.

@@ -59,6 +59,10 @@ type Conn struct {
 	// authTimer closes the connection if it stays unauthenticated past
 	// AuthTimeout; stopped once authenticated. Guarded by mu.
 	authTimer *time.Timer
+	// detached marks a connection created by Server.NewDetachedConn: no
+	// transport, never registered with the server, excluded from user
+	// association so push fan-out cannot reach it.
+	detached bool
 }
 
 // isAuthenticated reports whether the connection has passed first-message auth.
@@ -75,6 +79,13 @@ func (c *Conn) SetUserID(userID string) {
 	oldUserID := c.userID
 	c.userID = userID
 	c.mu.Unlock()
+
+	// Detached connections carry identity for request-scoped transports but
+	// must not enter the user index: nothing unregisters them (they have no
+	// disconnect), and push fan-out could not deliver to them anyway.
+	if c.detached {
+		return
+	}
 
 	// Disassociate old user if changing
 	if oldUserID != "" && oldUserID != userID {
@@ -703,9 +714,17 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 		ctx, sHooks = withStreamCompleteHooks(ctx)
 	}
 
-	// Build and execute middleware chain
-	handler := c.server.buildHandler(info)
-	result, err := handler(ctx, req)
+	// Execute through the shared pipeline seam. Streaming handlers keep the
+	// direct chain: their iterator outlives this call, and the refresh queue
+	// is flushed after iteration (below), not on handler return.
+	var result any
+	var err error
+	if info.Kind == HandlerKindUnary {
+		result, err = c.server.invoke(ctx, info, req)
+	} else {
+		handler := c.server.buildHandler(info)
+		result, err = handler(ctx, req)
+	}
 
 	// Check if context was canceled
 	if ctx.Err() == context.Canceled {
@@ -946,9 +965,9 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	rq := &refreshQueue{server: c.server}
 	ctx = withRefreshQueue(ctx, rq)
 
-	// Build and execute middleware chain
-	handler := c.server.buildHandler(info)
-	result, err := handler(ctx, req)
+	// Execute through the shared pipeline seam; the refresh queue installed
+	// above is reused, so flushing stays with this path (after registration).
+	result, err := c.server.invoke(ctx, info, req)
 
 	if ctx.Err() == context.Canceled {
 		reqCode = CodeCanceled

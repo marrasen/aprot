@@ -217,6 +217,12 @@ type Registry struct {
 	// triggers to live subscriptions, which are owned by the server. Atomic
 	// because REST traffic may already be flowing when NewServer stores it.
 	attachedServer atomic.Pointer[Server]
+	// sourceDocs is baked godoc metadata installed via SetSourceDocs; when
+	// non-nil it replaces on-demand AST extraction (resolveSourceMeta).
+	sourceDocs *sourceMeta
+	// mcpTools maps wire method name → MCP exposure config for handlers
+	// opted in via EnableMCP.
+	mcpTools map[string]MCPTool
 }
 
 // NewRegistry creates a new handler registry.
