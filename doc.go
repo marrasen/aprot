@@ -386,8 +386,16 @@
 //
 // Set a field to -1 to disable that limit; zero applies the default.
 // Handler panics are recovered per request and surfaced to the client as
-// internal errors, mirroring net/http — one buggy handler cannot take down
-// the process.
+// internal errors — one buggy handler cannot take down the process. The
+// guarantee holds on every transport and dispatch path: a socket request
+// gets an error frame (including stream ends and server-driven subscription
+// refreshes), a REST request gets a 500 JSON error, and an MCP tool call
+// gets a tool result with isError set, instead of a dropped connection.
+// Clients receive a generic "handler panicked" message — a panic value can
+// embed internal state, so the value and stack go only to
+// [ServerOptions.Logger]. http.ErrAbortHandler is the one exception: the
+// REST and MCP adapters re-panic it into net/http, preserving the stdlib's
+// abort-quietly convention.
 //
 // The concurrency caps bound the work a single connection (or the whole
 // fleet) can pin at once: each inbound request or subscribe frame takes one
@@ -536,7 +544,11 @@
 // receive server-side error logs. Currently logged: response-encode failures —
 // a handler result that cannot be marshaled is reported to the client as an
 // internal error and logged with the method name, so the failure leaves a
-// trace operators can find.
+// trace operators can find — and handler panics, logged with the method
+// name, panic value, and stack trace (clients only receive a generic
+// message, so the value and stack exist nowhere else). [Server.Logger]
+// returns the effective logger, so adapters and middleware can write to
+// the same sink.
 //
 // # Push Events
 //

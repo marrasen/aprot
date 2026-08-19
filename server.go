@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -327,6 +328,26 @@ func (s *Server) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// Logger returns the logger the server writes its error logs to: the
+// configured [ServerOptions.Logger], or [slog.Default] when unset. Adapters
+// and middleware can use it to log to the same sink as the server.
+func (s *Server) Logger() *slog.Logger {
+	return s.logger()
+}
+
+// panicError is the single policy point for recovered handler panics: log
+// the value and stack — the log line is the only place they appear — and
+// return the generic CodeInternalError every transport sends in their
+// place. Every recover site routes through this helper so the exposure
+// rule cannot drift per dispatch path (#325). Callers that sit under
+// net/http re-panic http.ErrAbortHandler before calling this, preserving
+// the stdlib's abort-quietly convention.
+func panicError(logger *slog.Logger, rec any, method string) *ProtocolError {
+	logger.Error("aprot: handler panicked",
+		"method", method, "panic", rec, "stack", string(debug.Stack()))
+	return NewError(CodeInternalError, "handler panicked")
+}
+
 // Use adds middleware to the chain.
 // Middleware is executed in the order it is added.
 func (s *Server) Use(mw ...Middleware) {
@@ -501,7 +522,29 @@ func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Valu
 // the caller. Otherwise invoke owns the queue and flushes it on success.
 // Subscription re-execution deliberately bypasses invoke: it must run with
 // no refresh queue at all so refreshes cannot cascade.
-func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (any, error) {
+//
+// A handler panic is recovered here and returned as a CodeInternalError
+// [ProtocolError], so every transport turns it into an error response
+// instead of unwinding — on REST/MCP an unrecovered panic would reach
+// net/http and drop the connection (#325). The stack is only available at
+// this point, so it is logged here (via panicError). The client-facing
+// message is generic: a panic value can embed internal state (a token, a
+// DSN), and REST/MCP endpoints are often reachable anonymously.
+// http.ErrAbortHandler is re-panicked unchanged: it is the stdlib's
+// abort-this-response sentinel, so on HTTP transports it must reach
+// net/http; on the socket paths the dispatch backstops turn it into a
+// generic error frame.
+func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (result any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r == http.ErrAbortHandler {
+				panic(r)
+			}
+			result = nil
+			err = panicError(s.logger(), r, req.Method)
+		}
+	}()
+
 	ctx = withHandlerInfo(ctx, info)
 	ctx = withRequest(ctx, req)
 
@@ -513,7 +556,7 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (a
 	}
 
 	handler := s.buildHandler(info)
-	result, err := handler(ctx, req)
+	result, err = handler(ctx, req)
 	if err != nil {
 		return nil, err
 	}

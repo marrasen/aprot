@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"reflect"
@@ -186,6 +187,32 @@ func (a *RESTAdapter) registerRoutes() {
 }
 
 func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, route *RouteInfo) {
+	// Handler panics are converted to errors further down (Server.invoke and
+	// the adapter-chain recover), but response marshaling — including custom
+	// MarshalJSON on result types — runs after those recovers. Catch anything
+	// that escapes so a panic is a 500 JSON error, not a dropped connection
+	// (#325). http.ErrAbortHandler is re-panicked so net/http keeps its
+	// abort-quietly semantics (httputil.ReverseProxy and middleware rely on
+	// it). wroteResponse guards the error write: the deferred refresh-queue
+	// flush below runs after the response is complete, and a panic there
+	// must not append a second body onto a delivered 200.
+	wroteResponse := false
+	defer func() {
+		if rec := recover(); rec != nil {
+			if rec == http.ErrAbortHandler {
+				panic(rec)
+			}
+			logger := slog.Default()
+			if srv := a.registry.attachedServer.Load(); srv != nil {
+				logger = srv.logger()
+			}
+			perr := panicError(logger, rec, route.WireMethod)
+			if !wroteResponse {
+				writeJSONError(w, http.StatusInternalServerError, perr.Code, perr.Message)
+			}
+		}
+	}()
+
 	ctx := r.Context()
 	ctx = context.WithValue(ctx, httpRequestKey{}, r)
 
@@ -269,7 +296,29 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	} else {
 		handler = a.buildHandler(route.HandlerInfo)
 	}
-	result, err := handler(ctx, req)
+
+	// Server.invoke recovers handler panics, but two REST-only layers run
+	// outside it: adapter middleware, and the whole serverless fallback
+	// chain. Catch those here too, so a panic follows the normal error
+	// mapping (dropping queued refresh triggers) instead of unwinding
+	// (#325). http.ErrAbortHandler passes through to the outer recover,
+	// which re-panics it into net/http.
+	result, err := func() (result any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				if r == http.ErrAbortHandler {
+					panic(r)
+				}
+				logger := slog.Default()
+				if srv != nil {
+					logger = srv.logger()
+				}
+				result = nil
+				err = panicError(logger, r, req.Method)
+			}
+		}()
+		return handler(ctx, req)
+	}()
 
 	// Flush queued refresh triggers once the response has been written,
 	// mirroring the WS/SSE path: triggers are dropped when the handler
@@ -292,6 +341,7 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	}
 
 	if route.HandlerInfo.IsVoid {
+		wroteResponse = true
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -301,9 +351,11 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	// matches the WebSocket/SSE transports.
 	data, err := marshalJSON(result)
 	if err != nil {
+		wroteResponse = true
 		writeJSONError(w, http.StatusInternalServerError, CodeInternalError, "failed to marshal response")
 		return
 	}
+	wroteResponse = true
 	_, _ = w.Write(data)
 }
 

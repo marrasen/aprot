@@ -3,7 +3,9 @@ package aprot
 import (
 	"context"
 	"errors"
+	"io"
 	"iter"
+	"log/slog"
 	"reflect"
 	"runtime"
 	"strings"
@@ -18,7 +20,7 @@ import (
 func streamTestServer(t *testing.T) (*Conn, *recordingTransport) {
 	t.Helper()
 	r := NewRegistry()
-	s := NewServer(r)
+	s := NewServer(r, ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	rt := &recordingTransport{}
 	c := &Conn{
 		transport: rt,
@@ -136,9 +138,14 @@ func TestStreamIterator_PanicMidStream(t *testing.T) {
 	if int(code) != CodeInternalError {
 		t.Errorf("end code = %v, want %d", code, CodeInternalError)
 	}
+	// Generic message only, matching every other transport: the panic
+	// value stays in the server log.
 	msg, _ := end["message"].(string)
-	if !strings.Contains(msg, "boom") {
-		t.Errorf("end message = %q, want to contain 'boom'", msg)
+	if msg != "handler panicked" {
+		t.Errorf("end message = %q, want %q", msg, "handler panicked")
+	}
+	if strings.Contains(msg, "boom") {
+		t.Errorf("panic value leaked to the client: %q", msg)
 	}
 }
 
@@ -526,11 +533,15 @@ func TestStreamCompleteHook_Panic(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected hook to fire once, got %d", count)
 	}
-	if err == nil {
-		t.Fatal("expected non-nil err on panic")
+	// The hook sees the same generic error the client gets; the panic
+	// value and stack go to the server log via panicError, so logging
+	// middleware built on the hook does not need (or get) the raw value.
+	var perr *ProtocolError
+	if !errors.As(err, &perr) || perr.Code != CodeInternalError {
+		t.Fatalf("expected CodeInternalError ProtocolError, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "boom") {
-		t.Errorf("expected panic text in err, got %q", err.Error())
+	if perr.Message != "handler panicked" {
+		t.Errorf("hook err = %q, want %q", perr.Message, "handler panicked")
 	}
 	if items != 2 {
 		t.Errorf("expected 2 items before panic, got %d", items)

@@ -30,6 +30,7 @@ import (
 	json "github.com/go-json-experiment/json"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -139,6 +140,7 @@ const (
 	codeInvalidRequest = -32600
 	codeMethodNotFound = -32601
 	codeInvalidParams  = -32602
+	codeInternalError  = -32603
 )
 
 // ServeHTTP implements the MCP Streamable HTTP transport for a stateless
@@ -177,18 +179,39 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var result any
 	var rerr *rpcError
-	switch req.Method {
-	case "initialize":
-		result = a.initialize(req.Params)
-	case "ping":
-		result = struct{}{}
-	case "tools/list":
-		result = a.listTools()
-	case "tools/call":
-		result, rerr = a.callTool(r, req.Params)
-	default:
-		rerr = &rpcError{Code: codeMethodNotFound, Message: "method not found: " + req.Method}
-	}
+	// Handler panics become errors inside Server.Invoke, but adapter code
+	// around it — argument binding, result marshaling (including custom
+	// MarshalJSON on result types) — runs outside that recover. Catch
+	// anything that escapes so the client gets a JSON-RPC error correlated
+	// to the request id instead of a dropped connection (#325). The
+	// client-facing message is generic; the value and stack go to the log.
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				// net/http's abort sentinel keeps its meaning: re-panic
+				// so the connection is torn down quietly, stdlib-style.
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
+				a.server.Logger().Error("aprot: panic serving MCP request",
+					"rpcMethod", req.Method, "panic", rec, "stack", string(debug.Stack()))
+				result = nil
+				rerr = &rpcError{Code: codeInternalError, Message: "internal error"}
+			}
+		}()
+		switch req.Method {
+		case "initialize":
+			result = a.initialize(req.Params)
+		case "ping":
+			result = struct{}{}
+		case "tools/list":
+			result = a.listTools()
+		case "tools/call":
+			result, rerr = a.callTool(r, req.Params)
+		default:
+			rerr = &rpcError{Code: codeMethodNotFound, Message: "method not found: " + req.Method}
+		}
+	}()
 	if rerr != nil {
 		writeError(w, http.StatusOK, req.ID, rerr)
 		return
