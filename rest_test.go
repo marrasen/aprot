@@ -658,3 +658,49 @@ func TestRESTAdapter_GroupMiddlewareWithAttachedServer(t *testing.T) {
 		})
 	}
 }
+
+// PanicRESTHandlers is the fixture for #325: a handler panic must become a
+// 500 JSON error, not a dropped connection.
+type PanicRESTHandlers struct{}
+
+func (PanicRESTHandlers) GetBoom(ctx context.Context) (*UserResponse, error) {
+	panic("nil map write")
+}
+
+// TestRESTAdapter_HandlerPanic covers both dispatch paths: the serverless
+// adapter-owned chain and the Server.invoke seam (#325). Before the fix the
+// panic unwound into net/http, which dropped the connection.
+func TestRESTAdapter_HandlerPanic(t *testing.T) {
+	for _, withServer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("server=%v", withServer), func(t *testing.T) {
+			registry := NewRegistry()
+			registry.RegisterREST(&PanicRESTHandlers{})
+			if withServer {
+				NewServer(registry)
+			}
+			adapter := NewRESTAdapter(registry)
+			server := httptest.NewServer(adapter)
+			defer server.Close()
+
+			resp, err := http.Get(server.URL + "/panic-rest-handlers/get-boom")
+			if err != nil {
+				t.Fatalf("GET failed (panic dropped the connection?): %v", err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Errorf("expected 500, got %d", resp.StatusCode)
+			}
+			var errResp ErrorMessage
+			if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+				t.Fatalf("decode failed: %v", err)
+			}
+			if errResp.Code != CodeInternalError {
+				t.Errorf("code = %d, want CodeInternalError", errResp.Code)
+			}
+			if !strings.Contains(errResp.Message, "handler panicked: nil map write") {
+				t.Errorf("message = %q", errResp.Message)
+			}
+		})
+	}
+}

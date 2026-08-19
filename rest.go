@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,7 +271,26 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	} else {
 		handler = a.buildHandler(route.HandlerInfo)
 	}
-	result, err := handler(ctx, req)
+
+	// Server.invoke recovers handler panics, but two REST-only layers run
+	// outside it: adapter middleware, and the whole serverless fallback
+	// chain. Catch those here too, so a panic is a 500 JSON response
+	// instead of a dropped connection (#325).
+	result, err := func() (result any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger := slog.Default()
+				if srv != nil {
+					logger = srv.logger()
+				}
+				logger.Error("aprot: handler panicked",
+					"method", req.Method, "panic", r, "stack", string(debug.Stack()))
+				result = nil
+				err = NewError(CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+			}
+		}()
+		return handler(ctx, req)
+	}()
 
 	// Flush queued refresh triggers once the response has been written,
 	// mirroring the WS/SSE path: triggers are dropped when the handler

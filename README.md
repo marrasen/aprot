@@ -894,7 +894,7 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
 
 Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 
-- **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error, mirroring `net/http`. One buggy handler cannot take down the process.
+- **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error. One buggy handler cannot take down the process, and the guarantee holds on every transport: a socket request gets an error frame, a REST request gets a 500 JSON error, and an MCP tool call gets a tool result with `isError` set — never a dropped connection. The panic value and stack are logged via `ServerOptions.Logger`.
 - **Message size limits** — oversized WebSocket frames close the connection; oversized SSE RPC bodies get HTTP 413.
 - **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
 - **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
@@ -1015,7 +1015,7 @@ Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, sub
 
 ### Server-side error logging
 
-Set `ServerOptions.Logger` (a `*slog.Logger`) to receive server-side error logs; nil uses `slog.Default()`. Currently logged: response-encode failures — a handler result that cannot be marshaled (e.g. a NaN float) is reported to the client as an internal error *and* logged with the method name, so operators see the failure even when no client surfaces it.
+Set `ServerOptions.Logger` (a `*slog.Logger`) to receive server-side error logs; nil uses `slog.Default()`. Currently logged: response-encode failures — a handler result that cannot be marshaled (e.g. a NaN float) is reported to the client as an internal error *and* logged with the method name, so operators see the failure even when no client surfaces it — and handler panics, logged with the method name, panic value, and stack trace. The client only receives the panic message, so this log line is the only place the stack appears.
 
 ```go
 server := aprot.NewServer(registry, aprot.ServerOptions{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -501,7 +502,22 @@ func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Valu
 // the caller. Otherwise invoke owns the queue and flushes it on success.
 // Subscription re-execution deliberately bypasses invoke: it must run with
 // no refresh queue at all so refreshes cannot cascade.
-func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (any, error) {
+//
+// A handler panic is recovered here and returned as a CodeInternalError
+// [ProtocolError], so every transport turns it into an error response
+// instead of unwinding — on REST/MCP an unrecovered panic would reach
+// net/http and drop the connection (#325). The stack is only available at
+// this point, so it is logged here.
+func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (result any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger().Error("aprot: handler panicked",
+				"method", req.Method, "panic", r, "stack", string(debug.Stack()))
+			result = nil
+			err = NewError(CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+		}
+	}()
+
 	ctx = withHandlerInfo(ctx, info)
 	ctx = withRequest(ctx, req)
 
@@ -513,7 +529,7 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (a
 	}
 
 	handler := s.buildHandler(info)
-	result, err := handler(ctx, req)
+	result, err = handler(ctx, req)
 	if err != nil {
 		return nil, err
 	}

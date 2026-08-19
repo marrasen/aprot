@@ -5,6 +5,8 @@ import (
 	"errors"
 	"go/parser"
 	"go/token"
+	"io"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,6 +34,10 @@ func (invokeTestHandlers) AddItem(ctx context.Context, name string) (*invokeItem
 func (invokeTestHandlers) Fail(ctx context.Context) (*invokeItemList, error) {
 	TriggerRefresh(ctx, "invoke-items")
 	return nil, errors.New("boom")
+}
+
+func (invokeTestHandlers) Explode(ctx context.Context) (*invokeItemList, error) {
+	panic("nil map write")
 }
 
 func TestServerInvoke_HappyPath(t *testing.T) {
@@ -63,6 +69,29 @@ func TestServerInvoke_Errors(t *testing.T) {
 	_, err = s.Invoke(context.Background(), "invokeTestHandlers.Fail", nil)
 	if err == nil || err.Error() != "boom" {
 		t.Fatalf("expected handler error, got %v", err)
+	}
+}
+
+// A handler panic must come back as a CodeInternalError ProtocolError, not
+// unwind into the transport (#325).
+func TestServerInvoke_PanicRecovered(t *testing.T) {
+	r := NewRegistry()
+	r.Register(&invokeTestHandlers{})
+	s := NewServer(r, ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+
+	result, err := s.Invoke(context.Background(), "invokeTestHandlers.Explode", nil)
+	if result != nil {
+		t.Errorf("result = %#v, want nil", result)
+	}
+	var perr *ProtocolError
+	if !errors.As(err, &perr) {
+		t.Fatalf("expected ProtocolError, got %v", err)
+	}
+	if perr.Code != CodeInternalError {
+		t.Errorf("code = %d, want CodeInternalError", perr.Code)
+	}
+	if !strings.Contains(perr.Message, "handler panicked: nil map write") {
+		t.Errorf("message = %q", perr.Message)
 	}
 }
 
