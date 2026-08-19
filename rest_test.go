@@ -625,3 +625,36 @@ func init() {
 	// Suppress unused variable warning
 	_ = fmt.Sprint
 }
+
+// Regression test for #321: group middleware must run identically whether or
+// not a Server is attached to the registry. With a server, dispatch goes
+// through Server.invoke (the 0.58.0 seam), which resolved middleware through
+// the WS dispatch map and silently dropped it for RegisterREST-only groups.
+func TestRESTAdapter_GroupMiddlewareWithAttachedServer(t *testing.T) {
+	deny := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			return nil, ErrUnauthorized("authentication required")
+		}
+	}
+	for _, withServer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("server=%v", withServer), func(t *testing.T) {
+			registry := NewRegistry()
+			registry.RegisterREST(&RESTHandlers{}, deny)
+			if withServer {
+				NewServer(registry)
+			}
+			adapter := NewRESTAdapter(registry)
+			server := httptest.NewServer(adapter)
+			defer server.Close()
+
+			resp, err := http.Get(server.URL + "/rest-handlers/list-users")
+			if err != nil {
+				t.Fatalf("GET failed: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("group middleware was skipped: expected 401, got %d", resp.StatusCode)
+			}
+		})
+	}
+}

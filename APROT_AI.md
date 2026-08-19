@@ -314,6 +314,7 @@ subscribeListPhotos(client, cb, onErr, { onPatch: (patch) => { /* fold into loca
 ```go
 registry.Register(&UserHandlers{})       // WebSocket only
 registry.RegisterREST(&TodoHandlers{})   // REST only
+registry.RegisterMCP(&AssistantTools{})  // MCP tools only (curate with EnableMCP)
 registry.Register(&BothHandlers{})       // WebSocket...
 registry.EnableREST(&BothHandlers{})     //   ...and also REST
 
@@ -345,6 +346,8 @@ http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos"}))
 - Adapter is a stateless `http.Handler` (Streamable HTTP POST: `initialize`, `ping`, `tools/list`, `tools/call`); dispatch goes through `Server.Invoke`, so middleware, auth and refresh triggers behave like every other transport. A detached conn is installed per request unless the caller's wrapper set one.
 - Input schema: single-struct-param handlers take the struct as the arguments object; otherwise one named property per parameter. Built by `Registry.SchemaFor(reflect.Type)` (public: inline JSON Schema with enums, embedded flattening, `validate` constraints, godoc descriptions).
 - Handler errors → tool result with `isError: true`; bad arguments/unknown tool → JSON-RPC `-32602`. Streaming handlers cannot be MCP tools (panic at EnableMCP).
+- Works with every registration mode. `RegisterMCP(&h, mw...)` + `EnableMCP` = MCP-only group: no WS dispatch, no REST routes, no OpenAPI, no generated TS client — the mode for curated model-facing tool groups. `mcp.NewAdapter` panics if a `RegisterMCP` group has no tools enabled (it would be reachable nowhere).
+- The TS generator emits socket-reachable groups only: `RegisterREST`-only and `RegisterMCP` groups are skipped (their socket calls could never succeed).
 - Deployed binaries have no source for godoc extraction: `aprot.GenerateSourceDocsGo(registry, pkg)` emits a committed Go file whose `RegisterSourceDocs(r)` bakes docs in (feeds OpenAPI + REST param names + MCP).
 
 ## Error Handling

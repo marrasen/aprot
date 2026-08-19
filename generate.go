@@ -561,7 +561,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	typeGroups := make(map[reflect.Type]map[string]bool)
 	enumGroups := make(map[reflect.Type]map[string]bool)
 
-	for _, group := range g.registry.Groups() {
+	for _, group := range g.clientGroups() {
 		g.types = make(map[reflect.Type]string)
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
 		g.collectGroupTypes(group)
@@ -651,7 +651,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	// "{pkg}.types" base instead. A kebab-cased handler file name can never
 	// contain a dot, so the alternate base is collision-free.
 	handlerFileNames := make(map[string]bool)
-	for _, group := range g.registry.Groups() {
+	for _, group := range g.clientGroups() {
 		handlerFileNames[g.naming().FileName(group.Name)] = true
 	}
 	pkgBase := make(map[string]string, len(sortedPkgs))
@@ -758,7 +758,7 @@ func (g *Generator) Generate() (map[string]string, error) {
 	meta := g.extractAllSourceMeta()
 
 	// Phase 2: handler groups
-	for _, group := range g.registry.Groups() {
+	for _, group := range g.clientGroups() {
 		g.types = make(map[reflect.Type]string)
 		g.collectedEnums = make(map[reflect.Type]*EnumInfo)
 		g.collectGroupTypes(group)
@@ -889,8 +889,11 @@ func isGeneratedByAprot(content []byte) bool {
 // stale-file cleanup, none of which a single writer can express.
 func (g *Generator) GenerateTo(w io.Writer) error {
 	g.genErrors = nil
-	// Collect all types from all groups
-	for _, group := range g.registry.Groups() {
+	// Collect types from every client-emitted (socket-reachable) group. The
+	// method list below comes from registry.Handlers() — the WS dispatch map —
+	// so collecting types from REST/MCP-only groups would only emit interfaces
+	// no generated function references.
+	for _, group := range g.clientGroups() {
 		for _, info := range group.Handlers {
 			for _, param := range info.Params {
 				g.collectNestedType(param.Type)
@@ -2068,6 +2071,20 @@ func (m *sourceMeta) fieldDoc(typeName, fieldName string) string {
 		return t.FieldDocs[fieldName]
 	}
 	return ""
+}
+
+// clientGroups returns the handler groups the TypeScript client emits:
+// socket-reachable groups only. RegisterREST-only and RegisterMCP groups are
+// skipped — their methods are not in the WS dispatch map, so the generated
+// client.request/subscribe calls could never succeed at runtime.
+func (g *Generator) clientGroups() map[string]*HandlerGroup {
+	groups := make(map[string]*HandlerGroup, len(g.registry.Groups()))
+	for name, group := range g.registry.Groups() {
+		if group.socket {
+			groups[name] = group
+		}
+	}
+	return groups
 }
 
 // extractAllSourceMeta extracts source metadata for all registered handler groups.

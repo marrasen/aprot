@@ -312,9 +312,15 @@
 //
 //	registry.Register(&UserHandlers{})          // WebSocket only
 //	registry.RegisterREST(&TodoHandlers{})      // REST only
+//	registry.RegisterMCP(&AssistantTools{})     // MCP tools only (with EnableMCP)
 //	registry.Register(&BothHandlers{})          // WebSocket...
 //	registry.EnableREST(&BothHandlers{})        // ...and also REST
 //	http.Handle("/api/", aprot.NewRESTAdapter(registry))
+//
+// The generated TypeScript client contains socket-reachable groups only:
+// RegisterREST-only and RegisterMCP groups are skipped, since client
+// functions for them would call over the socket where their methods
+// deliberately do not exist.
 //
 // HTTP method and path are derived from the handler method name by
 // convention (e.g. CreateUser → POST /users/create-user), and path
@@ -347,7 +353,13 @@
 // Exposure is per-method opt-in via [Registry.EnableMCP], with model-facing
 // names, descriptions and behavior hints ([MCPTool]); the aprot/mcp
 // subpackage serves the tools over HTTP. Tool input schemas are produced by
-// [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses.
+// [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses. Every
+// registration mode qualifies, and [Registry.RegisterMCP] registers a group
+// whose only surface is MCP: no WebSocket dispatch, no REST routes, no
+// OpenAPI entry, and no generated TypeScript client functions — a curated
+// model-facing tool group never becomes browser API surface. The aprot/mcp
+// adapter panics at construction if a RegisterMCP group has no tools
+// enabled via EnableMCP, since such a group would be reachable nowhere.
 //
 // Godoc drives descriptions in OpenAPI and MCP output, and parameter names
 // in REST routes. At development time it is extracted from source on demand;

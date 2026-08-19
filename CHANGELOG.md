@@ -10,6 +10,37 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- `Registry.RegisterMCP` — registers a handler group whose only surface is
+  MCP: no WebSocket dispatch, no REST routes, no OpenAPI entry, and no
+  generated TypeScript client functions. Curate tools with `EnableMCP` as
+  usual; `mcp.NewAdapter` panics at construction if a `RegisterMCP` group
+  has no tools enabled, since such a group would be reachable nowhere.
+  `Registry.IsMCPOnly` reports the mode.
+
+### Changed
+
+- The TypeScript client generator emits socket-reachable groups only:
+  `RegisterREST`-only and `RegisterMCP` groups are skipped. Previously
+  REST-only groups got generated `client.request`/`subscribe` functions
+  that could never succeed, because their methods are deliberately absent
+  from the WebSocket dispatch map. Regenerating a client whose registry
+  uses `RegisterREST` removes those files (stale-file cleanup deletes them).
+
+### Fixed
+
+- Group middleware registered via `RegisterREST(handler, mw...)` ran only
+  while no `Server` was attached to the registry; with one attached, the
+  0.58.0 `Server.invoke` dispatch seam silently skipped it — auth included,
+  turning guarded endpoints from 401 to 200 (#321).
+- MCP tools enabled on a `RegisterREST`-only group appeared in `tools/list`
+  but every `tools/call` failed with `method not found` (#322). Both fixes
+  share one change: `Server.Invoke`, `Registry.GetMiddleware` and
+  `Registry.MCPTools` now resolve wire methods through the group table when
+  a method is absent from the WebSocket dispatch map, while socket dispatch
+  (`Registry.Get`) still deliberately excludes non-socket groups.
+
 ## [0.58.0] - 2026-08-19
 
 ### Added

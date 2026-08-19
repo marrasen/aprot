@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"unicode"
 
@@ -180,6 +181,7 @@ type HandlerGroup struct {
 	Enums      []EnumInfo
 	middleware []Middleware
 	sourceDir  string // directory containing handler source files (auto-detected)
+	socket     bool   // methods are in the WS dispatch map (Register, not RegisterREST/RegisterMCP)
 }
 
 // SourceDir returns the directory containing the handler's Go source files.
@@ -203,6 +205,7 @@ type Registry struct {
 	serverInitHooks []func(s *Server)                                  // hooks run during NewServer
 	validator       StructValidator                                    // optional struct validator (nil = disabled)
 	restGroups      map[string]bool                                    // groups registered via RegisterREST
+	mcpOnlyGroups   map[string]bool                                    // groups registered via RegisterMCP
 	// reservedClientFiles are generated client file bases (without .ts) owned
 	// by a runtime's OnGenerate hook — e.g. the task system owns "tasks". The
 	// shared per-package type file namer steers clear of these, so a hook that
@@ -237,6 +240,7 @@ func NewRegistry() *Registry {
 		nextErrorCode:       1000, // Start custom codes at 1000
 		enumTypes:           make(map[reflect.Type]*EnumInfo),
 		restGroups:          make(map[string]bool),
+		mcpOnlyGroups:       make(map[string]bool),
 		fieldTypeOverrides:  make(map[reflect.Type]map[string]reflect.Type),
 		reservedClientFiles: make(map[string]bool),
 	}
@@ -305,6 +309,42 @@ func (r *Registry) EnableREST(handler any) {
 	r.restGroups[name] = true
 }
 
+// RegisterMCP registers a handler group for MCP only: the methods are not
+// added to the WebSocket dispatch map, get no REST routes and no OpenAPI
+// entry, and the TypeScript client generator skips the group. The only way
+// to reach the handlers is as MCP tools, so a model-facing tool group never
+// becomes browser client API surface.
+//
+// Tool exposure stays per-method opt-in: follow with [Registry.EnableMCP]
+// to curate which methods become tools. The aprot/mcp adapter panics at
+// construction if a RegisterMCP group has no tools enabled, since such a
+// group would be reachable nowhere.
+//
+// Streaming handlers (iter.Seq / iter.Seq2 return shapes) cannot be MCP
+// tools and panic at registration time, mirroring RegisterREST.
+//
+//	registry.RegisterMCP(&AssistantTools{}, authMiddleware)
+//	registry.EnableMCP(&AssistantTools{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{
+//	    "SearchOrders": {ReadOnly: true},
+//	}})
+func (r *Registry) RegisterMCP(handler any, middleware ...Middleware) {
+	r.register(handler, false, middleware...)
+	t := reflect.TypeOf(handler)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name := t.Name()
+	r.assertNoStreamHandlers(name, "RegisterMCP")
+	r.mcpOnlyGroups[name] = true
+}
+
+// IsMCPOnly reports whether the named handler group was registered via
+// RegisterMCP. Groups that merely enabled tools with EnableMCP on top of
+// Register or RegisterREST are not MCP-only.
+func (r *Registry) IsMCPOnly(groupName string) bool {
+	return r.mcpOnlyGroups[groupName]
+}
+
 // assertNoStreamHandlers panics if the named handler group contains any
 // streaming handlers. Streaming is websocket/SSE only — the REST adapter
 // cannot deliver multi-message responses through a single HTTP request.
@@ -336,6 +376,7 @@ func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Mid
 		Name:       structName,
 		Handlers:   make(map[string]*HandlerInfo),
 		middleware: middleware,
+		socket:     addToWSDispatch,
 	}
 
 	if _, exists := r.groups[structName]; exists {
@@ -774,15 +815,43 @@ func (r *Registry) LookupError(err error) (int, bool) {
 	return 0, false
 }
 
-// Get returns the handler info for the given method name.
+// Get returns the handler info for the given method name. It resolves
+// through the WS dispatch map only, so RegisterREST-only methods are not
+// found — socket dispatch relies on that to keep REST-only handlers
+// unreachable over the socket. Request-scoped transports resolve through
+// lookupMethod instead.
 func (r *Registry) Get(method string) (*HandlerInfo, bool) {
 	info, ok := r.handlers[method]
 	return info, ok
 }
 
-// GetMiddleware returns the middleware for a specific handler method.
+// lookupMethod resolves a wire method ("Struct.Method") across every
+// registration mode: the WS dispatch map first, then the group table, which
+// also holds RegisterREST-only handlers (deliberately absent from the
+// dispatch map, handler.go registration). Server.Invoke and GetMiddleware
+// resolve through this; socket dispatch must keep using Get.
+func (r *Registry) lookupMethod(method string) (*HandlerInfo, bool) {
+	if info, ok := r.handlers[method]; ok {
+		return info, true
+	}
+	structName, methodName, ok := strings.Cut(method, ".")
+	if !ok {
+		return nil, false
+	}
+	group, ok := r.groups[structName]
+	if !ok {
+		return nil, false
+	}
+	info, ok := group.Handlers[methodName]
+	return info, ok
+}
+
+// GetMiddleware returns the group middleware for a specific handler method,
+// for every registration mode — including RegisterREST-only methods, which
+// are absent from the WS dispatch map (#321: resolving through that map
+// alone silently dropped auth middleware on REST-only groups).
 func (r *Registry) GetMiddleware(method string) []Middleware {
-	info, ok := r.handlers[method]
+	info, ok := r.lookupMethod(method)
 	if !ok {
 		return nil
 	}
