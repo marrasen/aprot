@@ -347,7 +347,10 @@
 // Exposure is per-method opt-in via [Registry.EnableMCP], with model-facing
 // names, descriptions and behavior hints ([MCPTool]); the aprot/mcp
 // subpackage serves the tools over HTTP. Tool input schemas are produced by
-// [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses.
+// [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses. Both
+// registration modes qualify: a [Registry.RegisterREST]-only group serves
+// its tools over MCP while staying off the WebSocket dispatch and out of
+// the generated TypeScript client.
 //
 // Godoc drives descriptions in OpenAPI and MCP output, and parameter names
 // in REST routes. At development time it is extracted from source on demand;

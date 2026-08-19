@@ -466,6 +466,10 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 // re-assembling the pipeline, so aprot.TriggerRefresh, HandlerInfoFromContext
 // and RequestFromContext behave identically on every transport.
 //
+// Invoke resolves every registration mode, including RegisterREST-only
+// handlers (which stay unreachable over the socket transports) — MCP tools
+// on REST-only groups dispatch through here (#322).
+//
 // Params must be a JSON array of positional arguments (or empty for
 // no-params handlers), the same wire shape the socket transports use.
 // Refresh triggers queued by the handler are flushed after it returns
@@ -477,7 +481,7 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 // unless the caller attached one via [WithConnection] (see
 // [Server.NewDetachedConn] for request-scoped transports).
 func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Value) (any, error) {
-	info, ok := s.registry.Get(method)
+	info, ok := s.registry.lookupMethod(method)
 	if !ok {
 		return nil, NewError(CodeMethodNotFound, "method not found: "+method)
 	}

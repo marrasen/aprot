@@ -117,19 +117,9 @@ func (r *Registry) MCPTools() []MCPToolInfo {
 	tools := make([]MCPToolInfo, 0, len(r.mcpTools))
 	seen := make(map[string]string, len(r.mcpTools))
 	for wireMethod, tool := range r.mcpTools {
-		info, ok := r.handlers[wireMethod]
+		info, ok := r.lookupMethod(wireMethod)
 		if !ok {
-			// RegisterREST-only groups are absent from the WS dispatch map;
-			// resolve through the group table instead.
-			structName, methodName, _ := strings.Cut(wireMethod, ".")
-			group, gok := r.groups[structName]
-			if !gok {
-				continue
-			}
-			info = group.Handlers[methodName]
-			if info == nil {
-				continue
-			}
+			continue
 		}
 
 		ti := MCPToolInfo{

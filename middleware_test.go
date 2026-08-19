@@ -333,6 +333,17 @@ func TestGetMiddleware(t *testing.T) {
 	if len(protectedMW) != 1 {
 		t.Errorf("expected 1 middleware for ProtectedTestHandler.GetSecret, got %d", len(protectedMW))
 	}
+
+	// RegisterREST-only methods are absent from the WS dispatch map but must
+	// still resolve their group middleware (#321).
+	registry.RegisterREST(&RESTHandlers{}, testMiddleware)
+	restMW := registry.GetMiddleware("RESTHandlers.ListUsers")
+	if len(restMW) != 1 {
+		t.Errorf("expected 1 middleware for REST-only RESTHandlers.ListUsers, got %d", len(restMW))
+	}
+	if mw := registry.GetMiddleware("RESTHandlers.Nope"); mw != nil {
+		t.Errorf("expected nil middleware for unknown method, got %d", len(mw))
+	}
 }
 
 func TestServerAndHandlerMiddlewareCombined(t *testing.T) {

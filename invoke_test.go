@@ -354,3 +354,43 @@ func TestEnableMCP_Panics(t *testing.T) {
 		r.EnableMCP(&RESTHandlers{}, MCPOptions{Tools: map[string]MCPTool{"Nope": {}}})
 	})
 }
+
+// restOnlyInvokeHandlers is registered via RegisterREST only, so it is
+// deliberately absent from the WS dispatch map. Regression fixture for
+// #321/#322.
+type restOnlyInvokeHandlers struct{}
+
+// Ping returns a greeting.
+func (restOnlyInvokeHandlers) Ping(ctx context.Context) (string, error) { return "pong", nil }
+
+// Regression test for #322: Invoke must resolve RegisterREST-only methods,
+// and for #321: their group middleware must run when it does.
+func TestServerInvoke_RESTOnlyGroup(t *testing.T) {
+	var mwCalls int
+	mw := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			mwCalls++
+			return next(ctx, req)
+		}
+	}
+	r := NewRegistry()
+	r.RegisterREST(&restOnlyInvokeHandlers{}, mw)
+	s := NewServer(r)
+
+	result, err := s.Invoke(context.Background(), "restOnlyInvokeHandlers.Ping", nil)
+	if err != nil {
+		t.Fatalf("Invoke on REST-only method: %v", err)
+	}
+	if result != "pong" {
+		t.Fatalf("result = %v, want pong", result)
+	}
+	if mwCalls != 1 {
+		t.Fatalf("group middleware ran %d times, want 1", mwCalls)
+	}
+
+	// Socket isolation must survive the widened lookup: Get feeds the WS
+	// dispatch and must keep excluding REST-only methods.
+	if _, ok := r.Get("restOnlyInvokeHandlers.Ping"); ok {
+		t.Fatal("Get must not resolve REST-only methods (socket isolation)")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"unicode"
 
@@ -774,15 +775,43 @@ func (r *Registry) LookupError(err error) (int, bool) {
 	return 0, false
 }
 
-// Get returns the handler info for the given method name.
+// Get returns the handler info for the given method name. It resolves
+// through the WS dispatch map only, so RegisterREST-only methods are not
+// found — socket dispatch relies on that to keep REST-only handlers
+// unreachable over the socket. Request-scoped transports resolve through
+// lookupMethod instead.
 func (r *Registry) Get(method string) (*HandlerInfo, bool) {
 	info, ok := r.handlers[method]
 	return info, ok
 }
 
-// GetMiddleware returns the middleware for a specific handler method.
+// lookupMethod resolves a wire method ("Struct.Method") across every
+// registration mode: the WS dispatch map first, then the group table, which
+// also holds RegisterREST-only handlers (deliberately absent from the
+// dispatch map, handler.go registration). Server.Invoke and GetMiddleware
+// resolve through this; socket dispatch must keep using Get.
+func (r *Registry) lookupMethod(method string) (*HandlerInfo, bool) {
+	if info, ok := r.handlers[method]; ok {
+		return info, true
+	}
+	structName, methodName, ok := strings.Cut(method, ".")
+	if !ok {
+		return nil, false
+	}
+	group, ok := r.groups[structName]
+	if !ok {
+		return nil, false
+	}
+	info, ok := group.Handlers[methodName]
+	return info, ok
+}
+
+// GetMiddleware returns the group middleware for a specific handler method,
+// for every registration mode — including RegisterREST-only methods, which
+// are absent from the WS dispatch map (#321: resolving through that map
+// alone silently dropped auth middleware on REST-only groups).
 func (r *Registry) GetMiddleware(method string) []Middleware {
-	info, ok := r.handlers[method]
+	info, ok := r.lookupMethod(method)
 	if !ok {
 		return nil
 	}
