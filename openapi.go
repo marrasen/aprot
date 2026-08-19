@@ -110,7 +110,8 @@ type OpenAPIGenerator struct {
 	title    string
 	version  string
 	basePath string      // prepended to all paths, e.g. "/rest/api/v1.0"
-	meta     *sourceMeta // AST-extracted godoc and parameter names, populated by Generate
+	meta     *sourceMeta // godoc and parameter names, populated by Generate
+	sg       *schemaGen  // shared schema builder in ref mode, populated by Generate
 }
 
 // NewOpenAPIGenerator creates an OpenAPI spec generator.
@@ -154,14 +155,10 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 		},
 	}
 
-	// Extract AST metadata (parameter names and godoc) from handler source dirs
-	dirs := make(map[string]bool)
-	for _, group := range g.registry.Groups() {
-		if dir := group.SourceDir(); dir != "" {
-			dirs[dir] = true
-		}
-	}
-	g.meta = extractSourceMeta(dirs)
+	// Resolve godoc metadata (parameter names and doc comments): baked docs
+	// when the registry has them, AST extraction from source otherwise.
+	g.meta = g.registry.resolveSourceMeta()
+	g.sg = &schemaGen{registry: g.registry, meta: g.meta, refs: g.schemas}
 
 	// Sort groups for deterministic output
 	groupNames := make([]string, 0, len(g.registry.Groups()))
@@ -247,13 +244,13 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 					Name:     pp.Name,
 					In:       "path",
 					Required: true,
-					Schema:   g.goTypeToJSONSchema(pp.Info.Type),
+					Schema:   g.sg.goTypeToJSONSchema(pp.Info.Type),
 				})
 			}
 
 			// Request body
 			if bodyParam != nil {
-				schema := g.goTypeToJSONSchema(bodyParam.Type)
+				schema := g.sg.goTypeToJSONSchema(bodyParam.Type)
 				op.RequestBody = &RequestBody{
 					Required: true,
 					Content: map[string]MediaType{
@@ -266,7 +263,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			if info.IsVoid {
 				op.Responses["204"] = Response{Description: "No content"}
 			} else {
-				respSchema := g.goTypeToJSONSchema(info.ResponseType)
+				respSchema := g.sg.goTypeToJSONSchema(info.ResponseType)
 				op.Responses["200"] = Response{
 					Description: "Successful response",
 					Content: map[string]MediaType{
@@ -318,74 +315,6 @@ func (g *OpenAPIGenerator) GenerateJSON() ([]byte, error) {
 	return json.MarshalIndent(spec, "", "  ")
 }
 
-// goTypeToJSONSchema converts a Go reflect.Type to a JSON Schema.
-func (g *OpenAPIGenerator) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-
-	// Check registered enums
-	if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
-		return g.enumToJSONSchema(enumInfo)
-	}
-
-	switch t.Kind() {
-	case reflect.String:
-		return &JSONSchema{Type: "string"}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return &JSONSchema{Type: "integer"}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return &JSONSchema{Type: "integer"}
-	case reflect.Float32, reflect.Float64:
-		return &JSONSchema{Type: "number"}
-	case reflect.Bool:
-		return &JSONSchema{Type: "boolean"}
-	case reflect.Slice:
-		if isUnnamedByteSlice(t) {
-			// Unnamed []byte is base64-encoded as a string on the wire under
-			// both encoding/json v1 and go-json-experiment/json v2 (issue
-			// #174). OpenAPI 3.0 represents this as {type: string, format:
-			// byte}.
-			return &JSONSchema{Type: "string", Format: "byte"}
-		}
-		return &JSONSchema{
-			Type:  "array",
-			Items: g.goTypeToJSONSchema(t.Elem()),
-		}
-	case reflect.Array:
-		if isByteArray(t) {
-			// [N]byte (named or not) is base64-encoded as a string by
-			// go-json-experiment/json v2, same as unnamed []byte (#240).
-			return &JSONSchema{Type: "string", Format: "byte"}
-		}
-		n := t.Len()
-		return &JSONSchema{
-			Type:     "array",
-			Items:    g.goTypeToJSONSchema(t.Elem()),
-			MinItems: &n,
-			MaxItems: &n,
-		}
-	case reflect.Map:
-		return &JSONSchema{
-			Type:                 "object",
-			AdditionalProperties: g.goTypeToJSONSchema(t.Elem()),
-		}
-	case reflect.Struct:
-		if t.PkgPath() == "" {
-			return &JSONSchema{Type: "object"}
-		}
-		// Register as component schema and return $ref
-		if _, exists := g.schemas[t]; !exists {
-			g.buildStructSchema(t)
-		}
-		return &JSONSchema{Ref: "#/components/schemas/" + sanitizeTSIdent(t.Name())}
-	case reflect.Interface:
-		return &JSONSchema{}
-	default:
-		return &JSONSchema{}
-	}
-}
-
 // byteSliceFieldSchema returns the JSON Schema for a byte-slice or byte-array
 // field, honoring the go-json-experiment/json v2 `format:` tag (issue #174).
 // Returns nil if the field type is not a byte slice or array — caller should
@@ -419,112 +348,6 @@ func byteSliceFieldSchema(field reflect.StructField) *JSONSchema {
 	return &JSONSchema{Type: "array", Items: &JSONSchema{Type: "integer"}}
 }
 
-// buildStructSchema builds a JSON Schema for a struct type and registers it.
-func (g *OpenAPIGenerator) buildStructSchema(t reflect.Type) {
-	schema := &JSONSchema{
-		Type:        "object",
-		Properties:  make(map[string]*JSONSchema),
-		Description: g.meta.typeDoc(t.Name()),
-	}
-	// Register early to handle circular references
-	g.schemas[t] = schema
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		if field.Tag.Get("json") == "-" {
-			continue
-		}
-
-		// Handle embedded structs
-		if field.Anonymous {
-			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
-				ft = ft.Elem()
-			}
-			if ft.Kind() == reflect.Struct {
-				// Flatten embedded fields
-				subSchema := &JSONSchema{
-					Type:       "object",
-					Properties: make(map[string]*JSONSchema),
-				}
-				g.buildFieldsInto(ft, subSchema)
-				for name, prop := range subSchema.Properties {
-					schema.Properties[name] = prop
-				}
-				schema.Required = append(schema.Required, subSchema.Required...)
-				continue
-			}
-		}
-
-		jsonName := jsonFieldName(field)
-		var fieldSchema *JSONSchema
-		if s := byteSliceFieldSchema(field); s != nil {
-			fieldSchema = s
-		} else {
-			fieldSchema = g.goTypeToJSONSchema(field.Type)
-		}
-
-		// Apply validate constraints
-		validateTag := field.Tag.Get("validate")
-		if validateTag != "" {
-			applyValidateConstraints(fieldSchema, validateTag, field.Type)
-		}
-
-		// Attach field godoc. The Go field name (not JSON name) is what the AST knows.
-		if fdoc := g.meta.fieldDoc(t.Name(), field.Name); fdoc != "" {
-			fieldSchema.Description = fdoc
-		}
-
-		schema.Properties[jsonName] = fieldSchema
-
-		// Determine if required
-		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
-		if !isOptional {
-			schema.Required = append(schema.Required, jsonName)
-		}
-	}
-
-	sort.Strings(schema.Required)
-}
-
-// buildFieldsInto adds struct fields to an existing schema (for embedded struct flattening).
-func (g *OpenAPIGenerator) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if !field.IsExported() || field.Tag.Get("json") == "-" {
-			continue
-		}
-		jsonName := jsonFieldName(field)
-		var fieldSchema *JSONSchema
-		if s := byteSliceFieldSchema(field); s != nil {
-			fieldSchema = s
-		} else {
-			fieldSchema = g.goTypeToJSONSchema(field.Type)
-		}
-
-		validateTag := field.Tag.Get("validate")
-		if validateTag != "" {
-			applyValidateConstraints(fieldSchema, validateTag, field.Type)
-		}
-
-		if fdoc := g.meta.fieldDoc(t.Name(), field.Name); fdoc != "" {
-			fieldSchema.Description = fdoc
-		}
-
-		schema.Properties[jsonName] = fieldSchema
-
-		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
-		if !isOptional {
-			schema.Required = append(schema.Required, jsonName)
-		}
-	}
-}
-
 // jsonFieldName gets the JSON field name from a struct field.
 func jsonFieldName(field reflect.StructField) string {
 	tag := field.Tag.Get("json")
@@ -536,20 +359,6 @@ func jsonFieldName(field reflect.StructField) string {
 		return field.Name
 	}
 	return parts[0]
-}
-
-// enumToJSONSchema converts an enum to a JSON Schema with enum values.
-func (g *OpenAPIGenerator) enumToJSONSchema(info *EnumInfo) *JSONSchema {
-	schema := &JSONSchema{}
-	if info.IsString {
-		schema.Type = "string"
-	} else {
-		schema.Type = "integer"
-	}
-	for _, v := range info.Values {
-		schema.Enum = append(schema.Enum, v.Value)
-	}
-	return schema
 }
 
 // applyValidateConstraints maps validate struct tags to JSON Schema constraints.

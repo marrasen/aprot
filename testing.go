@@ -3,6 +3,8 @@ package aprot
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"testing"
 )
 
 // WithTestConnection returns a context carrying a minimal [Conn] with the
@@ -112,3 +114,55 @@ func (tc *TestPushConn) WithContext(ctx context.Context) context.Context {
 type testPushHandler struct{}
 
 func (h *testPushHandler) Ping(_ context.Context) error { return nil }
+
+// TestSubscriber is a test-only subscriber: a transport-less connection that
+// has run a real subscribe flow against a [Server], recording every frame
+// the server sends it. Use it to assert that mutations on other transports
+// (REST, MCP, [Server.Invoke]) refresh subscribed clients. Test-only.
+type TestSubscriber struct {
+	server *Server
+	rt     *recordingTransport
+	base   int // frames recorded up to and including the subscribe response
+}
+
+// NewTestSubscriber subscribes to method (wire name, e.g. "Todos.List") on a
+// fresh recording connection and returns the subscriber. It fails the test
+// if the subscribe itself is rejected.
+func NewTestSubscriber(t testing.TB, s *Server, method string) *TestSubscriber {
+	t.Helper()
+	rt := &recordingTransport{}
+	c := newConn(rt, s, atomic.AddUint64(&s.nextConnID, 1), ConnInfo{}, context.Background())
+	c.authenticated.Store(true)
+	s.requestsWg.Add(1)
+	c.handleSubscribe(IncomingMessage{Type: TypeSubscribe, ID: "test-sub", Method: method})
+
+	msgs := rt.Messages()
+	if len(msgs) == 0 {
+		t.Fatalf("subscribe to %s produced no response", method)
+	}
+	var frame struct {
+		Type  string `json:"type"`
+		Error any    `json:"error"`
+	}
+	if err := unmarshalJSON(msgs[len(msgs)-1], &frame); err != nil || frame.Type != "response" {
+		t.Fatalf("subscribe to %s failed: %s", method, msgs[len(msgs)-1])
+	}
+	return &TestSubscriber{server: s, rt: rt, base: len(msgs)}
+}
+
+// WaitFrames waits for in-flight refreshes to settle and returns the frames
+// received after the initial subscribe response, decoded into generic maps.
+func (ts *TestSubscriber) WaitFrames(t testing.TB) []map[string]any {
+	t.Helper()
+	ts.server.requestsWg.Wait()
+	raw := ts.rt.Messages()[ts.base:]
+	out := make([]map[string]any, 0, len(raw))
+	for _, b := range raw {
+		var m map[string]any
+		if err := unmarshalJSON(b, &m); err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		out = append(out, m)
+	}
+	return out
+}

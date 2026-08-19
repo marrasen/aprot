@@ -2089,15 +2089,36 @@ func extractSourceMeta(dirs map[string]bool) *sourceMeta {
 		Types:    make(map[string]typeMeta),
 	}
 
+	// Iterate dirs, packages and files in sorted order. ParseDir returns
+	// maps, and a dir can hold two packages (foo and foo_test); when the
+	// same symbol name occurs in both, random map order would make the
+	// winning doc — and thus generated output — flip between runs.
+	sortedDirs := make([]string, 0, len(dirs))
 	for dir := range dirs {
+		sortedDirs = append(sortedDirs, dir)
+	}
+	sort.Strings(sortedDirs)
+
+	for _, dir := range sortedDirs {
 		fset := token.NewFileSet()
 		pkgs, err := parser.ParseDir(fset, dir, nil, parser.ParseComments)
 		if err != nil {
 			continue
 		}
-		for _, pkg := range pkgs {
-			for _, file := range pkg.Files {
-				for _, decl := range file.Decls {
+		pkgNames := make([]string, 0, len(pkgs))
+		for name := range pkgs {
+			pkgNames = append(pkgNames, name)
+		}
+		sort.Strings(pkgNames)
+		for _, pkgName := range pkgNames {
+			pkg := pkgs[pkgName]
+			fileNames := make([]string, 0, len(pkg.Files))
+			for name := range pkg.Files {
+				fileNames = append(fileNames, name)
+			}
+			sort.Strings(fileNames)
+			for _, fileName := range fileNames {
+				for _, decl := range pkg.Files[fileName].Decls {
 					switch d := decl.(type) {
 					case *ast.FuncDecl:
 						collectHandlerMeta(d, result)

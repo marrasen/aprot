@@ -158,6 +158,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
 - **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
 - **REST adapter** — serve handlers as REST/HTTP endpoints alongside WebSocket, with convention-based HTTP method detection and path parameter mapping
+- **MCP adapter** — serve a curated subset of handlers as MCP tools for AI assistants, through the same pipeline, middleware and auth (`EnableMCP` + `aprot/mcp`)
 - **OpenAPI generation** — opt-in OpenAPI 3.0 spec generation from handler metadata, including validation constraints from struct tags
 
 ## Installation
@@ -1047,7 +1048,47 @@ Example: `func (h *Users) UpdateUser(ctx context.Context, id string, req *Update
 
 Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
 
-REST requests run through the same request pipeline as WebSocket/SSE: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket/SSE clients, provided a `Server` has been built from the same registry (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
+REST requests run through the same request pipeline as WebSocket/SSE, via the transport-agnostic `Server.Invoke` entry point: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, server middleware registered with `server.Use(...)` applies to REST requests too, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket/SSE clients. All of this requires a `Server` built from the same registry; without one, REST falls back to adapter + group middleware only (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
+
+For auth middleware written against `aprot.Connection(ctx)`, request-scoped transports can carry a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token). The MCP adapter does this automatically.
+
+## MCP Adapter
+
+Serve selected handlers as MCP (Model Context Protocol) tools, so an AI assistant calls the same handlers the browser does — through the same pipeline, the same middleware, and the same auth. Exposure is per-method opt-in, mirroring REST: signatures designed for a typed TS client are often hostile to a model, so you curate a subset and set model-facing names, descriptions and behavior hints:
+
+```go
+registry.Register(&TodoHandlers{})
+registry.EnableMCP(&TodoHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{
+    "ListTodos":  {ReadOnly: true, Idempotent: true},
+    "CreateTodo": {Description: "Add a todo item to the list."},
+    "DeleteTodo": {Name: "remove_todo", Destructive: true},
+}})
+
+server := aprot.NewServer(registry)
+http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos", ServerVersion: "1.0.0"}))
+```
+
+The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Each request runs with a detached connection in context unless your own wrapper installed one via `aprot.WithConnection`.
+
+- **Tool names** default to snake_case of the wire method (`TodoHandlers.CreateTodo` → `todo_handlers_create_todo`); override per tool.
+- **Descriptions** come from handler godoc (the same comments that feed OpenAPI and the generated TS client), overridable per tool. Struct field godoc and `validate` tags flow into the input schema via `Registry.SchemaFor`.
+- **Input schemas**: a handler with a single struct parameter takes the struct as the arguments object (the model-friendly common case); other signatures map each parameter to a named property.
+- **Hints** (`ReadOnly`, `Destructive`, `Idempotent`, `OpenWorld`) are emitted as MCP tool annotations, which clients use to decide e.g. what needs user confirmation.
+- **Errors**: argument problems are JSON-RPC protocol errors; errors returned by the handler become tool results with `isError` set, so the model can read them and retry.
+
+### Baked godoc for deployed binaries
+
+Godoc extraction reads Go source from disk, which deployed binaries don't have — so OpenAPI descriptions, REST parameter names and MCP tool descriptions would silently come up empty in production. `aprot.GenerateSourceDocsGo(registry, "api")` emits a Go file (commit it, regenerate alongside the TS clients) whose `RegisterSourceDocs(registry)` bakes the docs into the build:
+
+```go
+// in your generate tool:
+src, _ := aprot.GenerateSourceDocsGo(registry, "api")
+os.WriteFile("../../api/sourcedocs_gen.go", src, 0o644)
+
+// in your server setup:
+registry := api.NewRegistry(...)
+api.RegisterSourceDocs(registry)
+```
 
 ## OpenAPI Generation
 

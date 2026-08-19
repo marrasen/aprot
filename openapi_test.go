@@ -379,9 +379,10 @@ func TestApplyValidateConstraints(t *testing.T) {
 // are left on the existing array path to match v2's per-element encoding.
 func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
 	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+	sg := &schemaGen{registry: gen.registry, refs: gen.schemas}
 
 	t.Run("unnamed []byte is string/byte", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf([]byte(nil)))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf([]byte(nil)))
 		if schema == nil {
 			t.Fatal("schema is nil")
 		}
@@ -397,7 +398,7 @@ func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
 	})
 
 	t.Run("named byte slice still array", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf(namedByteSlice(nil)))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf(namedByteSlice(nil)))
 		if schema == nil {
 			t.Fatal("schema is nil")
 		}
@@ -416,8 +417,9 @@ func TestOpenAPIGoTypeToJSONSchema_ByteSlice(t *testing.T) {
 // defaults where the tag says so.
 func TestOpenAPIByteSliceFormatTag(t *testing.T) {
 	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+	sg := &schemaGen{registry: gen.registry, refs: gen.schemas}
 
-	gen.buildStructSchema(reflect.TypeOf(ByteSliceFormatTagStruct{}))
+	sg.buildStructSchema(reflect.TypeOf(ByteSliceFormatTagStruct{}))
 
 	schema := gen.schemas[reflect.TypeOf(ByteSliceFormatTagStruct{})]
 	if schema == nil {
@@ -458,9 +460,10 @@ func TestOpenAPIByteSliceFormatTag(t *testing.T) {
 // N, byte arrays become base64 strings (matching the jsonv2 wire shape).
 func TestOpenAPIGoTypeToJSONSchema_FixedSizeArray(t *testing.T) {
 	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+	sg := &schemaGen{registry: gen.registry, refs: gen.schemas}
 
 	t.Run("[4]float64 is fixed-length number array", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf([4]float64{}))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf([4]float64{}))
 		if schema.Type != "array" {
 			t.Errorf("Type = %q, want %q", schema.Type, "array")
 		}
@@ -476,21 +479,21 @@ func TestOpenAPIGoTypeToJSONSchema_FixedSizeArray(t *testing.T) {
 	})
 
 	t.Run("[32]byte is string/byte", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf([32]byte{}))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf([32]byte{}))
 		if schema.Type != "string" || schema.Format != "byte" {
 			t.Errorf("schema = {Type: %q, Format: %q}, want {string, byte}", schema.Type, schema.Format)
 		}
 	})
 
 	t.Run("named byte array is string/byte", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf(namedByteArray{}))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf(namedByteArray{}))
 		if schema.Type != "string" || schema.Format != "byte" {
 			t.Errorf("schema = {Type: %q, Format: %q}, want {string, byte}", schema.Type, schema.Format)
 		}
 	})
 
 	t.Run("nested [2][2]int keeps inner fixed length", func(t *testing.T) {
-		schema := gen.goTypeToJSONSchema(reflect.TypeOf([2][2]int{}))
+		schema := sg.goTypeToJSONSchema(reflect.TypeOf([2][2]int{}))
 		if schema.Type != "array" {
 			t.Fatalf("Type = %q, want %q", schema.Type, "array")
 		}
@@ -506,7 +509,8 @@ func TestOpenAPIGoTypeToJSONSchema_FixedSizeArray(t *testing.T) {
 func TestOpenAPIByteArrayFormatTag(t *testing.T) {
 	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
 
-	gen.buildStructSchema(reflect.TypeOf(FixedArrayStruct{}))
+	sg := &schemaGen{registry: gen.registry, refs: gen.schemas}
+	sg.buildStructSchema(reflect.TypeOf(FixedArrayStruct{}))
 	schema := gen.schemas[reflect.TypeOf(FixedArrayStruct{})]
 	if schema == nil {
 		t.Fatal("FixedArrayStruct schema not registered")

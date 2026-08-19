@@ -84,14 +84,9 @@ func NewRESTAdapter(registry *Registry, opts ...RESTOption) *RESTAdapter {
 		opt(a)
 	}
 
-	// Extract AST metadata (parameter names and godoc) for path generation
-	dirs := make(map[string]bool)
-	for _, group := range registry.Groups() {
-		if dir := group.SourceDir(); dir != "" {
-			dirs[dir] = true
-		}
-	}
-	a.meta = extractSourceMeta(dirs)
+	// Resolve godoc metadata (parameter names) for path generation: baked
+	// docs when the registry has them, AST extraction from source otherwise.
+	a.meta = registry.resolveSourceMeta()
 
 	a.buildRoutes()
 	a.registerRoutes()
@@ -258,8 +253,22 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 		ctx = withRefreshQueue(ctx, rq)
 	}
 
-	// Build and execute middleware chain
-	handler := a.buildHandler(route.HandlerInfo)
+	// Execute. With a server attached, dispatch through the shared pipeline
+	// seam (Server.invoke): server middleware and group middleware run there,
+	// identically to a socket request, with adapter middleware wrapped
+	// outermost. The queue installed above is reused by invoke, so flushing
+	// stays with this function (deferred below, after the response). Without
+	// a server there is no server middleware or refresh machinery to run —
+	// fall back to the adapter-owned chain.
+	var handler Handler
+	if srv != nil {
+		info := route.HandlerInfo
+		handler = a.wrapAdapterMiddleware(func(ctx context.Context, req *Request) (any, error) {
+			return srv.invoke(ctx, info, req)
+		})
+	} else {
+		handler = a.buildHandler(route.HandlerInfo)
+	}
 	result, err := handler(ctx, req)
 
 	// Flush queued refresh triggers once the response has been written,
@@ -298,7 +307,9 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	_, _ = w.Write(data)
 }
 
-// buildHandler builds a middleware chain for a handler method.
+// buildHandler builds a middleware chain for a handler method. Used only
+// when no Server is attached to the registry; with a server, execution goes
+// through Server.invoke and only wrapAdapterMiddleware applies here.
 func (a *RESTAdapter) buildHandler(info *HandlerInfo) Handler {
 	final := func(ctx context.Context, req *Request) (any, error) {
 		return info.Call(ctx, req.Params)
@@ -312,11 +323,15 @@ func (a *RESTAdapter) buildHandler(info *HandlerInfo) Handler {
 		handler = groupMW[i](handler)
 	}
 
-	// Apply adapter-level middleware
+	return a.wrapAdapterMiddleware(handler)
+}
+
+// wrapAdapterMiddleware wraps a handler in the adapter-level middleware
+// added via WithRESTMiddleware, outermost of the chain.
+func (a *RESTAdapter) wrapAdapterMiddleware(handler Handler) Handler {
 	for i := len(a.middleware) - 1; i >= 0; i-- {
 		handler = a.middleware[i](handler)
 	}
-
 	return handler
 }
 
@@ -440,9 +455,18 @@ func writeJSONErrorData(w http.ResponseWriter, status int, code int, message str
 
 type httpRequestKey struct{}
 
-// HTTPRequestFromContext returns the *http.Request associated with a REST handler call.
-// Returns nil if the context is not from a REST request.
+// HTTPRequestFromContext returns the *http.Request associated with a handler
+// call arriving over an HTTP request-scoped transport (REST, MCP).
+// Returns nil for socket transports.
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(httpRequestKey{}).(*http.Request)
 	return r
+}
+
+// WithHTTPRequest returns a context carrying r, as returned by
+// [HTTPRequestFromContext]. Custom HTTP transports dispatching through
+// [Server.Invoke] use it to expose the request to middleware the way the
+// built-in REST adapter does.
+func WithHTTPRequest(ctx context.Context, r *http.Request) context.Context {
+	return context.WithValue(ctx, httpRequestKey{}, r)
 }
