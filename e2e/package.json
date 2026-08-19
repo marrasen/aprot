@@ -13,7 +13,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@types/ws": "^8.18.1",
-    "eventsource": "^4.1.1",
+    "eventsource": "^5.1.0",
     "jsdom": "^30.0.1",
     "oxlint": "^1.78.0",
     "react": "^19.2.8",
