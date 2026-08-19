@@ -2,7 +2,6 @@ package aprot
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"reflect"
 	"sync"
@@ -663,10 +662,17 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 
 	// Each request runs on its own goroutine, so an unrecovered panic would
 	// kill the whole process, not just this request (unlike net/http).
+	// Unary handler panics are already recovered inside Server.invoke; this
+	// backstop covers dispatch code and the stream path, which calls
+	// buildHandler directly. Same policy as invoke via panicError: generic
+	// message to the client, value and stack to the log only. No re-panic
+	// here — including for http.ErrAbortHandler — because nothing above
+	// this goroutine would recover it.
 	defer func() {
 		if r := recover(); r != nil {
 			reqCode = CodeInternalError
-			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+			perr := panicError(c.server.logger(), r, msg.Method)
+			c.sendError(msg.ID, perr.Code, perr.Message)
 		}
 	}()
 
@@ -820,10 +826,14 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 		return []reflect.Value{reflect.ValueOf(true)}
 	})
 
+	// Stream iteration runs outside Server.invoke, so this recover is the
+	// primary one for panics mid-iteration. panicError keeps the policy
+	// uniform: the terminal frame carries the generic message, the log
+	// carries the value and stack.
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				streamErr = fmt.Errorf("stream handler panicked: %v", r)
+				streamErr = panicError(c.server.logger(), r, info.StructName+"."+info.Name)
 			}
 		}()
 		seq.Call([]reflect.Value{yieldFn})
@@ -914,10 +924,13 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 		}()
 	}
 
+	// Backstop for panics outside Server.invoke (dispatch and registration
+	// code); same policy as the handleRequest backstop above.
 	defer func() {
 		if r := recover(); r != nil {
 			reqCode = CodeInternalError
-			c.sendError(msg.ID, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+			perr := panicError(c.server.logger(), r, msg.Method)
+			c.sendError(msg.ID, perr.Code, perr.Message)
 		}
 	}()
 
@@ -1040,9 +1053,17 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 // and sends the updated response directly to the subscriber.
 func (c *Conn) refreshSubscription(sub *subscription) {
 	defer c.server.requestsWg.Done()
+	// Refresh deliberately bypasses Server.invoke (no refresh queue, so
+	// refreshes cannot cascade — see the comment below), which means it
+	// also bypasses invoke's panic recovery. This recover is therefore the
+	// primary one for the refresh path, not a backstop: a panicking query
+	// handler lands here on every server-driven re-execution. panicError
+	// keeps the policy identical to the first call through invoke —
+	// generic message out, value and stack to the log.
 	defer func() {
 		if r := recover(); r != nil {
-			c.sendError(sub.id, CodeInternalError, fmt.Sprintf("handler panicked: %v", r))
+			perr := panicError(c.server.logger(), r, sub.method)
+			c.sendError(sub.id, perr.Code, perr.Message)
 		}
 	}()
 

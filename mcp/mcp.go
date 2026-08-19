@@ -188,6 +188,11 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// net/http's abort sentinel keeps its meaning: re-panic
+				// so the connection is torn down quietly, stdlib-style.
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
 				a.server.Logger().Error("aprot: panic serving MCP request",
 					"rpcMethod", req.Method, "panic", rec, "stack", string(debug.Stack()))
 				result = nil

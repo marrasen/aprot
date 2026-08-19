@@ -2,6 +2,8 @@ package aprot
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,12 +40,16 @@ func (h *PanicHandlers) Safe(ctx context.Context, req *EchoRequest) (*EchoRespon
 	return &EchoResponse{Message: req.Message}, nil
 }
 
-func setupPanicServer(t *testing.T) (*httptest.Server, *Server, *PanicHandlers) {
+func setupPanicServer(t *testing.T, opts ...ServerOptions) (*httptest.Server, *Server, *PanicHandlers) {
 	t.Helper()
 	registry := NewRegistry()
 	handlers := &PanicHandlers{}
 	registry.Register(handlers)
-	server := NewServer(registry)
+	o := ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	server := NewServer(registry, o)
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
 	return ts, server, handlers
@@ -85,8 +91,13 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if errMsg.Code != CodeInternalError {
 		t.Errorf("expected CodeInternalError, got %d", errMsg.Code)
 	}
-	if !strings.Contains(errMsg.Message, "panic") {
-		t.Errorf("expected panic mention in message, got %q", errMsg.Message)
+	// Generic message only: the panic value ("boom: hi") stays in the
+	// server log, on the socket transport like everywhere else.
+	if errMsg.Message != "handler panicked" {
+		t.Errorf("message = %q, want %q", errMsg.Message, "handler panicked")
+	}
+	if strings.Contains(errMsg.Message, "boom") {
+		t.Errorf("panic value leaked to the client: %q", errMsg.Message)
 	}
 
 	// The same connection must still work.
@@ -113,6 +124,9 @@ func TestSubscribeHandlerPanicRecovered(t *testing.T) {
 	if errMsg.Code != CodeInternalError {
 		t.Errorf("expected CodeInternalError, got %d", errMsg.Code)
 	}
+	if errMsg.Message != "handler panicked" {
+		t.Errorf("message = %q, want %q", errMsg.Message, "handler panicked")
+	}
 
 	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "2", Method: "PanicHandlers.Safe", Params: jsontext.Value(`[{"message":"alive"}]`)}); err != nil {
 		t.Fatalf("write failed: %v", err)
@@ -124,8 +138,15 @@ func TestSubscribeHandlerPanicRecovered(t *testing.T) {
 }
 
 // A panic during a server-driven subscription refresh must be recovered.
+// The refresh path bypasses Server.invoke, so it enforces the exposure
+// policy itself: the client gets the generic message, and the panic value
+// and stack land in the server log — the refresh is server-driven, so the
+// log line is the only place the failure is visible at all.
 func TestRefreshPanicRecovered(t *testing.T) {
-	ts, server, _ := setupPanicServer(t)
+	logBuf := &syncBuffer{}
+	ts, server, _ := setupPanicServer(t, ServerOptions{
+		Logger: slog.New(slog.NewTextHandler(logBuf, nil)),
+	})
 
 	ws := connectWS(t, ts)
 	defer ws.Close()
@@ -143,6 +164,16 @@ func TestRefreshPanicRecovered(t *testing.T) {
 	errMsg := readMessageOfType(t, ws, TypeError, 3*time.Second)
 	if errMsg.ID != "s1" || errMsg.Code != CodeInternalError {
 		t.Errorf("expected internal error for s1, got id=%q code=%d", errMsg.ID, errMsg.Code)
+	}
+	if errMsg.Message != "handler panicked" {
+		t.Errorf("message = %q, want %q", errMsg.Message, "handler panicked")
+	}
+	if strings.Contains(errMsg.Message, "refresh boom") {
+		t.Errorf("panic value leaked to the client: %q", errMsg.Message)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "refresh boom") || !strings.Contains(logged, "PanicHandlers.SubscribeFlaky") {
+		t.Errorf("refresh panic not logged with value and method; log:\n%s", logged)
 	}
 
 	// Server must still be functional.

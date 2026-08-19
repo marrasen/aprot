@@ -2,7 +2,9 @@ package aprot
 
 import (
 	"context"
+	"io"
 	"iter"
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -13,7 +15,7 @@ import (
 func streamChunkTestServer(t *testing.T, cfg StreamChunking) (*Conn, *recordingTransport) {
 	t.Helper()
 	r := NewRegistry()
-	s := NewServer(r, ServerOptions{StreamChunking: &cfg})
+	s := NewServer(r, ServerOptions{StreamChunking: &cfg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	rt := &recordingTransport{}
 	c := &Conn{
 		transport: rt,

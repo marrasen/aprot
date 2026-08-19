@@ -750,3 +750,32 @@ func TestRESTAdapter_ResponseMarshalPanic(t *testing.T) {
 		t.Errorf("panic value leaked to the client: %q", errResp.Message)
 	}
 }
+
+func (PanicRESTHandlers) GetAbort(ctx context.Context) (*UserResponse, error) {
+	panic(http.ErrAbortHandler)
+}
+
+// TestRESTAdapter_ErrAbortHandlerPropagates: net/http's abort sentinel must
+// keep its stdlib meaning — tear the connection down quietly — instead of
+// being converted into a 500 by the panic recovers. Covered in both
+// serverless and attached-server modes, since each adds its own recover.
+func TestRESTAdapter_ErrAbortHandlerPropagates(t *testing.T) {
+	for _, withServer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("server=%v", withServer), func(t *testing.T) {
+			registry := NewRegistry()
+			registry.RegisterREST(&PanicRESTHandlers{})
+			if withServer {
+				NewServer(registry)
+			}
+			adapter := NewRESTAdapter(registry)
+			server := httptest.NewServer(adapter)
+			defer server.Close()
+
+			resp, err := http.Get(server.URL + "/panic-rest-handlers/get-abort")
+			if err == nil {
+				defer resp.Body.Close()
+				t.Fatalf("expected an aborted connection, got HTTP %d", resp.StatusCode)
+			}
+		})
+	}
+}
