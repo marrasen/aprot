@@ -48,11 +48,11 @@ type TaskCancelInfo struct {
 // CancelAuthorizer decides whether the caller identified by ctx may cancel the
 // described shared task. Return nil to allow cancellation, or an error
 // (typically [aprot.ErrForbidden]) to deny it. The ctx is the requesting
-// caller's context. Note that aprot.Connection(ctx) is non-nil only on
-// socket transports (WebSocket/SSE) — over REST and MCP it is nil, so an
-// authorizer that reads the connection must nil-check it and needs another
-// identity source (e.g. a context value set by your auth layer) to make a
-// decision there.
+// caller's context; read the caller's identity from
+// [aprot.PrincipalFrom], which is populated the same way on every
+// transport. (aprot.Connection(ctx) is non-nil only on socket transports —
+// over REST and MCP it is nil, so an authorizer that reads the connection
+// must nil-check it.)
 //
 // Install one with [WithCancelAuthorizer]. When none is installed the default
 // policy applies: only the connection that created the task may cancel it.
@@ -107,16 +107,18 @@ func WithTaskMiddleware(mw TaskMiddleware) EnableOption {
 // the connection that created a task may cancel it — a policy that also loses
 // cancel rights across a reconnect, since it is keyed by connection ID. An
 // authorizer can implement any policy, e.g. "any authenticated user" or
-// "same user, surviving reconnect". aprot.Connection(ctx) is nil on
-// request-scoped transports (REST, MCP), so nil-check it before reading:
+// "same user, surviving reconnect". Read the caller's identity from the
+// request-scoped principal ([aprot.PrincipalFrom]), which is populated the
+// same way on every transport — never from connection presence, since
+// aprot.Connection(ctx) is nil on request-scoped transports (REST, MCP):
 //
 //	tasks.EnableWithMeta[Meta](reg, tasks.WithCancelAuthorizer(
 //	    func(ctx context.Context, t tasks.TaskCancelInfo) error {
-//	        conn := aprot.Connection(ctx)
-//	        if conn == nil || conn.UserID() == "" {
+//	        user, ok := aprot.PrincipalFrom(ctx).(*myauth.User)
+//	        if !ok {
 //	            return aprot.ErrForbidden("not authenticated")
 //	        }
-//	        return nil // any authenticated socket user may cancel any task
+//	        return nil // any authenticated user may cancel any task
 //	    },
 //	))
 func WithCancelAuthorizer(fn CancelAuthorizer) EnableOption {

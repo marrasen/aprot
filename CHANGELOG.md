@@ -10,6 +10,21 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- Request-scoped identity: a **principal** carried in the request context
+  (#330). `WithPrincipal` attaches it, `PrincipalFrom` reads it back (nil
+  when anonymous) — the principal is whatever your auth resolves to; aprot
+  only carries it. On sockets, `Conn.SetPrincipalProvider` registers a
+  resolver (typically from `OnAuth`) that runs once per execution —
+  requests, subscribes, and server-driven subscription refreshes — so a
+  revoked or upgraded identity takes effect without a reconnect; a provider
+  error fails the execution with that error before middleware runs (on a
+  refresh, the subscriber gets an error frame and the subscription stays
+  registered). On REST and MCP, a wrapping `http.Handler` attaches the
+  principal directly with `WithPrincipal`. `Conn.UserID` remains the push
+  fan-out address; the principal is the authorization input.
+
 ### Changed
 
 - **Breaking:** the MCP adapter no longer installs a detached connection on

@@ -977,6 +977,32 @@ server.OnAuth(authHook) // anonymous viewers simply omit getAuthToken client-sid
 
 > Short-lived JWTs (Clerk etc.), rejection retries and React StrictMode wiring: **[docs/auth.md](docs/auth.md)**.
 
+### Request identity: the principal
+
+"Who is asking" is a property of each handler execution, not of a socket. aprot carries a request-scoped **principal** — an opaque value your auth resolves to — in the context: `aprot.WithPrincipal(ctx, p)` attaches it, `aprot.PrincipalFrom(ctx)` reads it back (nil when anonymous). Authorize on the principal; never infer identity from `aprot.Connection(ctx)`, whose non-nil result only means "there is a socket here".
+
+Population per transport:
+
+- **Sockets** — register a `PrincipalProvider` on the connection, typically from `OnAuth`. It runs once per execution — requests, subscribes, and **server-driven subscription refreshes** — so a revoked or upgraded identity takes effect without a reconnect. A provider error fails the execution with that error before middleware runs.
+
+```go
+server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
+    if _, err := verify(token); err != nil {
+        return aprot.ErrAuthFailed("invalid token")
+    }
+    conn.SetPrincipalProvider(func(ctx context.Context) (any, error) {
+        return lookupUser(ctx, token) // memoize per session with a TTL of your choosing
+    })
+    return nil
+})
+```
+
+- **REST / MCP** — a wrapping `http.Handler` that authenticates the request attaches the resolved principal directly: `r = r.WithContext(aprot.WithPrincipal(r.Context(), user))`.
+
+Because the provider runs per execution, the natural way to bound identity lookups is a session cache **you** own: memoize the resolver keyed by credential or session ID with a TTL, and revocation takes effect within that TTL on every transport at once. Resolving once in `OnAuth` and returning the snapshot is the degenerate cache (TTL = connection lifetime).
+
+The principal is distinct from `Conn.UserID`: **UserID is an address** — the key `PushToUser`/`DisconnectUser` use to find connections — while **the principal is an authorization input**. Set both when they coincide.
+
 ### Revoking access mid-session (`DisconnectUser`)
 
 Auth middleware can deny a removed user's *new* requests, but an already-open connection stays authenticated — still counted, still targetable by `PushToUser`. When you delete a user or revoke their access, close their sockets too:
@@ -1072,7 +1098,7 @@ server := aprot.NewServer(registry)
 http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos", ServerVersion: "1.0.0"}))
 ```
 
-The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless your own wrapper installed one via `aprot.WithConnection` — gate protected tools on your own auth, e.g. a wrapping `http.Handler` that validates the `Authorization` header.
+The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless your own wrapper installed one via `aprot.WithConnection` — gate protected tools on your own auth, e.g. a wrapping `http.Handler` that validates the `Authorization` header and attaches the resolved identity with `aprot.WithPrincipal`.
 
 - **Tool names** default to snake_case of the wire method (`TodoHandlers.CreateTodo` → `todo_handlers_create_todo`); override per tool.
 - **Descriptions** come from handler godoc (the same comments that feed OpenAPI and the generated TS client), overridable per tool. Struct field godoc and `validate` tags flow into the input schema via `Registry.SchemaFor`.
