@@ -236,13 +236,39 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 		}
 	}
 
-	// Build and execute middleware chain
-	handler := a.buildHandler(route.HandlerInfo)
 	req := &Request{
 		Method: route.WireMethod,
 		Params: params,
 	}
+
+	// Install the same request context the WS/SSE dispatch path builds
+	// (connection.go), so middleware and handlers behave identically across
+	// transports: HandlerInfoFromContext, RequestFromContext, and the refresh
+	// queue behind TriggerRefresh / TriggerRefreshNow.
+	ctx = withHandlerInfo(ctx, route.HandlerInfo)
+	ctx = withRequest(ctx, req)
+
+	// Subscriptions live on the server, so refresh triggers can only be
+	// resolved when a Server has been built from this registry. Without one
+	// there are no subscribers and TriggerRefresh stays a no-op.
+	srv := a.registry.attachedServer.Load()
+	var rq *refreshQueue
+	if srv != nil {
+		rq = &refreshQueue{server: srv}
+		ctx = withRefreshQueue(ctx, rq)
+	}
+
+	// Build and execute middleware chain
+	handler := a.buildHandler(route.HandlerInfo)
 	result, err := handler(ctx, req)
+
+	// Flush queued refresh triggers once the response has been written,
+	// mirroring the WS/SSE path: triggers are dropped when the handler
+	// errors, and flushed on any success path (the mutation happened even
+	// if marshaling its response later fails).
+	if err == nil && rq != nil {
+		defer srv.processRefreshQueue(rq)
+	}
 
 	if err != nil {
 		if perr, ok := err.(*ProtocolError); ok {

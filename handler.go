@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/go-json-experiment/json"
@@ -211,6 +212,11 @@ type Registry struct {
 	// type code generation should use in place of the field's declared dynamic
 	// (interface) type. Codegen-only: runtime serialization is unaffected.
 	fieldTypeOverrides map[reflect.Type]map[string]reflect.Type
+	// attachedServer is the Server most recently built from this registry via
+	// NewServer. Request-scoped transports (REST) load it to resolve refresh
+	// triggers to live subscriptions, which are owned by the server. Atomic
+	// because REST traffic may already be flowing when NewServer stores it.
+	attachedServer atomic.Pointer[Server]
 }
 
 // NewRegistry creates a new handler registry.

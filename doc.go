@@ -322,6 +322,12 @@
 // cannot be exposed via REST and will panic at registration — use
 // WebSocket or SSE for those.
 //
+// REST requests run through the same request pipeline as WebSocket and SSE:
+// group middleware sees [HandlerInfoFromContext] and [RequestFromContext],
+// and refresh triggers work — a mutation handler that calls [TriggerRefresh]
+// over REST refreshes subscribed WebSocket/SSE clients, provided a [Server]
+// has been built from the same [Registry].
+//
 // Use [ServerOptions] to configure client reconnection behavior and
 // connection hardening. The reconnect settings are sent to clients on
 // connect; TypeScript clients apply them automatically. The hardening
@@ -529,6 +535,9 @@
 // Multiple TriggerRefresh calls within a single request are batched and
 // deduplicated. [TriggerRefreshNow] flushes the queue immediately — use it in
 // long-running handlers that make observable state transitions over time.
+// TriggerRefresh works on every transport: a mutation arriving over REST
+// refreshes subscribed WebSocket/SSE clients just like one arriving over a
+// socket (the [RESTAdapter] must share its [Registry] with a [Server]).
 //
 // From background goroutines, cron jobs, webhook fan-in, or any other code
 // path that runs outside of a request handler, use the [Server.TriggerRefresh]
