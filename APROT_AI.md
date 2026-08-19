@@ -98,7 +98,7 @@ Custom transport: `new ApiClient('bridge:', { transport: myClientTransport })` �
   - Subtasks created via `Task.SubTask` (no ctx parameter) inherit the parent's middleware ctx, so logger decorations chain through nested calls.
 - Cancel is owner-only by default: `tasks.CancelSharedTask(ctx, id)` (and the generated `CancelTask` handler) only cancels a task created by the calling connection; others get `CodeForbidden`.
   - That default is keyed by connection ID, so a client loses cancel rights across a reconnect. Override with `tasks.Enable(reg, tasks.WithCancelAuthorizer(fn))`, where `fn = func(ctx context.Context, t tasks.TaskCancelInfo) error` — return nil to allow, `aprot.ErrForbidden(...)` to deny.
-  - `TaskCancelInfo`: `{ID, Title string; OwnerConnID uint64; OwnerUserID string}` (`OwnerUserID` is `""` if the owner was unauthenticated). Compare against `aprot.Connection(ctx).UserID()` for a user-based, reconnect-surviving policy.
+  - `TaskCancelInfo`: `{ID, Title string; OwnerConnID uint64; OwnerUserID string}` (`OwnerUserID` is `""` if the owner was unauthenticated). Compare against `aprot.Connection(ctx).UserID()` for a user-based, reconnect-surviving policy — but nil-check the connection first: `aprot.Connection(ctx)` is nil over REST and MCP.
 - Clients hydrate via the generated `ListTasks` handler: `TaskStateEvent` only fires on lifecycle changes, so a client mounting mid-task sees nothing until the next one. The React `useSharedTasks` hook calls `ListTasks` on mount and every reconnect, and holds state in one store per client (not per hook instance). The server also pushes `TaskStateEvent` on connect even with zero tasks, so a reconnecting client clears stale state.
 - `StartTask` never returns nil. On transports with no client channel (e.g. the REST adapter — no connection/manager on ctx) it returns a no-op `*Task`, so `Progress`/`Output`/`SetMeta`/`Close` are safe but undelivered.
 
@@ -328,7 +328,7 @@ HTTP method/path derive from method name (e.g. `CreateUser` → `POST /users/cre
 
 REST requests run the same request pipeline as WS/SSE via `Server.Invoke` (the transport-agnostic entry point — custom transports can call it directly): `HandlerInfoFromContext`/`RequestFromContext` are populated for middleware, server middleware (`server.Use`) applies to REST too, and `TriggerRefresh` from a REST handler refreshes WS/SSE subscribers (all needs a `NewServer` built from the same registry; REST itself cannot subscribe).
 
-For connection-shaped auth on request-scoped transports: `server.NewDetachedConn()` returns a `*Conn` with no socket (value store + `SetUserID`/`UserID` work, excluded from push fan-out, sends fail with `ErrDetachedConn`, no cleanup needed) and `aprot.WithConnection(ctx, conn)` attaches it.
+On request-scoped transports (REST, MCP) `aprot.Connection(ctx)` is nil — connection presence means "socket", not "authenticated"; never gate auth on it. A wrapper that authenticates a request itself can attach a detached connection: `server.NewDetachedConn()` returns a `*Conn` with no socket (value store + `SetUserID`/`UserID` work, excluded from push fan-out, sends fail with `ErrDetachedConn`, no cleanup needed) and `aprot.WithConnection(ctx, conn)` attaches it.
 
 ## MCP (Model Context Protocol)
 
@@ -343,7 +343,7 @@ registry.EnableMCP(&TodoHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCP
 http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos"}))
 ```
 
-- Adapter is a stateless `http.Handler` (Streamable HTTP POST: `initialize`, `ping`, `tools/list`, `tools/call`); dispatch goes through `Server.Invoke`, so middleware, auth and refresh triggers behave like every other transport. A detached conn is installed per request unless the caller's wrapper set one.
+- Adapter is a stateless `http.Handler` (Streamable HTTP POST: `initialize`, `ping`, `tools/list`, `tools/call`); dispatch goes through `Server.Invoke`, so middleware, auth and refresh triggers behave like every other transport. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless the caller's wrapper set one via `aprot.WithConnection`.
 - Input schema: single-struct-param handlers take the struct as the arguments object; otherwise one named property per parameter. Built by `Registry.SchemaFor(reflect.Type)` (public: inline JSON Schema with enums, embedded flattening, `validate` constraints, godoc descriptions).
 - Handler errors → tool result with `isError: true`; bad arguments/unknown tool → JSON-RPC `-32602`. Streaming handlers cannot be MCP tools (panic at EnableMCP).
 - Works with every registration mode. `RegisterMCP(&h, mw...)` + `EnableMCP` = MCP-only group: no WS dispatch, no REST routes, no OpenAPI, no generated TS client — the mode for curated model-facing tool groups. `mcp.NewAdapter` panics if a `RegisterMCP` group has no tools enabled (it would be reachable nowhere).
