@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.58.0] - 2026-08-19
+
 ### Added
 
 - **MCP support** (#316). Selected handlers can be served as MCP (Model
@@ -686,7 +688,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.57.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.58.0...HEAD
+[0.58.0]: https://github.com/marrasen/aprot/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/marrasen/aprot/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/marrasen/aprot/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/marrasen/aprot/compare/v0.54.0...v0.55.0
