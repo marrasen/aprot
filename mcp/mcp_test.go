@@ -353,3 +353,63 @@ func TestToolsCall_RESTOnlyGroup(t *testing.T) {
 		t.Errorf("group middleware ran %d times, want 1", mwCalls)
 	}
 }
+
+// McpOnlyHandlers is registered via RegisterMCP — MCP is its only surface.
+type McpOnlyHandlers struct{}
+
+// SearchOrders finds orders matching a query.
+func (McpOnlyHandlers) SearchOrders(ctx context.Context, query string) (string, error) {
+	return "orders for " + query, nil
+}
+
+func TestToolsCall_RegisterMCPGroup(t *testing.T) {
+	var mwCalls int
+	mw := func(next aprot.Handler) aprot.Handler {
+		return func(ctx context.Context, req *aprot.Request) (any, error) {
+			mwCalls++
+			return next(ctx, req)
+		}
+	}
+	r := aprot.NewRegistry()
+	r.RegisterMCP(&McpOnlyHandlers{}, mw)
+	r.EnableMCP(&McpOnlyHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{
+		"SearchOrders": {Name: "search_orders", ReadOnly: true},
+	}})
+	s := aprot.NewServer(r)
+	a := NewAdapter(s, Options{ServerName: "check"})
+
+	resp, _ := rpc(t, a, "1", "tools/call", `{"name":"search_orders","arguments":{"query":"boots"}}`)
+	res := result(t, resp)
+	if res["isError"] != false {
+		t.Fatalf("tools/call on RegisterMCP group failed: %v", res)
+	}
+	content, _ := res["content"].([]any)
+	if len(content) != 1 {
+		t.Fatalf("content = %v", content)
+	}
+	c0 := content[0].(map[string]any)
+	if !strings.Contains(c0["text"].(string), "orders for boots") {
+		t.Errorf("text content = %v", c0)
+	}
+	if mwCalls != 1 {
+		t.Errorf("group middleware ran %d times, want 1", mwCalls)
+	}
+}
+
+// A RegisterMCP group with no EnableMCP tools is reachable nowhere; the
+// adapter refuses to be built over it.
+func TestNewAdapter_PanicsOnToollessRegisterMCPGroup(t *testing.T) {
+	r := aprot.NewRegistry()
+	r.RegisterMCP(&McpOnlyHandlers{})
+	s := aprot.NewServer(r)
+	defer func() {
+		msg, _ := recover().(string)
+		if msg == "" {
+			t.Fatal("NewAdapter must panic for a tool-less RegisterMCP group")
+		}
+		if !strings.Contains(msg, "McpOnlyHandlers") {
+			t.Errorf("panic should name the group: %q", msg)
+		}
+	}()
+	NewAdapter(s, Options{ServerName: "check"})
+}

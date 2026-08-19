@@ -30,6 +30,7 @@ import (
 	json "github.com/go-json-experiment/json"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-json-experiment/json/jsontext"
@@ -67,6 +68,10 @@ type Adapter struct {
 // NewAdapter builds an MCP adapter over the server's registry. Tools are
 // resolved once, at construction — register handlers and call EnableMCP
 // before creating the adapter.
+//
+// A RegisterMCP group with no tools enabled via EnableMCP panics here: MCP
+// is that group's only surface, so a tool-less group is reachable nowhere
+// and the registration is a mistake.
 func NewAdapter(server *aprot.Server, opts Options) *Adapter {
 	if opts.ServerName == "" {
 		opts.ServerName = "aprot"
@@ -79,9 +84,23 @@ func NewAdapter(server *aprot.Server, opts Options) *Adapter {
 		opts:   opts,
 		tools:  make(map[string]aprot.MCPToolInfo),
 	}
-	for _, t := range server.Registry().MCPTools() {
+	reg := server.Registry()
+	toolGroups := make(map[string]bool)
+	for _, t := range reg.MCPTools() {
 		a.tools[t.Name] = t
 		a.order = append(a.order, t.Name)
+		groupName, _, _ := strings.Cut(t.Method, ".")
+		toolGroups[groupName] = true
+	}
+	var toolless []string
+	for name := range reg.Groups() {
+		if reg.IsMCPOnly(name) && !toolGroups[name] {
+			toolless = append(toolless, name)
+		}
+	}
+	if len(toolless) > 0 {
+		sort.Strings(toolless)
+		panic("mcp: RegisterMCP group(s) with no tools enabled via EnableMCP: " + strings.Join(toolless, ", "))
 	}
 	return a
 }
