@@ -120,10 +120,20 @@ server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
     if err != nil {
         return aprot.ErrAuthFailed("invalid token")
     }
-    conn.SetUserID(claims.Subject)
+    conn.SetUserID(claims.Subject) // push-routing address (PushToUser / DisconnectUser)
+    conn.SetPrincipalProvider(func(ctx context.Context) (any, error) {
+        return lookupUser(ctx, claims.Subject) // who is asking, for authorization
+    })
     return nil
 })
 ```
+
+The hook sets two different things, and the distinction matters:
+
+- **`SetUserID` is an address** — the key `PushToUser` and `DisconnectUser` use to find this connection. It is not an authorization input.
+- **`SetPrincipalProvider` supplies the identity** handlers and middleware authorize on, read back with `aprot.PrincipalFrom(ctx)`. The provider runs once per execution — every request, subscribe, and **server-driven subscription refresh** — so revoking a role takes effect on the next refresh, not the next reconnect. A provider error (e.g. `aprot.ErrUnauthorized`) fails the execution before middleware runs.
+
+Per-execution resolution does not mean a database hit per request: memoize `lookupUser` per session or credential with a TTL of your choosing, and revocation takes effect within that TTL on every transport at once. Returning a value captured in the hook is the degenerate cache (TTL = connection lifetime) — supported, but a per-session cache is the better default. See the [scope document](scope.md) for why the cache itself stays on your side of the line.
 
 ```typescript
 const client = new ApiClient(getWebSocketUrl(), {
@@ -147,9 +157,20 @@ server := aprot.NewServer(registry, aprot.ServerOptions{AllowAnonymous: true})
 server.OnAuth(authHook)   // still validates any token that *is* offered
 ```
 
-Anonymous connections work immediately with `conn.UserID() == ""` and no auth timeout; a client that authenticates later upgrades the live session in place. On the client, an anonymous viewer simply omits `getAuthToken`.
+Anonymous connections work immediately with no principal provider, no user ID, and no auth timeout; a client that authenticates later upgrades the live session in place. On the client, an anonymous viewer simply omits `getAuthToken`.
 
-- **Still gate your handlers.** Admitting the connection is not authorizing the call — check `Connection(ctx).UserID()` or use middleware on protected handlers.
+- **Still gate your handlers.** Admitting the connection is not authorizing the call — check the principal on protected handlers or in middleware. `aprot.PrincipalFrom(ctx)` is nil for anonymous callers, and the same check works over REST and MCP (where a wrapping `http.Handler` attaches the principal with `aprot.WithPrincipal`):
+
+  ```go
+  func requireUser(next aprot.Handler) aprot.Handler {
+      return func(ctx context.Context, req *aprot.Request) (any, error) {
+          if _, ok := aprot.PrincipalFrom(ctx).(*User); !ok {
+              return nil, aprot.ErrUnauthorized("authentication required")
+          }
+          return next(ctx, req)
+      }
+  }
+  ```
 - **A bad token still closes the connection.** Offering a credential that fails does not silently degrade into an anonymous session.
 - **Anonymous connections carry no user ID**, so `PushToUser` and `DisconnectUser` cannot reach them until they authenticate. `Broadcast` and `ForEachConn` still do.
 - **No auth timeout is armed**, so keep `SetCheckOrigin` and the concurrency/subscription caps in place on public endpoints.
