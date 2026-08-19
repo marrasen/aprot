@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.59.0] - 2026-08-19
+
 ### Added
 
 - `Registry.RegisterMCP` — registers a handler group whose only surface is
