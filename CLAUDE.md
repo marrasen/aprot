@@ -32,6 +32,7 @@ cd example/react/client && npm run dev
 
 ## Rules
 
+- **Check `docs/scope.md` before adding or proposing public API.** It holds the transport-vs-policy rule that decides what belongs in aprot and the standing design decisions (one helper per cross-path invariant, connection presence is never an auth signal, identity is per execution, `Conn.UserID` is an address). Record new borderline rulings there.
 - **Never commit directly to master.** Always use a branch + PR.
 - **Never force push.** Always create new commits instead of amending.
 - **Always update PRs and issues** when pushing changes — keep descriptions current.

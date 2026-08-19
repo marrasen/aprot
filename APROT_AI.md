@@ -2,7 +2,7 @@
 
 A high-performance Go library for type-safe real-time APIs with automatic TypeScript/React client generation. WebSocket and SSE+HTTP transports; optional REST/OpenAPI on top.
 
-This guide is a fast-reference for agents. The authoritative overview is `doc.go` (pkg.go.dev landing page).
+This guide is a fast-reference for agents. The authoritative overview is `doc.go` (pkg.go.dev landing page). Before proposing new public API, read `docs/scope.md` — the transport-vs-policy rule that decides what belongs in aprot (carriers and population guarantees in; credential meaning, caching policy, and authorization decisions out) and the standing decisions already made under it.
 
 ## Core Concepts
 
