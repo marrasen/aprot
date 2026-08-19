@@ -349,8 +349,7 @@
 // subpackage serves the tools over HTTP. Tool input schemas are produced by
 // [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses. Both
 // registration modes qualify: a [Registry.RegisterREST]-only group serves
-// its tools over MCP while staying off the WebSocket dispatch and out of
-// the generated TypeScript client.
+// its tools over MCP while staying off the WebSocket dispatch.
 //
 // Godoc drives descriptions in OpenAPI and MCP output, and parameter names
 // in REST routes. At development time it is extracted from source on demand;

@@ -1075,7 +1075,7 @@ The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` impl
 - **Input schemas**: a handler with a single struct parameter takes the struct as the arguments object (the model-friendly common case); other signatures map each parameter to a named property.
 - **Hints** (`ReadOnly`, `Destructive`, `Idempotent`, `OpenWorld`) are emitted as MCP tool annotations, which clients use to decide e.g. what needs user confirmation.
 - **Errors**: argument problems are JSON-RPC protocol errors; errors returned by the handler become tool results with `isError` set, so the model can read them and retry.
-- **Registration modes**: both `Register` and `RegisterREST` groups work. `RegisterREST` + `EnableMCP` exposes a tool group over MCP (and REST) while keeping it off the WebSocket dispatch and out of the generated TypeScript client.
+- **Registration modes**: both `Register` and `RegisterREST` groups work. `RegisterREST` + `EnableMCP` exposes a tool group over MCP (and REST) while keeping it off the WebSocket dispatch. Note that the TypeScript generator currently emits client functions for every registered group, including REST-only ones.
 
 ### Baked godoc for deployed binaries
 
