@@ -308,6 +308,11 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		hook(s)
 	}
 
+	// Let request-scoped transports built from the same registry (REST) reach
+	// this server's subscriptions for refresh triggers. Last NewServer wins if
+	// multiple servers share a registry.
+	registry.attachedServer.Store(s)
+
 	go s.run()
 	return s
 }

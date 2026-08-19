@@ -279,6 +279,7 @@ func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
 - `TriggerRefreshNow` flushes immediately (use in long-running handlers between observable state transitions).
 - `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
 - `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
+- `TriggerRefresh`/`TriggerRefreshNow` work on every transport, including REST — a REST mutation refreshes subscribed WS/SSE clients, provided a `Server` was built from the same registry.
 
 ### Subscription patches (#237)
 
@@ -323,6 +324,8 @@ spec, _ := oag.Generate()                // or oag.GenerateJSON()
 ```
 
 HTTP method/path derive from method name (e.g. `CreateUser` → `POST /users/create-user`). Streaming handlers cannot be REST-exposed (panic at registration). Doc comments on handlers/structs/fields flow into OpenAPI `summary`/`description`/JSON Schema.
+
+REST requests run the same request pipeline as WS/SSE: `HandlerInfoFromContext`/`RequestFromContext` are populated for middleware, and `TriggerRefresh` from a REST handler refreshes WS/SSE subscribers (needs a `NewServer` built from the same registry; REST itself cannot subscribe).
 
 ## Error Handling
 

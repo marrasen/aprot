@@ -487,6 +487,140 @@ func TestEnableREST(t *testing.T) {
 	}
 }
 
+// restRefreshHandlers exposes a subscribable query (WS) and a mutation
+// (REST via EnableREST) sharing a trigger key, to verify the REST request
+// path drives subscription refreshes like the WS/SSE path does.
+type restRefreshHandlers struct{}
+
+type restRefreshList struct {
+	Items []string `json:"items"`
+}
+
+type restRefreshCreateReq struct {
+	Name string `json:"name"`
+}
+
+func (restRefreshHandlers) GetItems(ctx context.Context) (*restRefreshList, error) {
+	RegisterRefreshTrigger(ctx, "rest-items")
+	return &restRefreshList{Items: []string{"a"}}, nil
+}
+
+func (restRefreshHandlers) CreateItem(ctx context.Context, req *restRefreshCreateReq) (*restRefreshList, error) {
+	TriggerRefresh(ctx, "rest-items")
+	return &restRefreshList{Items: []string{"a", req.Name}}, nil
+}
+
+// routePathFor returns the adapter path for a method with no path params.
+func routePathFor(t *testing.T, adapter *RESTAdapter, methodName string) string {
+	t.Helper()
+	for _, route := range adapter.Routes() {
+		if route.MethodName == methodName {
+			return route.Path
+		}
+	}
+	t.Fatalf("route for %s not found", methodName)
+	return ""
+}
+
+func TestRESTAdapter_TriggerRefresh_RefreshesSubscribers(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&restRefreshHandlers{})
+	registry.EnableREST(&restRefreshHandlers{})
+	s := NewServer(registry)
+	adapter := NewRESTAdapter(registry)
+
+	// Subscribe over a recorded WS-style conn.
+	rt := &recordingTransport{}
+	c := &Conn{
+		transport: rt,
+		server:    s,
+		requests:  make(map[string]context.CancelCauseFunc),
+		id:        1,
+	}
+	s.requestsWg.Add(1)
+	c.handleSubscribe(IncomingMessage{
+		Type:   TypeSubscribe,
+		ID:     "sub-1",
+		Method: "restRefreshHandlers.GetItems",
+	})
+	msgs := drainMessages(t, rt)
+	if len(msgs) != 1 || msgs[0]["type"] != "response" {
+		t.Fatalf("subscribe: expected initial response, got %v", msgs)
+	}
+	n := len(msgs)
+
+	// Mutate over REST: the handler's TriggerRefresh must reach the
+	// WS subscriber.
+	path := routePathFor(t, adapter, "CreateItem")
+	req := httptest.NewRequest("POST", path, strings.NewReader(`{"name":"b"}`))
+	w := httptest.NewRecorder()
+	adapter.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("REST call failed: %d %s", w.Code, w.Body.String())
+	}
+	s.requestsWg.Wait()
+
+	after := drainMessages(t, rt)[n:]
+	if len(after) != 1 {
+		t.Fatalf("expected 1 refresh frame after REST mutation, got %d: %v", len(after), after)
+	}
+	if after[0]["type"] != "response" || after[0]["id"] != "sub-1" {
+		t.Fatalf("expected refresh response for sub-1, got %v", after[0])
+	}
+}
+
+func TestRESTAdapter_TriggerRefresh_NoServerNoOp(t *testing.T) {
+	// No Server built from this registry: TriggerRefresh must stay a
+	// silent no-op over REST instead of panicking.
+	registry := NewRegistry()
+	registry.RegisterREST(&restRefreshHandlers{})
+	adapter := NewRESTAdapter(registry)
+
+	path := routePathFor(t, adapter, "CreateItem")
+	req := httptest.NewRequest("POST", path, strings.NewReader(`{"name":"b"}`))
+	w := httptest.NewRecorder()
+	adapter.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("REST call failed: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRESTAdapter_ContextValues(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterREST(&RESTHandlers{})
+
+	var gotInfo *HandlerInfo
+	var gotReq *Request
+	capture := func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			gotInfo = HandlerInfoFromContext(ctx)
+			gotReq = RequestFromContext(ctx)
+			return next(ctx, req)
+		}
+	}
+	adapter := NewRESTAdapter(registry, WithRESTMiddleware(capture))
+
+	req := httptest.NewRequest("GET", "/rest-handlers/get-user/abc-123", nil)
+	w := httptest.NewRecorder()
+	adapter.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("REST call failed: %d %s", w.Code, w.Body.String())
+	}
+
+	if gotInfo == nil {
+		t.Fatal("HandlerInfoFromContext returned nil in REST middleware")
+	}
+	if gotInfo.Name != "GetUser" {
+		t.Errorf("handler info name = %q, want GetUser", gotInfo.Name)
+	}
+	if gotReq == nil {
+		t.Fatal("RequestFromContext returned nil in REST middleware")
+	}
+	if gotReq.Method != "RESTHandlers.GetUser" {
+		t.Errorf("request method = %q, want RESTHandlers.GetUser", gotReq.Method)
+	}
+}
+
 func init() {
 	// Suppress unused variable warning
 	_ = fmt.Sprint

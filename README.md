@@ -1047,6 +1047,8 @@ Example: `func (h *Users) UpdateUser(ctx context.Context, id string, req *Update
 
 Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
 
+REST requests run through the same request pipeline as WebSocket/SSE: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket/SSE clients, provided a `Server` has been built from the same registry (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
+
 ## OpenAPI Generation
 
 Generate an OpenAPI 3.0 spec from your handlers. Only handlers registered with `RegisterREST` are included:
