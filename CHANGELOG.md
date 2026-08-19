@@ -10,6 +10,46 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-08-19
+
+### Added
+
+- CI now fails when the committed generated example clients are stale. The
+  `typescript-compile` job regenerated the clients before compiling them, so
+  it validated what the generator produces — never what is committed. A PR
+  that changed `templates/` without running the generators passed every
+  check; master carried 296 lines of drift that way. Both generate steps now
+  run up front, followed by a `git diff` gate over the tracked generated
+  artifacts (with intent-to-add, so a generated file that was never committed
+  fails as a diff rather than passing as untracked). (#312, fixes #310)
+
+### Fixed
+
+- REST requests now run through the same request pipeline as WebSocket/SSE.
+  The REST adapter built its own middleware chain without the request context
+  the socket transports install, with two silent consequences: `TriggerRefresh`
+  from a handler invoked over REST was a no-op — a REST mutation never
+  refreshed subscribed WebSocket/SSE clients, who quietly held stale data —
+  and `HandlerInfoFromContext` / `RequestFromContext` returned nil in REST
+  middleware. REST handlers now get handler info, the request, and the refresh
+  queue in context; triggers are batched, deduplicated, and flushed after a
+  successful response, and `TriggerRefreshNow` flushes mid-handler, exactly as
+  over a socket. Requires no API change: `NewServer` records itself on its
+  `Registry`, and the REST adapter picks the server up from there — with no
+  server built from the registry there are no subscribers and `TriggerRefresh`
+  remains a no-op. `RegisterRefreshTrigger` is unchanged: it declares a
+  subscription's dependencies, and REST cannot subscribe. (#317, from #316)
+
+- Generated TypeScript function names are now escaped when they collide with
+  reserved words. A handler named `Delete` generated `export function
+  delete(...)` — a syntax error that surfaced only as a broken TypeScript
+  build in the consumer. The reserved-word table and trailing-underscore
+  escape already applied to parameter names now also cover method names, hook
+  names, and push-event handler names, applied after the `NamingPlugin` runs
+  so a custom plugin cannot reintroduce a reserved name. The escape is
+  cosmetic: parameters are positional and methods dispatch by their qualified
+  wire name, so nothing on the wire changes. (#311, fixes #309)
+
 ## [0.56.0] - 2026-08-14
 
 ### Added
@@ -595,7 +635,9 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.55.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.57.0...HEAD
+[0.57.0]: https://github.com/marrasen/aprot/compare/v0.56.0...v0.57.0
+[0.56.0]: https://github.com/marrasen/aprot/compare/v0.55.0...v0.56.0
 [0.55.0]: https://github.com/marrasen/aprot/compare/v0.54.0...v0.55.0
 [0.54.0]: https://github.com/marrasen/aprot/compare/v0.53.0...v0.54.0
 [0.53.0]: https://github.com/marrasen/aprot/compare/v0.52.0...v0.53.0
