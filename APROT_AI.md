@@ -279,7 +279,7 @@ func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
 - `TriggerRefreshNow` flushes immediately (use in long-running handlers between observable state transitions).
 - `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
 - `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
-- `TriggerRefresh`/`TriggerRefreshNow` work on every transport, including REST — a REST mutation refreshes subscribed WS/SSE clients, provided a `Server` was built from the same registry.
+- `TriggerRefresh`/`TriggerRefreshNow` work on every transport — a REST or MCP mutation (or a direct `Server.Invoke`) refreshes subscribed WS/SSE clients, provided a `Server` was built from the same registry.
 
 ### Subscription patches (#237)
 
@@ -325,7 +325,27 @@ spec, _ := oag.Generate()                // or oag.GenerateJSON()
 
 HTTP method/path derive from method name (e.g. `CreateUser` → `POST /users/create-user`). Streaming handlers cannot be REST-exposed (panic at registration). Doc comments on handlers/structs/fields flow into OpenAPI `summary`/`description`/JSON Schema.
 
-REST requests run the same request pipeline as WS/SSE: `HandlerInfoFromContext`/`RequestFromContext` are populated for middleware, and `TriggerRefresh` from a REST handler refreshes WS/SSE subscribers (needs a `NewServer` built from the same registry; REST itself cannot subscribe).
+REST requests run the same request pipeline as WS/SSE via `Server.Invoke` (the transport-agnostic entry point — custom transports can call it directly): `HandlerInfoFromContext`/`RequestFromContext` are populated for middleware, server middleware (`server.Use`) applies to REST too, and `TriggerRefresh` from a REST handler refreshes WS/SSE subscribers (all needs a `NewServer` built from the same registry; REST itself cannot subscribe).
+
+For connection-shaped auth on request-scoped transports: `server.NewDetachedConn()` returns a `*Conn` with no socket (value store + `SetUserID`/`UserID` work, excluded from push fan-out, sends fail with `ErrDetachedConn`, no cleanup needed) and `aprot.WithConnection(ctx, conn)` attaches it.
+
+## MCP (Model Context Protocol)
+
+Per-method opt-in mirroring REST; serve with the `aprot/mcp` subpackage:
+
+```go
+registry.EnableMCP(&TodoHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{
+    "ListTodos":  {ReadOnly: true, Idempotent: true},          // hints → MCP tool annotations
+    "CreateTodo": {Description: "Add a todo item."},           // else godoc is the description
+    "DeleteTodo": {Name: "remove_todo", Destructive: true},    // else name is todo_handlers_delete_todo
+}})
+http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos"}))
+```
+
+- Adapter is a stateless `http.Handler` (Streamable HTTP POST: `initialize`, `ping`, `tools/list`, `tools/call`); dispatch goes through `Server.Invoke`, so middleware, auth and refresh triggers behave like every other transport. A detached conn is installed per request unless the caller's wrapper set one.
+- Input schema: single-struct-param handlers take the struct as the arguments object; otherwise one named property per parameter. Built by `Registry.SchemaFor(reflect.Type)` (public: inline JSON Schema with enums, embedded flattening, `validate` constraints, godoc descriptions).
+- Handler errors → tool result with `isError: true`; bad arguments/unknown tool → JSON-RPC `-32602`. Streaming handlers cannot be MCP tools (panic at EnableMCP).
+- Deployed binaries have no source for godoc extraction: `aprot.GenerateSourceDocsGo(registry, pkg)` emits a committed Go file whose `RegisterSourceDocs(r)` bakes docs in (feeds OpenAPI + REST param names + MCP).
 
 ## Error Handling
 

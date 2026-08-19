@@ -207,7 +207,8 @@ func mcpBinding(sg *schemaGen, meta *sourceMeta, info *HandlerInfo) ([]MCPToolPa
 	return params, false, schema
 }
 
-// toSnake converts CamelCase to snake_case (UserHandlers → user_handlers).
+// toSnake converts CamelCase to snake_case, treating consecutive uppercase
+// letters as one acronym word (RESTHandlers → rest_handlers).
 func toSnake(s string) string {
-	return strings.ReplaceAll(toKebab(s), "-", "_")
+	return strings.ReplaceAll(toKebabAcronyms(s), "-", "_")
 }

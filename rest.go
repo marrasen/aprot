@@ -455,9 +455,18 @@ func writeJSONErrorData(w http.ResponseWriter, status int, code int, message str
 
 type httpRequestKey struct{}
 
-// HTTPRequestFromContext returns the *http.Request associated with a REST handler call.
-// Returns nil if the context is not from a REST request.
+// HTTPRequestFromContext returns the *http.Request associated with a handler
+// call arriving over an HTTP request-scoped transport (REST, MCP).
+// Returns nil for socket transports.
 func HTTPRequestFromContext(ctx context.Context) *http.Request {
 	r, _ := ctx.Value(httpRequestKey{}).(*http.Request)
 	return r
+}
+
+// WithHTTPRequest returns a context carrying r, as returned by
+// [HTTPRequestFromContext]. Custom HTTP transports dispatching through
+// [Server.Invoke] use it to expose the request to middleware the way the
+// built-in REST adapter does.
+func WithHTTPRequest(ctx context.Context, r *http.Request) context.Context {
+	return context.WithValue(ctx, httpRequestKey{}, r)
 }

@@ -10,6 +10,57 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **MCP support** (#316). Selected handlers can be served as MCP (Model
+  Context Protocol) tools, so an AI assistant calls the same handlers the
+  browser does — through the same pipeline, middleware and auth. Exposure is
+  per-method opt-in via `Registry.EnableMCP` with model-facing names,
+  descriptions and behavior hints (`MCPTool`); the new `aprot/mcp` subpackage
+  serves them as a stateless `http.Handler` implementing the MCP Streamable
+  HTTP tool-serving subset (`initialize`, `ping`, `tools/list`,
+  `tools/call`). Tool descriptions come from handler godoc, input schemas
+  from the same generator as OpenAPI; handler errors become tool results
+  with `isError`, argument problems become JSON-RPC protocol errors.
+
+- `Server.Invoke(ctx, method, params)` — the transport-agnostic pipeline
+  entry point: handler info and request context, refresh queue, server +
+  group middleware, refresh flush on success. The WS/SSE dispatch, the REST
+  adapter and the MCP adapter all execute through it; custom request-scoped
+  transports can call it directly.
+
+- `Server.NewDetachedConn` + `aprot.WithConnection` — a connection bound to
+  no transport, so connection-shaped auth middleware (`aprot.Connection`)
+  works on request-scoped transports. Value store and `SetUserID`/`UserID`
+  work; push fan-out never sees it; sends fail with `ErrDetachedConn`; no
+  cleanup needed. `aprot.WithHTTPRequest` is exported for custom HTTP
+  transports to expose the request the way the REST adapter does.
+
+- `Registry.SchemaFor(reflect.Type)` — the OpenAPI generator's JSON Schema
+  builder as a standalone API, producing self-contained schemas (registered
+  enums, embedded-struct flattening, `validate` constraints, godoc
+  descriptions, recursion broken safely). OpenAPI output is unchanged.
+
+- `GenerateSourceDocsGo` / `Registry.SetSourceDocs` — bake godoc metadata
+  (handler docs, parameter names, type and field docs) into a committed,
+  regenerable Go file, so OpenAPI descriptions, REST parameter names and MCP
+  tool descriptions work in deployed binaries that have no source on disk.
+
+- `aprot.MarshalWire` — the wire encoding (sql.Null flattening, `format:`
+  tags) as a public function, for adapters outside the aprot package.
+
+- `aprot.NewTestSubscriber` — test helper: a recorded, transport-less
+  subscriber for asserting that mutations on other transports refresh
+  subscribed clients.
+
+### Changed
+
+- With a `Server` built from the same registry, REST requests now also run
+  server middleware (`Server.Use`), matching socket requests — previously
+  they ran only adapter and group middleware. Middleware that assumes a live
+  socket can use the detached-connection API; REST adapters without a server
+  keep the old adapter + group chain.
+
 ## [0.57.0] - 2026-08-19
 
 ### Added

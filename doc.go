@@ -322,11 +322,39 @@
 // cannot be exposed via REST and will panic at registration — use
 // WebSocket or SSE for those.
 //
-// REST requests run through the same request pipeline as WebSocket and SSE:
-// group middleware sees [HandlerInfoFromContext] and [RequestFromContext],
-// and refresh triggers work — a mutation handler that calls [TriggerRefresh]
-// over REST refreshes subscribed WebSocket/SSE clients, provided a [Server]
-// has been built from the same [Registry].
+// REST requests run through the same request pipeline as WebSocket and SSE.
+// The pipeline has a single transport-agnostic entry point, [Server.Invoke]:
+// it installs the request context (handler info, request, refresh queue),
+// runs server and group middleware, and flushes refresh triggers on success.
+// The socket dispatch, the REST adapter and the MCP adapter all execute
+// through it, and custom request-scoped transports can call it directly.
+// Consequently middleware sees [HandlerInfoFromContext] and
+// [RequestFromContext] on every transport, server middleware registered with
+// [Server.Use] applies to REST and MCP requests too (when a [Server] has been
+// built from the same [Registry]), and a mutation handler that calls
+// [TriggerRefresh] over any transport refreshes subscribed WebSocket/SSE
+// clients.
+//
+// Transports without a socket still need a home for identity and
+// per-connection values: [Server.NewDetachedConn] returns a connection bound
+// to no transport, and [WithConnection] attaches it to a request context, so
+// auth middleware written against [Connection] runs unchanged over REST and
+// MCP. Detached connections never enter push fan-out; their lifetime is the
+// caller's (per request or per session), and no cleanup is needed.
+//
+// Handlers can also be served as MCP (Model Context Protocol) tools, so an
+// AI assistant calls them through the same pipeline, middleware and auth.
+// Exposure is per-method opt-in via [Registry.EnableMCP], with model-facing
+// names, descriptions and behavior hints ([MCPTool]); the aprot/mcp
+// subpackage serves the tools over HTTP. Tool input schemas are produced by
+// [Registry.SchemaFor], the same JSON Schema generation OpenAPI uses.
+//
+// Godoc drives descriptions in OpenAPI and MCP output, and parameter names
+// in REST routes. At development time it is extracted from source on demand;
+// deployed binaries have no source, so [GenerateSourceDocsGo] emits a Go
+// file that bakes the extracted docs into the build (commit it and
+// regenerate alongside the TypeScript clients; the emitted
+// RegisterSourceDocs seeds the registry via [Registry.SetSourceDocs]).
 //
 // Use [ServerOptions] to configure client reconnection behavior and
 // connection hardening. The reconnect settings are sent to clients on
