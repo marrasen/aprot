@@ -2,8 +2,7 @@ package aprot
 
 import (
 	"context"
-
-	"github.com/go-json-experiment/json/jsontext"
+	"encoding/json/jsontext"
 )
 
 // Request contains information about the incoming request.

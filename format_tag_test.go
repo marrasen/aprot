@@ -2,11 +2,10 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // Handlers used by the `format:` tag tests. The codegen requires a json

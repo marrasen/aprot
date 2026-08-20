@@ -1093,10 +1093,14 @@
 // `json:"d,format:nano"`) or use a different type.
 //
 // Per-field `format:` tags are supported on every marshal/unmarshal path
-// (results, params, push/refresh payloads, stream items): aprot opts in to
-// go-json-experiment/json's format-tag support internally, so consumers do
-// not need to pin the json/v2 snapshot or set
-// json.ExperimentalGlobalSupportFormatTag themselves.
+// (results, params, push/refresh payloads, stream items): aprot enables
+// json/v2's format-tag support internally, so consumers do not need to enable
+// it themselves. The tag remains experimental in the standard library, which
+// exports no constructor for the opt-in, so aprot passes the one from
+// github.com/go-json-experiment/json to the stdlib marshaler; that module is
+// aprot's only remaining non-test dependency besides the validator and the
+// WebSocket driver, and it will go away when the standard library exports its
+// own opt-in.
 //
 // # Wire Protocol
 //

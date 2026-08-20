@@ -3,6 +3,8 @@ package aprot
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gorilla/websocket"
 )
 

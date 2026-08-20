@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 	"github.com/marrasen/aprot"
 	"github.com/marrasen/aprot/mcp"

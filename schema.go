@@ -42,7 +42,7 @@ func (r *Registry) SchemaFor(t reflect.Type) *JSONSchema {
 
 // goTypeToJSONSchema converts a Go reflect.Type to a JSON Schema.
 func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -65,7 +65,7 @@ func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Slice:
 		if isUnnamedByteSlice(t) {
 			// Unnamed []byte is base64-encoded as a string on the wire under
-			// both encoding/json v1 and go-json-experiment/json v2 (issue
+			// both encoding/json v1 and encoding/json/v2 (issue
 			// #174). OpenAPI 3.0 represents this as {type: string, format:
 			// byte}.
 			return &JSONSchema{Type: "string", Format: "byte"}
@@ -77,7 +77,7 @@ func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Array:
 		if isByteArray(t) {
 			// [N]byte (named or not) is base64-encoded as a string by
-			// go-json-experiment/json v2, same as unnamed []byte (#240).
+			// encoding/json/v2, same as unnamed []byte (#240).
 			return &JSONSchema{Type: "string", Format: "byte"}
 		}
 		n := t.Len()
@@ -147,7 +147,7 @@ func (g *schemaGen) buildStructSchema(t reflect.Type) *JSONSchema {
 		// Handle embedded structs
 		if field.Anonymous {
 			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct {
@@ -188,7 +188,7 @@ func (g *schemaGen) buildStructSchema(t reflect.Type) *JSONSchema {
 
 		// Determine if required
 		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
+		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Pointer
 		if !isOptional {
 			schema.Required = append(schema.Required, jsonName)
 		}
@@ -225,7 +225,7 @@ func (g *schemaGen) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
 		schema.Properties[jsonName] = fieldSchema
 
 		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
+		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Pointer
 		if !isOptional {
 			schema.Required = append(schema.Required, jsonName)
 		}

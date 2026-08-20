@@ -1,6 +1,6 @@
 package aprot
 
-import "github.com/go-json-experiment/json/jsontext"
+import "encoding/json/jsontext"
 
 const binaryFrameVersion byte = 1
 

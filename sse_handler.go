@@ -3,14 +3,13 @@ package aprot
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // decodeBody unmarshals a request body into v, enforcing the server's

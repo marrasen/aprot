@@ -199,7 +199,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			for i := range info.Params {
 				p := &info.Params[i]
 				pt := p.Type
-				if pt.Kind() == reflect.Ptr {
+				if pt.Kind() == reflect.Pointer {
 					pt = pt.Elem()
 				}
 				if pt.Kind() == reflect.Struct {
@@ -316,7 +316,7 @@ func (g *OpenAPIGenerator) GenerateJSON() ([]byte, error) {
 }
 
 // byteSliceFieldSchema returns the JSON Schema for a byte-slice or byte-array
-// field, honoring the go-json-experiment/json v2 `format:` tag (issue #174).
+// field, honoring the encoding/json/v2 `format:` tag (issue #174).
 // Returns nil if the field type is not a byte slice or array — caller should
 // fall through to the default goTypeToJSONSchema path.
 func byteSliceFieldSchema(field reflect.StructField) *JSONSchema {
@@ -365,7 +365,7 @@ func jsonFieldName(field reflect.StructField) string {
 func applyValidateConstraints(schema *JSONSchema, tag string, t reflect.Type) {
 	rules := ParseValidateTag(tag)
 	kind := t.Kind()
-	if kind == reflect.Ptr {
+	if kind == reflect.Pointer {
 		kind = t.Elem().Kind()
 	}
 	isString := kind == reflect.String

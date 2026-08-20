@@ -2,10 +2,10 @@ package tasks
 
 import (
 	"context"
+	"encoding/json/v2"
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 	"github.com/marrasen/aprot"
 )

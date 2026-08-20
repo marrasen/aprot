@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
 

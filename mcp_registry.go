@@ -50,7 +50,7 @@ type MCPOptions struct {
 // middleware and auth as every other transport.
 func (r *Registry) EnableMCP(handler any, opts MCPOptions) {
 	t := reflect.TypeOf(handler)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	name := t.Name()
@@ -157,7 +157,7 @@ func (r *Registry) MCPTools() []MCPToolInfo {
 // argN fallback), with struct parameters nested under their name.
 func mcpBinding(sg *schemaGen, meta *sourceMeta, info *HandlerInfo) ([]MCPToolParam, bool, *JSONSchema) {
 	isStruct := func(t reflect.Type) bool {
-		if t.Kind() == reflect.Ptr {
+		if t.Kind() == reflect.Pointer {
 			t = t.Elem()
 		}
 		return t.Kind() == reflect.Struct
@@ -168,7 +168,7 @@ func mcpBinding(sg *schemaGen, meta *sourceMeta, info *HandlerInfo) ([]MCPToolPa
 		if schema.Type != "object" {
 			// Registered enum structs etc. — fall through to named binding.
 		} else {
-			p := MCPToolParam{Struct: true, Required: info.Params[0].Type.Kind() != reflect.Ptr}
+			p := MCPToolParam{Struct: true, Required: info.Params[0].Type.Kind() != reflect.Pointer}
 			return []MCPToolParam{p}, true, schema
 		}
 	}
@@ -185,7 +185,7 @@ func mcpBinding(sg *schemaGen, meta *sourceMeta, info *HandlerInfo) ([]MCPToolPa
 		mp := MCPToolParam{
 			Name:     name,
 			Struct:   isStruct(p.Type),
-			Required: p.Type.Kind() != reflect.Ptr,
+			Required: p.Type.Kind() != reflect.Pointer,
 		}
 		params = append(params, mp)
 		schema.Properties[name] = sg.goTypeToJSONSchema(p.Type)

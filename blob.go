@@ -12,7 +12,7 @@ func isBlobResponse(t reflect.Type) bool {
 	if t == nil {
 		return false
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t == blobType

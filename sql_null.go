@@ -2,9 +2,10 @@ package aprot
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"time"
 
-	"github.com/go-json-experiment/json"
+	experimentjson "github.com/go-json-experiment/json"
 )
 
 // sqlNullMarshalers provides custom JSON marshalers for database/sql nullable
@@ -190,13 +191,24 @@ var sqlNullOptions = json.JoinOptions(
 // or unmarshals user data: response results, request params, push/refresh
 // payloads, stream items, the $blob JSON fallback, and the codegen's
 // zero-value marshaling probes. It combines the sql.Null* overrides with the
-// go-json-experiment/json opt-in for per-field `format:` struct tags:
-// snapshots since 2026-06 reject format-tagged fields at marshal/unmarshal
-// time unless this option is set, and aprot's codegen requires such tags on
-// some types (e.g. `json:"d,format:nano"` on time.Duration).
+// opt-in for per-field `format:` struct tags: json/v2 rejects format-tagged
+// fields at marshal/unmarshal time unless this option is set, and aprot's
+// codegen requires such tags on some types (`json:"d,format:nano"` on
+// time.Duration, and the byte-slice shape overrides of #240).
+//
+// The option comes from github.com/go-json-experiment/json even though
+// everything else here is encoding/json/v2. The `format:` tag stayed
+// experimental when json/v2 landed in Go 1.27: encoding/json/v2 exports no
+// constructor for it, and the standard library reaches this feature through a
+// duck-typed interface it documents by name as being for
+// [github.com/go-json-experiment/json.ExperimentalSupportFormatTag]
+// (see encoding/json/internal/jsonopts.experimentalFormatTagSupporter). The
+// option is passed to the stdlib marshaler and takes effect there; the
+// staging module is not doing the encoding. Drop this import when the
+// standard library exports its own opt-in (#344).
 var wireJSONOptions = json.JoinOptions(
 	sqlNullOptions,
-	json.ExperimentalSupportFormatTag(true),
+	experimentjson.ExperimentalSupportFormatTag(true),
 )
 
 // marshalJSON marshals v to JSON with aprot's wire semantics: sql.Null* type

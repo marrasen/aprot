@@ -15,8 +15,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -32,8 +32,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -49,8 +49,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -58,25 +58,25 @@ jobs:
       - name: Lint root module
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10
+          version: v2.13
           working-directory: .
 
       - name: Lint example/vanilla module
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10
+          version: v2.13
           working-directory: example/vanilla
 
       - name: Lint example/react module
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10
+          version: v2.13
           working-directory: example/react
 
       - name: Lint e2e module
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10
+          version: v2.13
           working-directory: e2e
 
   govulncheck:
@@ -87,8 +87,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -106,8 +106,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -125,8 +125,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true
@@ -188,8 +188,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-          # go.mod asks for 1.26 without a patch, so without this the runner's
-          # preinstalled 1.26.x is used and stays behind. govulncheck gates on
+          # go.mod asks for 1.27 without a patch, so without this the runner's
+          # preinstalled 1.27.x is used and stays behind. govulncheck gates on
           # standard library advisories, which are fixed in patch releases, so
           # the gate is only meaningful on the newest one.
           check-latest: true

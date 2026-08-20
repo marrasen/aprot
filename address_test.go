@@ -2,13 +2,12 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // addressHandlers reports the address UserID(ctx) resolves on each dispatch

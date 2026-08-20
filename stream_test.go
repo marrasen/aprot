@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"iter"
@@ -11,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json"
 )
 
 // streamTestServer builds a minimal Server + Conn with a recording transport

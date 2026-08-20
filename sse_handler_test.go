@@ -3,6 +3,7 @@ package aprot
 import (
 	"bufio"
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
 

@@ -2,11 +2,10 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"iter"
 	"strings"
 	"testing"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // mcpOnlyHandlers is registered via RegisterMCP: reachable as MCP tools
