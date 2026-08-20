@@ -55,6 +55,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- `Broadcast`, `ForEachConn` and `PushToUser` could silently miss a client
+  that had just connected, on WebSocket, SSE and the byte-stream transport
+  (#347). A connection became usable by the client — config frame sent, and
+  on WebSocket its read pump about to start — before it entered the server's
+  connection set, because registration was handed to the `run()` goroutine
+  over a channel and the insert landed there afterwards. A client that
+  connected and immediately triggered work could therefore miss every
+  broadcast in that window; a probe measured the gap on roughly 275 of 300
+  connections. Registration now completes in the accepting goroutine, before
+  the client can see the connection, through one `registerConn` helper shared
+  by all three accept paths. This is a released bug: it affects v0.59.0 and
+  earlier.
 - The `tasks.WithCancelAuthorizer` doc example read
   `aprot.Connection(ctx).UserID()` without a nil check and panicked when a
   cancel arrived over REST (where the connection is nil) (#329). The example

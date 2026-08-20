@@ -247,11 +247,11 @@ func (s *Server) ServeStream(ctx context.Context, rw io.ReadWriteCloser, info Co
 		return err
 	}
 
-	// Register the connection, but don't block forever if the server has
-	// already shut down (run() has exited and will never read s.register).
-	select {
-	case s.register <- conn:
-	case <-s.done:
+	// Join the fan-out set before the write pump starts: the config frame
+	// enqueued above only reaches the client once the pump flushes it, so
+	// registering here keeps the connection in Broadcast's set from the
+	// moment the client can see it (#347).
+	if !s.registerConn(conn) {
 		s.disassociateUser(conn)
 		_ = rw.Close()
 		return ErrServerShutdown
