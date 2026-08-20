@@ -284,7 +284,7 @@ func (r *Registry) Register(handler any, middleware ...Middleware) {
 func (r *Registry) RegisterREST(handler any, middleware ...Middleware) {
 	r.register(handler, false, middleware...)
 	t := reflect.TypeOf(handler)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	name := t.Name()
@@ -297,7 +297,7 @@ func (r *Registry) RegisterREST(handler any, middleware ...Middleware) {
 // and will panic at registration time.
 func (r *Registry) EnableREST(handler any) {
 	t := reflect.TypeOf(handler)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	name := t.Name()
@@ -329,7 +329,7 @@ func (r *Registry) EnableREST(handler any) {
 func (r *Registry) RegisterMCP(handler any, middleware ...Middleware) {
 	r.register(handler, false, middleware...)
 	t := reflect.TypeOf(handler)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	name := t.Name()
@@ -366,7 +366,7 @@ func (r *Registry) register(handler any, addToWSDispatch bool, middleware ...Mid
 	v := reflect.ValueOf(handler)
 	t := v.Type()
 
-	if t.Kind() != reflect.Ptr || t.Elem().Kind() != reflect.Struct {
+	if t.Kind() != reflect.Pointer || t.Elem().Kind() != reflect.Struct {
 		panic("aprot: Register requires a pointer to a struct")
 	}
 
@@ -439,7 +439,7 @@ func (r *Registry) RESTGroups() map[string]bool {
 func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 	// Get struct name from handler
 	ht := reflect.TypeOf(handler)
-	if ht.Kind() == reflect.Ptr {
+	if ht.Kind() == reflect.Pointer {
 		ht = ht.Elem()
 	}
 	structName := ht.Name()
@@ -451,7 +451,7 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 
 	// Get event type and derive name
 	dt := reflect.TypeOf(dataType)
-	if dt.Kind() == reflect.Ptr {
+	if dt.Kind() == reflect.Pointer {
 		dt = dt.Elem()
 	}
 	eventName := dt.Name()
@@ -490,7 +490,7 @@ func (r *Registry) OverrideFieldType(owner any, fieldName string, concrete any) 
 	if ot == nil {
 		panic("aprot: OverrideFieldType owner must not be nil")
 	}
-	if ot.Kind() == reflect.Ptr {
+	if ot.Kind() == reflect.Pointer {
 		ot = ot.Elem()
 	}
 	if ot.Kind() != reflect.Struct {
@@ -549,7 +549,7 @@ func (r *Registry) PushEvents() []PushEventInfo {
 // Panics if the type was not registered via RegisterPushEventFor.
 func (r *Registry) eventName(data any) string {
 	t := reflect.TypeOf(data)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	name, ok := r.pushEventTypes[t]
@@ -608,7 +608,7 @@ func (r *Registry) ErrorCodes() []ErrorCodeInfo {
 func (r *Registry) RegisterEnumFor(handler any, values any) {
 	// Resolve handler to group
 	ht := reflect.TypeOf(handler)
-	if ht.Kind() == reflect.Ptr {
+	if ht.Kind() == reflect.Pointer {
 		ht = ht.Elem()
 	}
 	structName := ht.Name()
@@ -948,7 +948,7 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 		// Detect iter.Seq[T] first.
 		if elem, ok := isIterSeq(out0); ok {
 			et := elem
-			if et.Kind() == reflect.Ptr {
+			if et.Kind() == reflect.Pointer {
 				et = et.Elem()
 			}
 			return &HandlerInfo{
@@ -965,7 +965,7 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 		// Detect iter.Seq2[K, V].
 		if k, v, ok := isIterSeq2(out0); ok {
 			vt := v
-			if vt.Kind() == reflect.Ptr {
+			if vt.Kind() == reflect.Pointer {
 				vt = vt.Elem()
 			}
 			return &HandlerInfo{
@@ -982,7 +982,7 @@ func validateOutputs(method reflect.Method, handlerValue reflect.Value, structNa
 
 		// Unwrap pointer to store the element type
 		rt := out0
-		if rt.Kind() == reflect.Ptr {
+		if rt.Kind() == reflect.Pointer {
 			rt = rt.Elem()
 		}
 		return &HandlerInfo{
@@ -1056,14 +1056,14 @@ func (info *HandlerInfo) buildArgs(ctx context.Context, params jsontext.Value) (
 	// so rules like `required,min=1` see the normalized value.
 	for i, p := range info.Params {
 		pt := p.Type
-		if pt.Kind() == reflect.Ptr {
+		if pt.Kind() == reflect.Pointer {
 			pt = pt.Elem()
 		}
 		if pt.Kind() != reflect.Struct {
 			continue
 		}
 		target := args[i+1] // +1 because args[0] is ctx
-		if target.Kind() == reflect.Ptr {
+		if target.Kind() == reflect.Pointer {
 			if target.IsNil() {
 				continue
 			}
@@ -1081,12 +1081,12 @@ func (info *HandlerInfo) buildArgs(ctx context.Context, params jsontext.Value) (
 	if info.registry != nil && info.registry.validator != nil {
 		for i, p := range info.Params {
 			pt := p.Type
-			if pt.Kind() == reflect.Ptr {
+			if pt.Kind() == reflect.Pointer {
 				pt = pt.Elem()
 			}
 			if pt.Kind() == reflect.Struct {
 				val := args[i+1] // +1 because args[0] is ctx
-				if val.Kind() == reflect.Ptr {
+				if val.Kind() == reflect.Pointer {
 					val = val.Elem()
 				}
 				if err := info.registry.validator.ValidateStruct(val.Interface()); err != nil {
@@ -1149,7 +1149,7 @@ func (info *HandlerInfo) CallStream(ctx context.Context, params jsontext.Value) 
 
 // unmarshalParam unmarshals a JSON value into the appropriate reflect.Value for a parameter type.
 func unmarshalParam(t reflect.Type, data jsontext.Value) (reflect.Value, error) {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		// Pointer param: create *T, unmarshal into it, return the pointer
 		ptr := reflect.New(t.Elem())
 		if err := unmarshalJSON(data, ptr.Interface()); err != nil {

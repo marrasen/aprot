@@ -119,7 +119,7 @@ func hasMarshalOverride(t reflect.Type) bool {
 // not a struct (a map or slice meta produces an inline TS type, not a named
 // interface).
 func metaTypeNames(t reflect.Type) []string {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -143,7 +143,7 @@ func metaTypeNames(t reflect.Type) []string {
 func underlyingStructType(t reflect.Type) reflect.Type {
 	for {
 		switch t.Kind() {
-		case reflect.Ptr, reflect.Slice, reflect.Array, reflect.Map:
+		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
 			t = t.Elem()
 		default:
 			return t
@@ -177,7 +177,7 @@ func collectNestedStructs(t reflect.Type, nested *[]reflect.Type, seen map[refle
 // declared by the main generator (via Registry.OverrideFieldType), so this is
 // only used as the kind resolver for SQL-null detection in hasMarshalOverride.
 func goTypeToTS(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		return goTypeToTS(t.Elem())
 	}
 

@@ -42,7 +42,7 @@ func (r *Registry) SchemaFor(t reflect.Type) *JSONSchema {
 
 // goTypeToJSONSchema converts a Go reflect.Type to a JSON Schema.
 func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -147,7 +147,7 @@ func (g *schemaGen) buildStructSchema(t reflect.Type) *JSONSchema {
 		// Handle embedded structs
 		if field.Anonymous {
 			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct {
@@ -188,7 +188,7 @@ func (g *schemaGen) buildStructSchema(t reflect.Type) *JSONSchema {
 
 		// Determine if required
 		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
+		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Pointer
 		if !isOptional {
 			schema.Required = append(schema.Required, jsonName)
 		}
@@ -225,7 +225,7 @@ func (g *schemaGen) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
 		schema.Properties[jsonName] = fieldSchema
 
 		jsonTag := field.Tag.Get("json")
-		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Ptr
+		isOptional := strings.Contains(jsonTag, "omitempty") || field.Type.Kind() == reflect.Pointer
 		if !isOptional {
 			schema.Required = append(schema.Required, jsonName)
 		}

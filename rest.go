@@ -139,7 +139,7 @@ func (a *RESTAdapter) buildRoutes() {
 			for i := range info.Params {
 				p := &info.Params[i]
 				pt := p.Type
-				if pt.Kind() == reflect.Ptr {
+				if pt.Kind() == reflect.Pointer {
 					pt = pt.Elem()
 				}
 				if pt.Kind() == reflect.Struct {
@@ -390,7 +390,7 @@ func (a *RESTAdapter) wrapAdapterMiddleware(handler Handler) Handler {
 // to the JSON type matching the Go parameter: numbers and bools become raw
 // JSON tokens, everything else stays a JSON string.
 func convertPathParam(val string, t reflect.Type) (any, error) {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {

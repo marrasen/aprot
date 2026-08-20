@@ -22,7 +22,7 @@ func ValidateTransformTags(t reflect.Type) error {
 	if t == nil {
 		return nil
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -59,7 +59,7 @@ func validateTransformTagsChildren(ft reflect.Type, seen map[reflect.Type]bool) 
 	switch ft.Kind() {
 	case reflect.Struct:
 		return validateTransformTagsType(ft, seen)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if ft.Elem().Kind() == reflect.Struct {
 			return validateTransformTagsType(ft.Elem(), seen)
 		}
@@ -68,7 +68,7 @@ func validateTransformTagsChildren(ft reflect.Type, seen map[reflect.Type]bool) 
 		if et.Kind() == reflect.Struct {
 			return validateTransformTagsType(et, seen)
 		}
-		if et.Kind() == reflect.Ptr && et.Elem().Kind() == reflect.Struct {
+		if et.Kind() == reflect.Pointer && et.Elem().Kind() == reflect.Struct {
 			return validateTransformTagsType(et.Elem(), seen)
 		}
 	}
@@ -78,7 +78,7 @@ func validateTransformTagsChildren(ft reflect.Type, seen map[reflect.Type]bool) 
 func validateTransformTagOnField(sf reflect.StructField, rules []ValidateRule) error {
 	ft := sf.Type
 	isStringField := ft.Kind() == reflect.String ||
-		(ft.Kind() == reflect.Ptr && ft.Elem().Kind() == reflect.String)
+		(ft.Kind() == reflect.Pointer && ft.Elem().Kind() == reflect.String)
 	isStringSlice := ft.Kind() == reflect.Slice && ft.Elem().Kind() == reflect.String
 
 	if !isStringField && !isStringSlice {
@@ -123,7 +123,7 @@ func ApplyTransforms(v any) error {
 		return nil
 	}
 	rv := reflect.ValueOf(v)
-	for rv.Kind() == reflect.Ptr {
+	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return nil
 		}
@@ -168,7 +168,7 @@ func recurseIntoField(fv reflect.Value) error {
 	switch fv.Kind() {
 	case reflect.Struct:
 		return applyTransformsValue(fv)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if fv.IsNil() {
 			return nil
 		}
@@ -183,7 +183,7 @@ func recurseIntoField(fv reflect.Value) error {
 					return err
 				}
 			}
-		} else if et.Kind() == reflect.Ptr && et.Elem().Kind() == reflect.Struct {
+		} else if et.Kind() == reflect.Pointer && et.Elem().Kind() == reflect.Struct {
 			for i := 0; i < fv.Len(); i++ {
 				el := fv.Index(i)
 				if el.IsNil() {
@@ -208,7 +208,7 @@ func applyFieldRules(sf reflect.StructField, fv reflect.Value, rules []ValidateR
 		fv.SetString(s)
 		return nil
 
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if fv.Type().Elem().Kind() != reflect.String {
 			return nil
 		}

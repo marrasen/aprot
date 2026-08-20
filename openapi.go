@@ -199,7 +199,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 			for i := range info.Params {
 				p := &info.Params[i]
 				pt := p.Type
-				if pt.Kind() == reflect.Ptr {
+				if pt.Kind() == reflect.Pointer {
 					pt = pt.Elem()
 				}
 				if pt.Kind() == reflect.Struct {
@@ -365,7 +365,7 @@ func jsonFieldName(field reflect.StructField) string {
 func applyValidateConstraints(schema *JSONSchema, tag string, t reflect.Type) {
 	rules := ParseValidateTag(tag)
 	kind := t.Kind()
-	if kind == reflect.Ptr {
+	if kind == reflect.Pointer {
 		kind = t.Elem().Kind()
 	}
 	isString := kind == reflect.String

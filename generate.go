@@ -97,7 +97,7 @@ func InferTypeFromMarshal(t reflect.Type) *MarshalTSType {
 // typeResolver is called for the generic Null[T] case to convert the inner
 // Go type to its TypeScript representation.
 func SQLNullTSType(t reflect.Type, typeResolver func(reflect.Type) string) string {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.PkgPath() != "database/sql" {
@@ -132,7 +132,7 @@ func SQLNullTSType(t reflect.Type, typeResolver func(reflect.Type) string) strin
 // TypeScript output for a " | null" suffix, we derive the unwrapped kind
 // directly from reflection so fieldData carries the information explicitly.
 func SQLNullGoKind(t reflect.Type, kindResolver func(reflect.Type) string) string {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.PkgPath() != "database/sql" {
@@ -1425,7 +1425,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		}
 		if field.Anonymous {
 			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct {
@@ -1445,7 +1445,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		// developer learns of it up front rather than on the wire.
 		if dt := field.Type; dt != nil {
 			ft := dt
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if ft.PkgPath() == "time" && ft.Name() == "Duration" && jsonFormatOption(field) == "" {
@@ -1460,7 +1460,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		// Fixed-size array length ([N]T, possibly behind a pointer) — drives
 		// tuple emission in Zod codegen (#240).
 		arrayLen := 0
-		if at := field.Type; at.Kind() == reflect.Ptr && at.Elem().Kind() == reflect.Array {
+		if at := field.Type; at.Kind() == reflect.Pointer && at.Elem().Kind() == reflect.Array {
 			arrayLen = at.Elem().Len()
 		} else if at.Kind() == reflect.Array {
 			arrayLen = at.Len()
@@ -1469,7 +1469,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		// nil — so it is required and nullable, not absent. Reflect that in both
 		// the TS type (`| null`) and the optionality flag.
 		nullable := false
-		if field.Type.Kind() == reflect.Ptr && !strings.Contains(field.Tag.Get("json"), "omitempty") {
+		if field.Type.Kind() == reflect.Pointer && !strings.Contains(field.Tag.Get("json"), "omitempty") {
 			nullable = true
 			optional = false
 			if !strings.HasSuffix(tsType, " | null") {
@@ -1557,7 +1557,7 @@ func (g *Generator) collectType(t reflect.Type) {
 		}
 		if field.Anonymous {
 			ft := field.Type
-			if ft.Kind() == reflect.Ptr {
+			if ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct && ft.PkgPath() != "" && !g.hasMarshalOverride(ft) {
@@ -1617,7 +1617,7 @@ func (g *Generator) collectGroupTypes(group *HandlerGroup) {
 // collectNestedType recursively collects named types (structs, enums) from
 // arbitrarily nested type expressions like []*Struct, map[string][]Struct, etc.
 func (g *Generator) collectNestedType(ft reflect.Type) {
-	if ft.Kind() == reflect.Ptr {
+	if ft.Kind() == reflect.Pointer {
 		ft = ft.Elem()
 	}
 
@@ -1654,7 +1654,7 @@ func (g *Generator) isOptional(field reflect.StructField) bool {
 	if strings.Contains(tag, "omitempty") {
 		return true
 	}
-	if field.Type.Kind() == reflect.Ptr {
+	if field.Type.Kind() == reflect.Pointer {
 		return true
 	}
 	return false
@@ -1684,7 +1684,7 @@ func (g *Generator) hasMarshalOverride(t reflect.Type) bool {
 // falling through to z.string() / z.number().int() on the underlying kind
 // (aprot issue #176).
 func (g *Generator) lookupEnum(t reflect.Type) *EnumInfo {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return g.registry.GetEnum(t)
@@ -1694,14 +1694,14 @@ func (g *Generator) lookupEnum(t reflect.Type) *EnumInfo {
 // slice or map (unwrapping pointers), or nil otherwise. Used by
 // collectInterfaceFields to populate fieldData.ElemEnum.
 func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map && t.Kind() != reflect.Array {
 		return nil
 	}
 	elem := t.Elem()
-	if elem.Kind() == reflect.Ptr {
+	if elem.Kind() == reflect.Pointer {
 		elem = elem.Elem()
 	}
 	return g.registry.GetEnum(elem)
@@ -1718,14 +1718,14 @@ func (g *Generator) lookupElemEnum(t reflect.Type) *EnumInfo {
 // Used by Zod codegen to substitute element schemas into z.array(...) /
 // z.record(...) / z.tuple([...]) instead of falling through to z.unknown().
 func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Slice && t.Kind() != reflect.Map && t.Kind() != reflect.Array {
 		return "", ""
 	}
 	elem := t.Elem()
-	if elem.Kind() == reflect.Ptr {
+	if elem.Kind() == reflect.Pointer {
 		elem = elem.Elem()
 	}
 	kind := goKindString(elem)
@@ -1838,7 +1838,7 @@ func byteSliceFormatShape(format string) (tsType string, goKind string, elemGoKi
 // goKindString returns a simplified Go kind string for type mapping in Zod/OpenAPI.
 // Resolves through pointers and named types to the underlying kind.
 func goKindString(t reflect.Type) string {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {
@@ -1955,7 +1955,7 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		}
 		keyType := g.goTypeToTS(t.Key())
 		return "Record<" + keyType + ", " + valType + ">"
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return g.goTypeToTS(t.Elem())
 	case reflect.Struct:
 		if t.PkgPath() == "" {
