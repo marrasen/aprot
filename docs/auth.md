@@ -135,6 +135,25 @@ The hook sets two different things, and the distinction matters:
 
 Per-execution resolution does not mean a database hit per request: memoize `lookupUser` per session or credential with a TTL of your choosing, and revocation takes effect within that TTL on every transport at once. Returning a value captured in the hook is the degenerate cache (TTL = connection lifetime) — supported, but a per-session cache is the better default. See the [scope document](scope.md) for why the cache itself stays on your side of the line.
 
+Both values are readable the same way on every transport. `aprot.PrincipalFrom(ctx)` returns the principal; `aprot.UserID(ctx)` returns the address, reading through to the connection on sockets. Over REST and MCP there is no connection, so the wrapping `http.Handler` that authenticates the request attaches both itself:
+
+```go
+func withAuth(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        user, err := authenticate(r)
+        if err != nil {
+            http.Error(w, "unauthorized", http.StatusUnauthorized)
+            return
+        }
+        ctx := aprot.WithPrincipal(r.Context(), user) // who is asking
+        ctx = aprot.WithUserID(ctx, user.ID)         // where to reach them
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+```
+
+Set both when they coincide; aprot never derives one from the other. Two properties of the address are worth knowing: it is read through rather than snapshotted at dispatch, so it can change while a handler runs (read it once into a local when you need a consistent value) — that is deliberate, because a refresh after a mid-session re-authentication should fan out to where the user is now. And it is never an authorization input: a non-empty address is not evidence that the caller authenticated.
+
 ```typescript
 const client = new ApiClient(getWebSocketUrl(), {
     getAuthToken: () => getToken({ skipCache: true }),   // re-run on every reconnect

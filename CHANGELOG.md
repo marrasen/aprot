@@ -24,6 +24,20 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   registered). On REST and MCP, a wrapping `http.Handler` attaches the
   principal directly with `WithPrincipal`. `Conn.UserID` remains the push
   fan-out address; the principal is the authorization input.
+- Request-scoped address seam: `WithUserID` / `UserID(ctx)` (#336). `UserID`
+  resolves the caller's fan-out address on every dispatch path — the first
+  non-empty of the value attached with `WithUserID` and
+  `Connection(ctx).UserID()` — so a handler can name where its caller is
+  reachable without knowing which transport the call arrived on. Sockets keep
+  using `Conn.SetUserID`; REST and MCP wrappers attach the address beside the
+  principal. `WithUserID(ctx, "")` is ignored and falls through to the
+  connection, so a wrapper forwarding an absent header cannot blank an
+  attached connection's address. The address is read through rather than
+  snapshotted at dispatch, so it can change while a handler runs: a handler
+  sees an address its own middleware just set, and a server-driven
+  subscription refresh after a mid-session re-authentication fans out to
+  where the user is now. It is an address, never an authorization input —
+  authorize on `PrincipalFrom`.
 
 ### Changed
 

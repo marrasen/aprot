@@ -16,6 +16,7 @@ const (
 	refreshQueueKey
 	streamCompleteHooksKey
 	principalKey
+	userIDKey
 )
 
 // Progress returns the ProgressReporter from the context.

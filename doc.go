@@ -519,6 +519,38 @@
 // while the principal is an authorization input. Set both when they
 // coincide.
 //
+// # Request Address: UserID(ctx)
+//
+// The address has its own seam, so a handler can name where its caller is
+// reachable without knowing which transport the call arrived on. [UserID]
+// resolves the first non-empty of: the value attached with [WithUserID],
+// then [Connection](ctx).UserID(). It returns "" when the execution carries
+// no address.
+//
+// On sockets the address comes from [Conn.SetUserID] as before (typically
+// from [Server.OnAuth] or auth middleware) and [UserID] reads it through the
+// connection. On request-scoped transports (REST, MCP) the same wrapping
+// http.Handler that attaches the principal attaches the address next to it:
+//
+//	ctx := aprot.WithPrincipal(r.Context(), user)
+//	ctx = aprot.WithUserID(ctx, user.ID)
+//	next.ServeHTTP(w, r.WithContext(ctx))
+//
+// WithUserID(ctx, "") is ignored and falls through to the connection, so a
+// wrapper that forwards a header unconditionally never blanks an attached
+// connection's address.
+//
+// The address is read through, not snapshotted at dispatch: a handler in the
+// very request whose middleware called [Conn.SetUserID] sees the new
+// address, and a server-driven subscription refresh after a mid-session
+// re-authentication fans out to where the user is now. The trade-off is that
+// the address can change while a handler runs — read it once into a local
+// when a consistent value is needed.
+//
+// Never authorize on the address. It answers "where do I reach this user",
+// not "who is asking"; a non-empty address is not evidence that the caller
+// authenticated. Read [PrincipalFrom] for the authorization input.
+//
 // # Connection Lifecycle
 //
 // [Server.OnConnect] and [Server.OnDisconnect] hooks react to connection
