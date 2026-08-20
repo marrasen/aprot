@@ -143,7 +143,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Middleware** — server-level and per-handler middleware chains
 - **Push events** — broadcast to all clients or target specific users
 - **Hierarchical tasks** — nested task trees with progress tracking, streamed to clients (see [`tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks) subpackage)
-- **Shared tasks** — server-wide tasks visible to all clients with typed metadata
+- **Shared tasks** — server-wide tasks visible to all clients with typed metadata, startable from any transport (a task started by an MCP tool or a REST call broadcasts to socket watchers)
 - **Task middleware** — opt-in `WithTaskMiddleware` wraps every task with a single `func(ctx, info, next) error` callback (mirrors `aprot.Middleware`); decorate ctx with your logger of choice (slog, zerolog, zap), observe start/completion/failure in one place
 - **Progress reporting** — built-in support for long-running operations
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause

@@ -7,16 +7,25 @@ import (
 )
 
 // taskMiddleware returns a middleware that sets up and finalizes the task
-// delivery, task slot, and task manager on each request context.
+// slot, task manager, and — where there is a client to deliver to — the task
+// delivery on each request context.
+//
+// The manager and the slot are installed on every execution, connection or
+// not. The task manager belongs to the [aprot.Server], so a shared task
+// started over MCP or REST registers with it and reaches socket watchers
+// like any other (#335). Only *delivery* is connection-scoped: with a
+// connection, per-request delivery as usual; without one, no delivery at
+// all. aprot never fakes a connection to make a connection-shaped path
+// work — connection presence is a transport fact, never a capability
+// signal (docs/scope.md).
 func taskMiddleware(tm *taskManager) aprot.Middleware {
 	return func(next aprot.Handler) aprot.Handler {
 		return func(ctx context.Context, req *aprot.Request) (any, error) {
-			conn := aprot.Connection(ctx)
-			if conn == nil {
-				return next(ctx, req)
+			var d *requestDelivery
+			if conn := aprot.Connection(ctx); conn != nil {
+				d = newRequestDelivery(conn, req.ID, tm.hooks)
+				ctx = withDelivery(ctx, d)
 			}
-			d := newRequestDelivery(conn, req.ID, tm.hooks)
-			ctx = withDelivery(ctx, d)
 			slot := &taskSlot{}
 			ctx = withTaskSlot(ctx, slot)
 			ctx = withTaskManager(ctx, tm)
@@ -57,6 +66,12 @@ func finalizeTaskSlot(ctx context.Context, slot *taskSlot, err error, d *request
 		} else {
 			node.setStatus(TaskNodeStatusCompleted)
 		}
-		d.sendSnapshot(nil)
+		// Invariant: a request-scoped node reaches the slot only via
+		// startRequestTask, which requires a *requestDelivery, so d is
+		// non-nil here whenever node is. The guard states that invariant
+		// rather than defending against a known case.
+		if d != nil {
+			d.sendSnapshot(nil)
+		}
 	}
 }

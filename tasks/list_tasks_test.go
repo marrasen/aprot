@@ -48,12 +48,14 @@ func TestListTasksReturnsSnapshotForConn(t *testing.T) {
 }
 
 // TestListTasksNoConnectionOrManager verifies ListTasks degrades to an empty
-// (non-nil) slice when there is no connection or the manager is unset, rather
-// than panicking.
+// (non-nil) slice rather than panicking when the manager is unset, and answers
+// normally on a connectionless path. Since #335 the absence of a connection is
+// not itself a reason to return nothing — see TestListTasksWithoutConnection.
 func TestListTasksNoConnectionOrManager(t *testing.T) {
 	_, tm := setupTestServer(t)
 
-	// No connection on the context.
+	// No connection on the context: answers from the manager, matching
+	// ownership on the address alone (here: none, and no tasks exist).
 	h := &tasksHandler{tm: tm}
 	states, err := h.ListTasks(context.Background())
 	if err != nil {
