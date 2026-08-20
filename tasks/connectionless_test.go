@@ -8,18 +8,6 @@ import (
 	"github.com/marrasen/aprot"
 )
 
-// connectionlessHandler starts a shared task from a handler, the way an MCP
-// tool or a REST endpoint would.
-type connectionlessHandler struct {
-	taskID string
-}
-
-func (h *connectionlessHandler) Start(ctx context.Context) (string, error) {
-	_, task := StartTask[struct{}](context.WithoutCancel(ctx), "bg-job", Shared())
-	h.taskID = task.ID()
-	return task.ID(), nil
-}
-
 // runThroughMiddleware executes fn through the task middleware with the given
 // context, the way a dispatch path would.
 func runThroughMiddleware(t *testing.T, tm *taskManager, ctx context.Context, fn aprot.Handler) (any, error) {

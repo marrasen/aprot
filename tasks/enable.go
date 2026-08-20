@@ -17,7 +17,7 @@ func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
 	return CancelSharedTask(ctx, taskId)
 }
 
-// ListTasks returns the current shared-task snapshot for the calling caller
+// ListTasks returns the current shared-task snapshot for the caller
 // (IsOwner is evaluated against them). Clients hydrate from it on mount and
 // reconnect: full TaskStateEvent broadcasts fire only on lifecycle changes,
 // so a consumer arriving mid-task would otherwise see nothing until the next
