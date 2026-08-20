@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.60.0] - 2026-08-20
+
 ### Upgrading
 
 Read this before upgrading; the details are in the sections below.
