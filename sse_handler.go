@@ -96,6 +96,23 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register connection
+	h.mu.Lock()
+	h.connections[connectionID] = conn
+	h.mu.Unlock()
+
+	// Join the fan-out set before the connected and config events reach the
+	// client: those events are its cue that the stream is usable, and a
+	// connection it can use must never be missing from Broadcast (#347).
+	if !h.server.registerConn(conn) {
+		h.server.disassociateUser(conn)
+		h.mu.Lock()
+		delete(h.connections, connectionID)
+		h.mu.Unlock()
+		_ = sseT.Close()
+		return
+	}
+
 	// Send connected event with connection ID
 	connMsg := ConnectedMessage{
 		Type:         TypeConnected,
@@ -107,24 +124,6 @@ func (h *sseHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// Send config
 	configData, _ := json.Marshal(configMessage(h.server.options, false))
 	sseT.sendEvent("config", configData)
-
-	// Register connection
-	h.mu.Lock()
-	h.connections[connectionID] = conn
-	h.mu.Unlock()
-
-	// Register, but don't block forever if the server has already shut down
-	// (run() has exited and will never read s.register).
-	select {
-	case h.server.register <- conn:
-	case <-h.server.done:
-		h.server.disassociateUser(conn)
-		h.mu.Lock()
-		delete(h.connections, connectionID)
-		h.mu.Unlock()
-		_ = sseT.Close()
-		return
-	}
 
 	// When an auth hook is registered, the client must authenticate over a
 	// POST /rpc auth frame; close the stream if it doesn't within AuthTimeout.

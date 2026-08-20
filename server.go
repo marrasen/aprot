@@ -185,7 +185,6 @@ type Server struct {
 	conns           map[*Conn]struct{}
 	userConns       map[string]map[*Conn]struct{} // userID -> connections
 	mu              sync.RWMutex
-	register        chan *Conn
 	unregister      chan *Conn
 	middleware      []Middleware
 	nextConnID      uint64 // atomic counter for connection IDs
@@ -293,7 +292,6 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		},
 		conns:         make(map[*Conn]struct{}),
 		userConns:     make(map[string]map[*Conn]struct{}),
-		register:      make(chan *Conn),
 		unregister:    make(chan *Conn),
 		middleware:    []Middleware{},
 		options:       options,
@@ -742,18 +740,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send config directly before pumps start
-	sendConfigWS(ws, s.options, binaryFrames)
-
-	// Register the connection, but don't block forever if the server has
-	// already shut down (run() has exited and will never read s.register).
-	select {
-	case s.register <- conn:
-	case <-s.done:
+	// Join the fan-out set before the client can see the connection: the
+	// config frame below is the client's cue that it may start talking, and a
+	// connection it can talk to must never be missing from Broadcast (#347).
+	if !s.registerConn(conn) {
 		s.disassociateUser(conn)
 		_ = ws.Close()
 		return
 	}
+
+	// Send config directly before pumps start
+	sendConfigWS(ws, s.options, binaryFrames)
 
 	// When an auth hook is registered, the connection is pending until it sends
 	// a valid auth frame; close it if that doesn't happen within AuthTimeout.
@@ -775,6 +772,47 @@ func (s *Server) Broadcast(data any) {
 	for _, conn := range s.connsSnapshot() {
 		_ = conn.push(event, data)
 	}
+}
+
+// registerConn adds conn to the server's fan-out set, so [Server.Broadcast],
+// [Server.ForEachConn] and [Server.PushToUser] reach it. Every accept path
+// calls it — WebSocket, byte-stream, SSE — so the ordering cannot drift per
+// transport.
+//
+// It must be called before the connection becomes visible to the client:
+// before the config frame reaches the wire, and before the read and write
+// pumps start. Registration used to be a handoff to run() over a channel, so
+// the insert landed on another goroutine after the client already held the
+// config frame; a client could then complete request round-trips while
+// connsSnapshot did not contain it, and every broadcast in that window was
+// silently dropped (#347). A connection that can talk to the server is now
+// never absent from the server's fan-out set.
+//
+// It reports false when the server is shutting down. Stop's close sweep has
+// already run by then, so admitting the connection would leave it open
+// forever and keep run() from ever seeing an empty set; the caller must
+// abandon it. Reading s.stopping under s.mu is what makes that safe: Stop
+// stores the flag before taking the lock to snapshot, so this either inserts
+// before the snapshot (and the sweep closes the connection) or observes the
+// flag and refuses.
+//
+// The observer callback fires after the insert, outside the lock. No
+// unregister can be in flight yet, because the pumps that send one start
+// later in the caller's accept path — so ConnectionClosed can never precede
+// ConnectionOpened.
+func (s *Server) registerConn(conn *Conn) bool {
+	s.mu.Lock()
+	if s.stopping.Load() {
+		s.mu.Unlock()
+		return false
+	}
+	s.conns[conn] = struct{}{}
+	s.mu.Unlock()
+
+	if s.observer != nil {
+		s.observer.ConnectionOpened(conn)
+	}
+	return true
 }
 
 // connsSnapshot copies the current connection set under the read lock.
@@ -817,21 +855,6 @@ func (s *Server) run() {
 	stopCh := s.stopCh
 	for {
 		select {
-		case conn := <-s.register:
-			if s.stopping.Load() {
-				// This connection registered after Stop's close sweep, so it
-				// would otherwise never be closed and would keep run() from
-				// ever seeing an empty connection set. Close it and don't
-				// track it; its pumps tear down on their own.
-				conn.close()
-				continue
-			}
-			s.mu.Lock()
-			s.conns[conn] = struct{}{}
-			s.mu.Unlock()
-			if s.observer != nil {
-				s.observer.ConnectionOpened(conn)
-			}
 		case conn := <-s.unregister:
 			s.mu.Lock()
 			_, existed := s.conns[conn]

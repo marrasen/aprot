@@ -374,10 +374,11 @@ func TestSubscribeRegisterAfterCloseDoesNotLeak(t *testing.T) {
 
 // --- Server.Stop lifecycle (#207 P2) ---
 
-// (a) A connection that registers after shutdown began must be closed by
-// run() and must not keep the server alive, or Stop hangs forever waiting
-// for the connection set to drain.
-func TestStopClosesConnectionRegisteredDuringShutdown(t *testing.T) {
+// (a) A connection that tries to register after shutdown began must be
+// refused, and must not keep the server alive — otherwise Stop hangs forever
+// waiting for the connection set to drain. Stop's close sweep has already run
+// by then, so an admitted connection would never be closed.
+func TestStopRefusesConnectionRegisteredDuringShutdown(t *testing.T) {
 	server := NewServer(NewRegistry())
 
 	rt := &recordingTransport{}
@@ -388,9 +389,14 @@ func TestStopClosesConnectionRegisteredDuringShutdown(t *testing.T) {
 		id:        99,
 	}
 
-	// Simulate ServeHTTP registering a connection after Stop has begun.
+	// Simulate an accept path reaching registration after Stop has begun.
 	server.stopping.Store(true)
-	server.register <- conn
+	if server.registerConn(conn) {
+		t.Fatal("registerConn admitted a connection during shutdown")
+	}
+	if n := server.ConnectionCount(); n != 0 {
+		t.Errorf("connection count = %d, want 0 — a refused connection was tracked", n)
+	}
 
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- server.Stop(context.Background()) }()

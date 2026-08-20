@@ -47,9 +47,18 @@ consistent with them.
   refresh, and request-scoped (REST attached/serverless, MCP). Streaming and
   refresh bypass `Server.invoke` by design, so an invariant installed only
   at that seam silently misses both. Panic policy (`panicError`, #327),
-  wire-error mapping (`Conn.sendErrorFor`), and principal resolution
-  (`Conn.resolvePrincipal`, #330) all follow this shape. A rule that can
+  wire-error mapping (`Conn.sendErrorFor`), principal resolution
+  (`Conn.resolvePrincipal`, #330), and connection registration
+  (`Server.registerConn`, #347) all follow this shape. A rule that can
   drift per dispatch path eventually does.
+- **A connection the client can use is never missing from the server's
+  fan-out set.** The inverse of the presence rule below: presence is a
+  transport fact, so the server's own view of it must not lag the client's.
+  Registration therefore completes in the accepting goroutine, before the
+  config frame reaches the wire and before the pumps start, on all three
+  accept paths (#347). It used to be a handoff to `run()` over a channel, so
+  a client holding the config frame could complete request round-trips while
+  `Broadcast` could not see it.
 - **Connection presence is a transport fact, never an auth signal.**
   `Connection(ctx) != nil` means "there is a socket here" — nil on REST and
   MCP, and that nil is correct (#329). Nothing in aprot may fake a
