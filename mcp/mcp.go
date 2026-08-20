@@ -33,6 +33,22 @@
 // The adapter is stateless: it implements the JSON-RPC subset MCP requires
 // for tool serving (initialize, ping, tools/list, tools/call) over HTTP POST,
 // without sessions or server-initiated streams.
+//
+// # Experimental
+//
+// This package is experimental: its API may change without notice, and
+// without a breaking-change entry, until the first real consumer arrives.
+// There are none yet, and the MCP specification itself churns — the adapter
+// pins revision 2025-06-18 and accepts older revisions during negotiation.
+// The handlers it serves are not experimental; only this adapter's own
+// surface is.
+//
+// It is kept, rather than deleted for lack of users, because it is the second
+// consumer of aprot's request-scoped dispatch seam: with REST alone that seam
+// drifted REST-shaped for several releases (#316, #330). The keep-condition is
+// that CI keeps exercising it — the invariant matrix (#339) runs every
+// cross-path invariant against this adapter. If that coverage ever lapses,
+// deleting the package is the right call (#340).
 package mcp
 
 import (

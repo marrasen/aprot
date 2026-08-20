@@ -972,7 +972,7 @@ await client.refreshAuth(freshToken);
 - **Mid-session refresh** — the same `auth` frame on a live connection updates the token/identity without reconnecting. A *failed* refresh keeps the existing session (a live connection is never downgraded).
 - **Both transports** — WebSocket sends the `auth` frame directly; SSE sends it in the first `POST /rpc` body (the `EventSource` GET can't set headers). `auth_ok`/`auth_error` arrive over the stream either way.
 - **Backward compatible** — with no `OnAuth` hook, connections behave exactly as before (URL-token via `OnConnect` still works). `ErrAuthFailed` uses code `-32005`; the TS client exposes `err.isAuthFailed()`.
-- **Anonymous-friendly mode** — `ServerOptions.AllowAnonymous` keeps the hook but admits unauthenticated connections, for apps that mix public and protected APIs on one endpoint. Anonymous connections run immediately with `conn.UserID() == ""` and no auth timeout; a client that authenticates later upgrades the live session in place, and a token that *is* offered and rejected still closes the connection. Gate protected handlers on `UserID` / middleware — admitting the connection is not authorizing the call.
+- **Anonymous-friendly mode** — `ServerOptions.AllowAnonymous` keeps the hook but admits unauthenticated connections, for apps that mix public and protected APIs on one endpoint. Anonymous connections run immediately with `conn.UserID() == ""` and no auth timeout; a client that authenticates later upgrades the live session in place, and a token that *is* offered and rejected still closes the connection. Gate protected handlers on the principal (`aprot.PrincipalFrom(ctx)`) in the handler or in middleware — admitting the connection is not authorizing the call, and neither the address nor connection presence is an authorization input.
 
 ```go
 server := aprot.NewServer(registry, aprot.ServerOptions{AllowAnonymous: true})
@@ -1110,6 +1110,15 @@ REST requests run through the same request pipeline as WebSocket/SSE, via the tr
 On request-scoped transports `aprot.Connection(ctx)` is **nil** — connection presence means "there is a socket here", never "the caller authenticated", so don't gate auth on it. A wrapper that authenticates the request itself can still hand middleware a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token).
 
 ## MCP Adapter
+
+> **Experimental.** This adapter's API may change without notice, and without a
+> breaking-change entry, until the first real consumer arrives — there are none
+> yet, and the MCP specification itself churns (the adapter pins revision
+> `2025-06-18`). The handlers it serves are not experimental; only the
+> adapter's own surface is. It is kept because it is the second consumer of
+> aprot's request-scoped dispatch seam, and CI exercises it through the
+> invariant matrix — see [`docs/scope.md`](docs/scope.md).
+
 
 Serve selected handlers as MCP (Model Context Protocol) tools, so an AI assistant calls the same handlers the browser does — through the same pipeline, the same middleware, and the same auth. Exposure is per-method opt-in, mirroring REST: signatures designed for a typed TS client are often hostile to a model, so you curate a subset and set model-facing names, descriptions and behavior hints:
 

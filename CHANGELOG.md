@@ -10,8 +10,37 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Upgrading
+
+Read this before upgrading; the details are in the sections below.
+
+1. **Go 1.27 is now the minimum** and aprot marshals with the standard
+   library's `encoding/json/v2`. If you implement custom marshalers or pass
+   `jsontext.Value` around, rewrite `github.com/go-json-experiment/json` to
+   `encoding/json/v2` and `.../json/jsontext` to `encoding/json/jsontext`.
+   A pin on the staging module to match aprot's is no longer needed (#344).
+2. **`aprot.Connection(ctx)` is nil over MCP.** The adapter no longer installs
+   a detached connection. Middleware shaped `Connection(ctx) == nil → reject`
+   used to admit every anonymous MCP request; it now rejects them. Authorize
+   on `aprot.PrincipalFrom(ctx)` instead (#331, #329, #326).
+3. **Panic values no longer reach clients.** Error frames say
+   `handler panicked` instead of `handler panicked: <value>`, and
+   `OnStreamComplete` hooks receive a generic `CodeInternalError`. Update
+   anything that parsed the old message (#327).
+4. **Shared-task cancel rights are matched by address**, not connection ID, so
+   an authenticated caller can cancel its own task from another connection or
+   transport. Install a `CancelAuthorizer` if you need a stricter policy
+   (#335).
+
+If you gate handlers on `Conn.UserID` or on connection presence, move that
+check to the principal: identity is now populated the same way on every
+dispatch path, and `UserID` is documented as an address rather than an
+authorization input (#330, #336, #337).
+
 ### Added
 
+- `Server.Logger()` returns the server's configured logger, so middleware and
+  handlers can log through the same sink aprot does (#327).
 - Request-scoped identity: a **principal** carried in the request context
   (#330). `WithPrincipal` attaches it, `PrincipalFrom` reads it back (nil
   when anonymous) — the principal is whatever your auth resolves to; aprot
@@ -41,6 +70,20 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Changed
 
+- The `aprot/mcp` adapter is now marked **experimental** (#340). Its API may
+  change without notice, and without a breaking-change entry, until the first
+  real consumer arrives; the MCP specification churns and the adapter pins
+  revision 2025-06-18. The handlers it serves are not experimental — only the
+  adapter's own surface is. The ruling for keeping it, and the CI coverage
+  that is its keep-condition, are recorded in `docs/scope.md`.
+- Handler panics no longer put the panic value on the wire (#327). Unary
+  socket, stream-end, and refresh error frames changed from
+  `handler panicked: <value>` to a generic `handler panicked`; the value and
+  the stack now go only to the server log. **This is security-relevant** — a
+  panic value can embed a token or a DSN, and REST and MCP endpoints are often
+  reachable anonymously. `OnStreamComplete` hooks now receive the generic
+  `CodeInternalError` instead of the raw value, so a hook that parsed the old
+  message needs updating.
 - **Breaking:** aprot now marshals with the standard library's
   `encoding/json/v2` and `encoding/json/jsontext` instead of the
   `github.com/go-json-experiment/json` staging module, which raises the
@@ -80,6 +123,15 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- Handler panics on REST and MCP became a dropped connection instead of a
+  response (#327). They are now recovered at the shared dispatch seam and
+  returned as a 500 JSON error or a JSON-RPC `-32603`, including panics raised
+  from a custom `MarshalJSON` on a result type. `panic(http.ErrAbortHandler)`
+  still propagates to net/http, which is the stdlib's abort-this-response
+  contract.
+- Handler panics are now logged server-side with the method, the panic value,
+  and the stack (#327). Previously the value reached the client and nothing
+  reached the log.
 - Codegen typed a `json.RawMessage` field as `number[]` instead of `unknown`
   on Go 1.27 (#344). Since Go 1.27 `encoding/json.RawMessage` is an alias for
   `jsontext.Value`, so reflection reports the `jsontext` identity and the
