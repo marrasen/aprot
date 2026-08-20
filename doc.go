@@ -365,6 +365,11 @@
 // adapter panics at construction if a RegisterMCP group has no tools
 // enabled via EnableMCP, since such a group would be reachable nowhere.
 //
+// The aprot/mcp adapter is experimental: its API may change without notice,
+// and without a breaking-change entry, until the first real consumer arrives.
+// The MCP specification churns and the adapter pins revision 2025-06-18. The
+// handlers it serves are not experimental; only the adapter's own surface is.
+//
 // Godoc drives descriptions in OpenAPI and MCP output, and parameter names
 // in REST routes. At development time it is extracted from source on demand;
 // deployed binaries have no source, so [GenerateSourceDocsGo] emits a Go
@@ -474,8 +479,9 @@
 // run with [Conn.UserID] "" until they authenticate; a client that sends an
 // auth frame later upgrades the live session in place, and a token that is
 // offered and rejected still closes an unauthenticated connection. Admitting a
-// connection is not authorizing the call — gate protected handlers on the user
-// ID or middleware. Anonymous connections carry no user ID, so
+// connection is not authorizing the call — gate protected handlers on the
+// principal ([PrincipalFrom]) in the handler or in middleware, never on the
+// address or on connection presence. Anonymous connections carry no user ID, so
 // [Server.PushToUser] and [Server.DisconnectUser] cannot reach them until they
 // authenticate.
 //
@@ -571,8 +577,10 @@
 //	    if err != nil {
 //	        return aprot.ErrConnectionRejected("invalid session")
 //	    }
-//	    conn.SetUserID(session.UserID)
-//	    conn.Set(principalKey{}, session.User)
+//	    conn.SetUserID(session.UserID) // address: where to reach this user
+//	    conn.SetPrincipalProvider(func(ctx context.Context) (any, error) {
+//	        return lookupUser(ctx, session.UserID) // identity: who is asking
+//	    })
 //	    return nil
 //	})
 //
@@ -587,9 +595,14 @@
 // reconnect. That is the contract short-lived credentials rely on, so each
 // attempt carries a freshly minted token rather than replaying a stale one.
 //
-// [Conn.SetUserID] / [Conn.UserID] is a routing identity used for push
-// targeting ([Server.PushToUser]). It is not a security boundary — use the
-// stored principal for authorization decisions.
+// [Conn.SetUserID] / [Conn.UserID] is an address used for push targeting
+// ([Server.PushToUser]). It is not a security boundary. Authorize on the
+// request-scoped principal instead, read with [PrincipalFrom] — see "Request
+// Identity: the Principal". Storing a principal in the connection's key-value
+// store is not equivalent: a value stashed that way is invisible to
+// PrincipalFrom, and it freezes identity for the connection's lifetime, so a
+// revoked role waits for a reconnect and server-driven refreshes keep running
+// against the stale snapshot.
 //
 // To revoke access mid-session — e.g. when an admin deletes a user who still
 // holds an authenticated connection — [Server.DisconnectUser] gracefully

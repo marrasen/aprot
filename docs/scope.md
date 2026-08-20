@@ -90,6 +90,20 @@ consistent with them.
   code, so it has no drift surface. The carrier for request-scoped paths
   (`WithUserID`) is in for the same reason `WithPrincipal` is: it moves a
   value between the wire and the handler uniformly, and never inspects it.
+- **MCP is in as a transport adapter, and experimental until it has a
+  user.** It falls on the "in" side of the rule — it moves calls onto the same
+  handlers through the same pipeline — so it gets full correctness, with the
+  subscription path winning any trade-off. It is marked experimental because
+  no real consumer exists yet and the specification churns (the adapter pins
+  revision 2025-06-18): its API may be revised without a breaking-change
+  entry. It is kept rather than deleted for lack of users because it is the
+  **second consumer of the request-scoped seam**, and one consumer is not
+  enough — with REST alone that seam drifted REST-shaped for several releases
+  (#316, #330). An adapter nobody uses is still the canary for the uniformity
+  guarantee, but **only while CI exercises it**: the invariant matrix (#339)
+  is the standing keep-condition. If that coverage lapses, deletion becomes
+  the right call, on the same "unused in practice" standard as the SSE
+  proposal (#280). Ruling recorded for #340.
 - **Auth mechanics in, auth meaning out.** First-message auth, the
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and
