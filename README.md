@@ -1002,6 +1002,9 @@ server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
 ```
 
 - **REST / MCP** — a wrapping `http.Handler` that authenticates the request attaches the resolved principal directly: `r = r.WithContext(aprot.WithPrincipal(r.Context(), user))`.
+- **REST / MCP with a detached connection** — a wrapper that installs a connection (`aprot.WithConnection` + `server.NewDetachedConn()`, so connection-shaped middleware runs unchanged) can register a `PrincipalProvider` on it instead, and aprot resolves it for the request. One auth setup then serves sockets and request-scoped transports alike.
+
+**Precedence:** when both are present, an explicit `WithPrincipal` upstream wins and the provider does not run — the wrapper that authenticated the request is the authority on that execution. `aprot.WithPrincipal(ctx, nil)` counts as resolved too, so an explicit anonymous result is never overwritten. A provider error fails the execution before middleware runs, with its own wire code.
 
 Because the provider runs per execution, the natural way to bound identity lookups is a session cache **you** own: memoize the resolver keyed by credential or session ID with a TTL, and revocation takes effect within that TTL on every transport at once. Resolving once in `OnAuth` and returning the snapshot is the degenerate cache (TTL = connection lifetime).
 

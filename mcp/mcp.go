@@ -23,7 +23,12 @@
 // [aprot.WithPrincipal], read back via [aprot.PrincipalFrom] in middleware
 // and handlers). A wrapper may also install a connection via
 // [aprot.WithConnection] (see [aprot.Server.NewDetachedConn]) for
-// middleware that reads per-connection state.
+// middleware that reads per-connection state; a [aprot.PrincipalProvider]
+// registered on that connection is resolved for the tool call, so one auth
+// setup can serve sockets and MCP alike. An explicit [aprot.WithPrincipal]
+// wins over the provider — the wrapper that authenticated the request is the
+// authority on that execution — and a provider error rejects the tool call
+// instead of running it anonymously.
 //
 // The adapter is stateless: it implements the JSON-RPC subset MCP requires
 // for tool serving (initialize, ping, tools/list, tools/call) over HTTP POST,

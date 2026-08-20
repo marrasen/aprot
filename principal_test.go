@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -375,5 +376,240 @@ func TestPrincipal_RESTWrapper(t *testing.T) {
 	n, _ = resp2.Body.Read(buf)
 	if body := string(buf[:n]); !strings.Contains(body, `""`) {
 		t.Fatalf("anon body = %s, want empty who", body)
+	}
+}
+
+// --- Request-scoped provider resolution (#337) ---
+
+// invokeProviderState is a provider whose result, error, and call count are
+// all observable, for the request-scoped resolution tests.
+type invokeProviderState struct {
+	calls atomic.Int64
+	who   string
+	err   error
+}
+
+func (s *invokeProviderState) provider(ctx context.Context) (any, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.who, nil
+}
+
+// newInvokeServer returns a server whose handlers report the principal, plus
+// a detached connection carrying state's provider — the shape a wrapper
+// reusing its socket auth over REST/MCP installs with WithConnection.
+func newInvokeServer(t *testing.T, state *invokeProviderState) (*Server, *Conn) {
+	t.Helper()
+	registry := NewRegistry()
+	registry.Register(&principalHandlers{})
+	server := NewServer(registry)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+	conn := server.NewDetachedConn()
+	conn.SetPrincipalProvider(state.provider)
+	return server, conn
+}
+
+// A detached connection's provider populates the principal on request-scoped
+// executions. Before #337 this was silently anonymous: resolvePrincipal ran
+// only on the three socket dispatch sites, so identical middleware saw
+// identity over WebSocket and nil over REST/MCP.
+func TestPrincipal_InvokeResolvesDetachedConnProvider(t *testing.T) {
+	state := &invokeProviderState{who: "alice"}
+	server, conn := newInvokeServer(t, state)
+
+	ctx := WithConnection(context.Background(), conn)
+	result, err := server.Invoke(ctx, "principalHandlers.Who", nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	who, _ := result.(*whoResult)
+	if who == nil || who.Who != "alice" {
+		t.Fatalf("handler saw %+v, want who=alice", who)
+	}
+	if got := state.calls.Load(); got != 1 {
+		t.Errorf("provider calls = %d, want 1", got)
+	}
+}
+
+// Middleware sees the principal too — it is resolved before the chain runs,
+// not somewhere inside it.
+func TestPrincipal_InvokeResolvesBeforeMiddleware(t *testing.T) {
+	state := &invokeProviderState{who: "alice"}
+	registry := NewRegistry()
+	registry.Register(&principalHandlers{})
+	server := NewServer(registry)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+
+	var seen any
+	var ran atomic.Bool
+	server.Use(func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			ran.Store(true)
+			seen = PrincipalFrom(ctx)
+			return next(ctx, req)
+		}
+	})
+
+	conn := server.NewDetachedConn()
+	conn.SetPrincipalProvider(state.provider)
+	ctx := WithConnection(context.Background(), conn)
+	if _, err := server.Invoke(ctx, "principalHandlers.Who", nil); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if !ran.Load() {
+		t.Fatal("middleware never ran")
+	}
+	if seen != any("alice") {
+		t.Errorf("middleware saw principal %v, want alice", seen)
+	}
+}
+
+// A provider error fails the execution with its own wire code, before
+// middleware runs and without reaching the handler — the same contract the
+// socket paths have.
+func TestPrincipal_InvokeProviderErrorIsTyped(t *testing.T) {
+	state := &invokeProviderState{err: ErrUnauthorized("token expired")}
+	registry := NewRegistry()
+	h := &principalHandlers{}
+	registry.Register(h)
+	server := NewServer(registry)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+
+	var mwRan atomic.Bool
+	server.Use(func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) (any, error) {
+			mwRan.Store(true)
+			return next(ctx, req)
+		}
+	})
+
+	conn := server.NewDetachedConn()
+	conn.SetPrincipalProvider(state.provider)
+	ctx := WithConnection(context.Background(), conn)
+
+	_, err := server.Invoke(ctx, "principalHandlers.Who", nil)
+	if err == nil {
+		t.Fatal("Invoke succeeded despite a provider error")
+	}
+	var perr *ProtocolError
+	if !errors.As(err, &perr) {
+		t.Fatalf("error %v is not a ProtocolError", err)
+	}
+	if perr.Code != CodeUnauthorized {
+		t.Errorf("code = %d, want CodeUnauthorized (%d)", perr.Code, CodeUnauthorized)
+	}
+	if h.handlerRan.Load() {
+		t.Error("handler ran despite a provider error")
+	}
+	if mwRan.Load() {
+		t.Error("middleware ran despite a provider error")
+	}
+}
+
+// An explicit WithPrincipal upstream wins over the connection's provider:
+// the wrapper that authenticated the request is the authority on that
+// execution. The provider must not run at all.
+func TestPrincipal_InvokeExplicitPrincipalWins(t *testing.T) {
+	state := &invokeProviderState{who: "from-provider"}
+	server, conn := newInvokeServer(t, state)
+
+	ctx := WithConnection(context.Background(), conn)
+	ctx = WithPrincipal(ctx, "from-wrapper")
+	result, err := server.Invoke(ctx, "principalHandlers.Who", nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	who, _ := result.(*whoResult)
+	if who == nil || who.Who != "from-wrapper" {
+		t.Fatalf("handler saw %+v, want who=from-wrapper", who)
+	}
+	if got := state.calls.Load(); got != 0 {
+		t.Errorf("provider calls = %d, want 0 — the wrapper's value was overwritten or the provider ran needlessly", got)
+	}
+}
+
+// An explicit anonymous result is still a result: WithPrincipal(ctx, nil)
+// means "resolved, anonymous" and must not be re-resolved by the provider.
+// This is what the principal box buys over a bare nil check.
+func TestPrincipal_InvokeExplicitNilPrincipalWins(t *testing.T) {
+	state := &invokeProviderState{who: "from-provider"}
+	server, conn := newInvokeServer(t, state)
+
+	ctx := WithConnection(context.Background(), conn)
+	ctx = WithPrincipal(ctx, nil)
+	result, err := server.Invoke(ctx, "principalHandlers.Who", nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	who, _ := result.(*whoResult)
+	if who == nil || who.Who != "" {
+		t.Fatalf("handler saw %+v, want an anonymous execution", who)
+	}
+	if got := state.calls.Load(); got != 0 {
+		t.Errorf("provider calls = %d, want 0 — an explicit nil principal was treated as unresolved", got)
+	}
+}
+
+// An execution with no connection and no wrapper value stays anonymous, and
+// nothing panics reaching for a provider that isn't there.
+func TestPrincipal_InvokeWithoutConnectionIsAnonymous(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(&principalHandlers{})
+	server := NewServer(registry)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+
+	result, err := server.Invoke(context.Background(), "principalHandlers.Who", nil)
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	who, _ := result.(*whoResult)
+	if who == nil || who.Who != "" {
+		t.Fatalf("handler saw %+v, want an anonymous execution", who)
+	}
+}
+
+// The headline regression guard for the double-resolve trap. Socket unary and
+// subscribe-first-run resolve the principal and then dispatch through
+// Server.invoke; invoke must not run the provider a second time, or the
+// documented "once per execution" contract breaks and every consumer's
+// identity lookup doubles.
+func TestPrincipal_ProviderRunsExactlyOncePerSocketExecution(t *testing.T) {
+	h := &principalHandlers{}
+	state := &principalProviderState{}
+	ts, _ := newPrincipalServer(t, h, state)
+
+	ws := connectWSPath(t, ts, "")
+	defer ws.Close()
+	sendAuth(t, ws, "good:alice")
+	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
+		t.Fatalf("expected auth_ok, got %q", f.Type)
+	}
+
+	// One unary request: exactly one resolution.
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeRequest, ID: "1", Method: "principalHandlers.Who"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var f principalFrame
+	if err := ws.ReadJSON(&f); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if f.Result == nil || f.Result.Who != "alice" {
+		t.Fatalf("got %+v, want who=alice", f)
+	}
+	if got := state.calls.Load(); got != 1 {
+		t.Fatalf("provider calls after one unary request = %d, want 1", got)
+	}
+
+	// One subscribe: one more, not two.
+	if err := ws.WriteJSON(IncomingMessage{Type: TypeSubscribe, ID: "sub-1", Method: "principalHandlers.SubscribeWho"}); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := ws.ReadJSON(&f); err != nil {
+		t.Fatalf("read subscribe response: %v", err)
+	}
+	if got := state.calls.Load(); got != 2 {
+		t.Errorf("provider calls after adding one subscribe = %d, want 2", got)
 	}
 }

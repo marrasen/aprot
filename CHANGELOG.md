@@ -55,6 +55,20 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- `Server.Invoke` now resolves the principal provider registered on a
+  connection carried in the request context, so REST and MCP executions are no
+  longer silently anonymous when a consumer reuses their socket auth by
+  installing a detached connection (#337). `resolvePrincipal` ran only at the
+  three socket dispatch sites, so identical middleware saw identity over
+  WebSocket and `PrincipalFrom(ctx) == nil` over REST and MCP — silent
+  anonymity, or an auth bypass for middleware that reads a nil principal as
+  "auth not configured". Precedence is defined and documented: an explicit
+  `WithPrincipal` upstream wins and the provider does not run, since the
+  wrapper that authenticated the request is the authority on that execution.
+  `WithPrincipal(ctx, nil)` now counts as resolved, so an explicit anonymous
+  result is never overwritten. Provider errors fail the execution before
+  middleware runs, with the error's own wire code, exactly as on the socket
+  paths. The provider still runs exactly once per execution on every path.
 - `Broadcast`, `ForEachConn` and `PushToUser` could silently miss a client
   that had just connected, on WebSocket, SSE and the byte-stream transport
   (#347). A connection became usable by the client — config frame sent, and
