@@ -17,17 +17,25 @@ func (h *tasksHandler) CancelTask(ctx context.Context, taskId string) error {
 	return CancelSharedTask(ctx, taskId)
 }
 
-// ListTasks returns the current shared-task snapshot for the calling
-// connection (IsOwner is evaluated against the caller). Clients hydrate from
-// it on mount and reconnect: full TaskStateEvent broadcasts fire only on
-// lifecycle changes, so a consumer arriving mid-task would otherwise see
-// nothing until the next lifecycle event.
+// ListTasks returns the current shared-task snapshot for the calling caller
+// (IsOwner is evaluated against them). Clients hydrate from it on mount and
+// reconnect: full TaskStateEvent broadcasts fire only on lifecycle changes,
+// so a consumer arriving mid-task would otherwise see nothing until the next
+// lifecycle event.
+//
+// It answers on every transport. Request-scoped callers (REST, MCP) have no
+// connection, so ownership is matched on their address alone — this is how a
+// caller that started a shared task over MCP polls it, since the tool result
+// carries the task ID but no delivery follows it.
 func (h *tasksHandler) ListTasks(ctx context.Context) ([]SharedTaskState, error) {
-	conn := aprot.Connection(ctx)
-	if h.tm == nil || conn == nil {
+	if h.tm == nil {
 		return []SharedTaskState{}, nil
 	}
-	return h.tm.snapshotAllForConn(conn.ID(), conn.UserID()), nil
+	var connID uint64
+	if conn := aprot.Connection(ctx); conn != nil {
+		connID = conn.ID()
+	}
+	return h.tm.snapshotAllForConn(connID, aprot.UserID(ctx)), nil
 }
 
 // Enable registers the shared task system with the registry. Pass options

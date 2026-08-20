@@ -116,8 +116,8 @@
 //
 // [SharedSubTask] creates a shared task that also routes nested [SubTask],
 // [Output], and [TaskProgress] calls through the shared delivery system.
-// If no connection or task manager is available, it falls back to a
-// regular [SubTask]:
+// If the task system is not enabled (no task manager available), it falls
+// back to a regular [SubTask]:
 //
 //	err := tasks.SharedSubTask(ctx, "Sync accounts", func(ctx context.Context) error {
 //	    return tasks.SubTask(ctx, "Fetching", func(ctx context.Context) error {
@@ -178,31 +178,63 @@
 //
 // Clients can cancel shared tasks via the generated CancelTask handler.
 // On the server side, use [CancelSharedTask] directly. By default
-// cancellation is owner-scoped: only the connection that started a task may
-// cancel it; any other caller is refused with CodeForbidden. (Internal
-// callers that already hold the task can still cancel it directly via the
-// task handle.)
+// cancellation is owner-scoped: the task's owner may cancel it, and any other
+// caller is refused with CodeForbidden. (Internal callers that already hold
+// the task can still cancel it directly via the task handle.)
 //
-// Because that default is keyed by connection ID, a client loses the right to
-// cancel its own task across a reconnect. Pass [WithCancelAuthorizer] to
-// install any other policy — "same user, surviving reconnect", say — from a
-// [TaskCancelInfo] carrying the owning connection and user:
+// Ownership is matched on the caller's address ([aprot.UserID]) when the
+// owner authenticated, and on the creating connection when it did not. Two
+// consequences: cancel rights survive a reconnect, and a caller on a
+// request-scoped transport can cancel the task it started, having no
+// connection of its own. This is the same rule clients see as
+// SharedTaskState.IsOwner, so a rendered cancel button is never refused.
+//
+// Pass [WithCancelAuthorizer] to install any other policy from a
+// [TaskCancelInfo] carrying the owning connection and address. The authorizer
+// runs on every transport, so read the caller's identity from the
+// request-scoped principal rather than the connection, which is nil over REST
+// and MCP:
 //
 //	tasks.Enable(registry, tasks.WithCancelAuthorizer(
 //	    func(ctx context.Context, t tasks.TaskCancelInfo) error {
-//	        if aprot.Connection(ctx).UserID() != t.OwnerUserID {
-//	            return aprot.ErrForbidden("not the task owner")
+//	        user, ok := aprot.PrincipalFrom(ctx).(*myauth.User)
+//	        if !ok || !user.IsAdmin {
+//	            return aprot.ErrForbidden("not permitted")
 //	        }
 //	        return nil
 //	    },
 //	))
 //
-// # REST and other transports without a client channel
+// # Transports without a client channel
 //
-// [StartTask] and the Shared variant need a delivery channel (WebSocket/SSE)
-// to push task state. On transports that have none — notably the REST
-// adapter, which has no connection or task manager on the context — they
-// return a usable no-op [Task] rather than nil, so handler code written for
-// WebSocket (Progress, Output, SetMeta, Close, …) runs without panicking;
-// the task state simply isn't delivered anywhere.
+// The task manager belongs to the [aprot.Server], not to a connection, so a
+// shared task started over a request-scoped transport (REST, MCP) registers
+// with it and broadcasts to socket watchers exactly like one started over a
+// socket. What a connection decides is *delivery*, not registration: with a
+// connection, per-request task updates are pushed as usual; without one, no
+// updates are pushed and nothing fakes a connection to pretend otherwise.
+//
+// The practical shape on those transports: the caller gets the task ID back
+// in the response and follows the task through the ListTasks RPC, which
+// answers on every transport and matches ownership on the caller's address.
+// Socket clients watching the shared task list see the task and its progress
+// live.
+//
+// Request-scoped tasks (without [Shared]) have nowhere to go on those
+// transports, so they return a usable no-op [Task] rather than nil: handler
+// code written for WebSocket (Progress, Output, SetMeta, Close, …) runs
+// without panicking, and the state simply isn't delivered.
+//
+// One lifetime caveat is sharper here than on a socket. A shared task's
+// context descends from the caller's, and a request-scoped request ends the
+// moment its response is written — so a task meant to outlive the call must
+// be started on a detached context, exactly as in the fire-and-forget pattern
+// above:
+//
+//	ctx, task := tasks.StartTask[MyMeta](
+//	    context.WithoutCancel(ctx), "Background job", tasks.Shared(),
+//	)
+//
+// Without WithoutCancel the task is canceled as soon as the tool call or HTTP
+// request returns.
 package tasks

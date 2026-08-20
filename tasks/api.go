@@ -343,17 +343,23 @@ func startRequestTask[M any](ctx context.Context, title string) (context.Context
 }
 
 func startSharedTask[M any](ctx context.Context, title string) (context.Context, *Task[M]) {
-	conn := aprot.Connection(ctx)
-	if conn == nil {
-		// No connection (e.g. REST path): a shared task can't be broadcast, so
-		// degrade to a detached no-op task rather than returning nil.
-		return newDetachedTask[M](ctx, title)
-	}
+	// The manager, not the connection, owns shared tasks: a task started over
+	// MCP or REST registers and broadcasts to socket watchers exactly like one
+	// started over a socket (#335). Only a genuinely disabled task system
+	// degrades to a detached no-op.
 	tm := taskManagerFromContext(ctx)
 	if tm == nil {
 		return newDetachedTask[M](ctx, title)
 	}
-	node := tm.create(title, conn.ID(), conn.UserID(), true, ctx)
+	// Owner identity comes from the execution, not the connection: the
+	// address for fan-out and ownership, the connection ID only as the
+	// fallback for an anonymous owner. connID stays 0 on request-scoped
+	// paths, which is never a live connection ID (they start at 1).
+	var connID uint64
+	if conn := aprot.Connection(ctx); conn != nil {
+		connID = conn.ID()
+	}
+	node := tm.create(title, connID, aprot.UserID(ctx), true, ctx)
 	tm.broadcastNow() // first message shows CREATED
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
@@ -383,17 +389,17 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 		return SubTask(ctx, title, fn)
 	}
 
-	conn := aprot.Connection(ctx)
-	var tm *taskManager
-	if conn != nil {
-		tm = taskManagerFromContext(ctx)
-	}
-
+	tm := taskManagerFromContext(ctx)
 	if tm == nil {
 		return SubTask(ctx, title, fn)
 	}
 
-	node := tm.create(title, conn.ID(), conn.UserID(), false, ctx)
+	var connID uint64
+	if conn := aprot.Connection(ctx); conn != nil {
+		connID = conn.ID()
+	}
+
+	node := tm.create(title, connID, aprot.UserID(ctx), false, ctx)
 	tm.broadcastNow() // first message shows CREATED
 	node.mu.Lock()
 	node.status = TaskNodeStatusRunning
@@ -421,12 +427,20 @@ func SharedSubTask(ctx context.Context, title string, fn func(ctx context.Contex
 // CancelSharedTask cancels a shared task by ID, subject to authorization.
 //
 // When a [CancelAuthorizer] is installed (via [WithCancelAuthorizer]) it decides
-// whether the caller may cancel the task. Otherwise the default policy applies:
-// only the connection that created the task may cancel it, and any other caller
-// (including one with no connection, such as the REST path) is refused with
-// CodeForbidden. Under the default policy the same error is returned whether the
-// task is missing or owned by someone else, so a caller can't probe for the
-// existence of other clients' tasks.
+// whether the caller may cancel the task — on every transport, including the
+// request-scoped ones that carry no connection.
+//
+// Otherwise the default policy applies: the task's owner may cancel it, where
+// ownership is matched by address ([aprot.UserID]) when the owner
+// authenticated, and by creating connection when it did not. Matching by
+// address means cancel rights survive a reconnect and are exercisable over
+// REST and MCP; an anonymous owner's task remains cancellable only from the
+// connection that created it. This is the same rule clients see as
+// SharedTaskState.IsOwner, so a rendered cancel button is never refused.
+//
+// Under the default policy the same error is returned whether the task is
+// missing or owned by someone else, so a caller can't probe for the existence
+// of other clients' tasks.
 func CancelSharedTask(ctx context.Context, taskID string) error {
 	tm := taskManagerFromContext(ctx)
 	if tm == nil {
@@ -452,10 +466,15 @@ func CancelSharedTask(ctx context.Context, taskID string) error {
 		return nil
 	}
 
-	// Default policy: owner-by-connection. A missing task and one owned by
-	// another connection are reported identically to prevent probing.
-	conn := aprot.Connection(ctx)
-	if !ok || conn == nil || node.ownerConnID != conn.ID() {
+	// Default policy: the owner may cancel, matched by taskNode.ownedBy — the
+	// same rule that decides the IsOwner flag clients render. A missing task
+	// and one owned by someone else are reported identically to prevent
+	// probing.
+	var connID uint64
+	if conn := aprot.Connection(ctx); conn != nil {
+		connID = conn.ID()
+	}
+	if !ok || !node.ownedBy(connID, aprot.UserID(ctx)) {
 		return aprot.NewError(aprot.CodeForbidden, "task not found: "+taskID)
 	}
 	node.failTop("canceled")

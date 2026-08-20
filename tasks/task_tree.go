@@ -432,21 +432,35 @@ func (n *taskNode) sharedSnapshot() SharedTaskState {
 	return state
 }
 
+// ownedBy reports whether the caller identified by connID and userID owns
+// this task. Ownership matches by user ID when the owner authenticated, so it
+// survives a reconnect onto a new connection and is reachable from
+// request-scoped transports, which have no connection of their own. It falls
+// back to the creating connection for an anonymous owner; an anonymous owner
+// with no connection (ownerConnID 0, never a live ID — they start at 1) is
+// owned by nobody.
+//
+// This is the single definition of shared-task ownership. Both the IsOwner
+// flag clients render and the default cancel policy read it, so the cancel
+// button and the cancel permission cannot disagree — they did before #335,
+// which is why a reconnected user saw IsOwner true and got CodeForbidden.
+func (n *taskNode) ownedBy(connID uint64, userID string) bool {
+	if n.ownerUserID != "" {
+		return userID != "" && n.ownerUserID == userID
+	}
+	return n.ownerConnID != 0 && n.ownerConnID == connID
+}
+
 // sharedSnapshotForConn returns a SharedTaskState with IsOwner set for the
-// viewing connection. Ownership is matched by user ID when the task's owner was
-// authenticated (so it survives a reconnect on a new connection), and falls
-// back to the creating connection ID otherwise.
+// viewing caller, identified by connection ID and address. Sub-tasks are
+// never reported as owned; ownership of a top-level task is [taskNode.ownedBy].
 func (n *taskNode) sharedSnapshotForConn(connID uint64, userID string) SharedTaskState {
 	state := n.sharedSnapshot()
 	if !n.topLevel {
 		state.IsOwner = false
 		return state
 	}
-	if n.ownerUserID != "" {
-		state.IsOwner = userID != "" && n.ownerUserID == userID
-	} else {
-		state.IsOwner = n.ownerConnID == connID
-	}
+	state.IsOwner = n.ownedBy(connID, userID)
 	return state
 }
 

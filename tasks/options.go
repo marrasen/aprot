@@ -54,8 +54,15 @@ type TaskCancelInfo struct {
 // over REST and MCP it is nil, so an authorizer that reads the connection
 // must nil-check it.)
 //
+// The authorizer runs on every transport, including request-scoped ones that
+// carry no connection — a shared task started over MCP or REST is a real task
+// on the server's manager, and cancelling it consults this policy like any
+// other (#335).
+//
 // Install one with [WithCancelAuthorizer]. When none is installed the default
-// policy applies: only the connection that created the task may cancel it.
+// policy applies: the task's owner may cancel it, matched on the caller's
+// address ([aprot.UserID]) when the owner authenticated and on the creating
+// connection when it did not.
 type CancelAuthorizer func(ctx context.Context, task TaskCancelInfo) error
 
 // EnableOption configures the task system at registration time. Pass
@@ -103,11 +110,12 @@ func WithTaskMiddleware(mw TaskMiddleware) EnableOption {
 }
 
 // WithCancelAuthorizer installs a policy deciding who may cancel a shared task
-// via the built-in CancelTask RPC (and [CancelSharedTask]). Without it, only
-// the connection that created a task may cancel it — a policy that also loses
-// cancel rights across a reconnect, since it is keyed by connection ID. An
-// authorizer can implement any policy, e.g. "any authenticated user" or
-// "same user, surviving reconnect". Read the caller's identity from the
+// via the built-in CancelTask RPC (and [CancelSharedTask]). Without it, the
+// task's owner may cancel it — matched on the caller's address when the owner
+// authenticated, so cancel rights survive a reconnect and work from
+// request-scoped transports, and on the creating connection otherwise. An
+// authorizer can implement any other policy, e.g. "any authenticated user" or
+// "admins may cancel anything". Read the caller's identity from the
 // request-scoped principal ([aprot.PrincipalFrom]), which is populated the
 // same way on every transport — never from connection presence, since
 // aprot.Connection(ctx) is nil on request-scoped transports (REST, MCP):

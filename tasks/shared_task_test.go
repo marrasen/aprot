@@ -669,10 +669,12 @@ func TestSharedSubTaskStandalone(t *testing.T) {
 	})
 }
 
-// TestSharedSubTaskWithoutConnection verifies that SharedSubTask falls back to
-// SubTask when no connection is present, including routing through the
-// request-scoped task tree when one is available.
-func TestSharedSubTaskWithoutConnection(t *testing.T) {
+// TestSharedSubTaskFallsBackWithoutManager verifies that SharedSubTask falls
+// back to SubTask when the task system is not enabled (no manager on the
+// context), including routing through the request-scoped task tree when one is
+// available. Connection presence is not the trigger: since #335 a
+// connectionless execution with a manager creates a real shared node.
+func TestSharedSubTaskFallsBackWithoutManager(t *testing.T) {
 	// Supply a request delivery so the SubTask fallback has something to work with.
 	tc := newTestPushConn()
 	d := newRequestDelivery(tc.Conn, "req-1", nil)

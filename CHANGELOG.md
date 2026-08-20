@@ -57,9 +57,39 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 - The `tasks.WithCancelAuthorizer` doc example read
   `aprot.Connection(ctx).UserID()` without a nil check and panicked when a
-  cancel arrived over REST (where the connection is nil). The example and
-  the `CancelAuthorizer` docs now nil-check and state the transport
-  difference (#329).
+  cancel arrived over REST (where the connection is nil) (#329). The example
+  now reads the request-scoped principal instead, which is populated the same
+  way on every transport, and the `CancelAuthorizer` docs state the transport
+  difference.
+- Tasks: the task manager belongs to the `Server`, not the connection (#335).
+  A shared task started over MCP or REST now registers with the manager and
+  broadcasts to socket watchers exactly like one started over a socket. It
+  previously degraded to a detached no-op — `FindSharedTask` found nothing and
+  `CancelSharedTask` failed with `CodeInternalError "tasks not enabled"` before
+  any authorizer ran. This was an unreleased regression against v0.59.0,
+  introduced when the MCP adapter stopped installing a detached connection
+  (#331): the tasks middleware keyed all of its setup off connection presence.
+  A connection now decides *delivery* only — with one, per-request task updates
+  are pushed as before; without one, nothing is pushed and nothing fakes a
+  connection. Owner identity comes from the execution: `UserID(ctx)` for the
+  fan-out address, the principal for authorization. `SharedSubTask` follows the
+  same rule, and `ListTasks` answers on every transport, so a caller that
+  started a task over MCP can poll it.
+- Tasks: the default cancel policy now matches ownership the same way the
+  `IsOwner` flag does — on the caller's address when the owner authenticated,
+  falling back to the creating connection when it did not (#335). The snapshot
+  had matched by user ID while the cancel matched by connection ID, so a user
+  who reconnected saw `IsOwner: true` on their own task, rendered a cancel
+  button, and got `CodeForbidden`. Both now read one helper, so the button and
+  the permission cannot disagree. Refusals keep returning the same error a
+  missing task returns, so ownership is not probeable. A `CancelAuthorizer`,
+  when installed, still decides everything and now runs on connectionless
+  paths too.
+
+  Note for consumers relying on the old behavior: cancel rights are now
+  reachable by address, so an authenticated caller can cancel its own task from
+  a different connection or transport. Install a `CancelAuthorizer` for a
+  stricter policy.
 
 ## [0.59.0] - 2026-08-19
 
