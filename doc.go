@@ -1102,6 +1102,12 @@
 // WebSocket driver, and it will go away when the standard library exports its
 // own opt-in.
 //
+// Because that seam is version-sensitive and a consumer's module graph may
+// resolve a different version of the staging module than aprot pins, aprot
+// checks the opt-in once at package init and panics with an explanatory
+// message if it is not taking effect — a loud startup failure instead of
+// silent wire drift in that build alone.
+//
 // # Wire Protocol
 //
 // Messages are JSON objects with a "type" field. Client-to-server: request,

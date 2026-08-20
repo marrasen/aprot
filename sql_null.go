@@ -3,6 +3,7 @@ package aprot
 import (
 	"database/sql"
 	"encoding/json/v2"
+	"fmt"
 	"time"
 
 	experimentjson "github.com/go-json-experiment/json"
@@ -210,6 +211,62 @@ var wireJSONOptions = json.JoinOptions(
 	sqlNullOptions,
 	experimentjson.ExperimentalSupportFormatTag(true),
 )
+
+// formatTagCanary is the probe checkFormatTagSupport marshals. The `format:`
+// tag is the whole point: without the opt-in applying, json/v2 rejects the
+// field outright rather than falling back to a default encoding.
+type formatTagCanary struct {
+	D time.Duration `json:"d,format:nano"`
+}
+
+// formatTagCanaryWant is what one second must encode to when the opt-in
+// applies.
+const formatTagCanaryWant = `{"d":1000000000}`
+
+// checkFormatTagSupport verifies that the format-tag opt-in in
+// [wireJSONOptions] actually reaches the standard library's marshaler.
+//
+// It exists because that opt-in crosses a duck-typed seam (see
+// wireJSONOptions): aprot passes an option value from
+// github.com/go-json-experiment/json, and encoding/json/v2 recognizes it
+// through an unexported interface. aprot's own CI pins one version of that
+// module, but a consumer's build resolves whatever version MVS picks across
+// their whole module graph. If that version's option stops satisfying the
+// stdlib's marker interface — or a future Go release changes the interface —
+// the opt-in silently stops applying in that consumer's build alone, and
+// every `format:` tag aprot's codegen relies on (`format:nano` durations,
+// the byte-slice shape overrides of #240) changes behavior on the wire.
+// aprot's tests cannot see that; the consumer sees client-side decode
+// errors.
+//
+// Checking it once at init turns that silent, build-specific wire drift into
+// a loud startup failure. Remove this together with the staging dependency
+// when the standard library exports its own opt-in (#344).
+func checkFormatTagSupport() error {
+	out, err := json.Marshal(formatTagCanary{D: time.Second}, wireJSONOptions)
+	if err != nil {
+		return fmt.Errorf("marshaling a `format:` tagged field failed: %w", err)
+	}
+	if string(out) != formatTagCanaryWant {
+		return fmt.Errorf("a `format:` tagged field encoded as %s, want %s", out, formatTagCanaryWant)
+	}
+	return nil
+}
+
+func init() {
+	if err := checkFormatTagSupport(); err != nil {
+		panic("aprot: the json/v2 `format:` struct tag opt-in is not taking effect: " + err.Error() +
+			"\n\naprot passes github.com/go-json-experiment/json.ExperimentalSupportFormatTag to the" +
+			" standard library's encoding/json/v2, which accepts it through an unexported interface." +
+			" A version of that module resolved by your module graph no longer satisfies that" +
+			" interface, or your Go toolchain changed it." +
+			"\n\nFix: align github.com/go-json-experiment/json with the version aprot requires" +
+			" (`go get github.com/go-json-experiment/json@$(go list -m -f '{{.Version}}'" +
+			" github.com/go-json-experiment/json)` after upgrading aprot), or upgrade aprot." +
+			" Without this option every `format:` struct tag is rejected, which would change" +
+			" aprot's wire format for time.Duration and byte-slice fields.")
+	}
+}
 
 // marshalJSON marshals v to JSON with aprot's wire semantics: sql.Null* type
 // support and `format:` struct tag support.
