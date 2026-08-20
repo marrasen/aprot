@@ -65,6 +65,18 @@ consistent with them.
   for `PushToUser` / `DisconnectUser` fan-out. The principal is the
   authorization input. Consumers set both when they coincide; aprot never
   derives one from the other.
+- **Identity is a per-execution snapshot; the address is a live routing
+  fact.** This is why the two seams resolve differently (#336). The
+  principal is an authorization input, so it must be stable for the
+  duration of a handler execution — it is resolved once, up front, on every
+  dispatch path. The address only answers "where is this user reachable",
+  so `UserID(ctx)` reads through to the connection instead of snapshotting
+  at dispatch: a refresh that runs after a mid-session re-authentication
+  should fan out to where the user is *now*, and a handler should see an
+  address its own middleware just set. Read-through also has no per-path
+  code, so it has no drift surface. The carrier for request-scoped paths
+  (`WithUserID`) is in for the same reason `WithPrincipal` is: it moves a
+  value between the wire and the handler uniformly, and never inspects it.
 - **Auth mechanics in, auth meaning out.** First-message auth, the
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and

@@ -1007,6 +1007,26 @@ Because the provider runs per execution, the natural way to bound identity looku
 
 The principal is distinct from `Conn.UserID`: **UserID is an address** — the key `PushToUser`/`DisconnectUser` use to find connections — while **the principal is an authorization input**. Set both when they coincide.
 
+### Request address: `UserID(ctx)`
+
+The address has its own seam, so a handler can name where its caller is reachable without knowing which transport the call arrived on. `aprot.UserID(ctx)` resolves the first non-empty of: the value attached with `aprot.WithUserID(ctx, id)`, then `aprot.Connection(ctx).UserID()`. It returns `""` when the execution carries no address.
+
+- **Sockets** — `conn.SetUserID(id)` as before, typically from `OnAuth` or auth middleware. `UserID(ctx)` reads it through the connection.
+- **REST / MCP** — the same wrapping `http.Handler` that attaches the principal attaches the address next to it:
+
+```go
+ctx := aprot.WithPrincipal(r.Context(), user)
+ctx = aprot.WithUserID(ctx, user.ID)
+next.ServeHTTP(w, r.WithContext(ctx))
+```
+
+`aprot.WithUserID(ctx, "")` is ignored and falls through to the connection, so a wrapper that forwards a header unconditionally never blanks an attached connection's address.
+
+Two properties worth knowing:
+
+- **The address is read through, not snapshotted at dispatch.** A handler in the very request whose middleware called `conn.SetUserID` sees the new address, and a server-driven subscription refresh after a mid-session re-authentication fans out to where the user is *now*. The trade-off is that the address can change while a handler runs — read it once into a local when you need a consistent value.
+- **Never authorize on the address.** It answers "where do I reach this user", not "who is asking"; a non-empty address is not evidence that the caller authenticated. That is the principal's job.
+
 ### Revoking access mid-session (`DisconnectUser`)
 
 Auth middleware can deny a removed user's *new* requests, but an already-open connection stays authenticated — still counted, still targetable by `PushToUser`. When you delete a user or revoke their access, close their sockets too:
