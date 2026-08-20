@@ -158,6 +158,18 @@ var matrixInvariants = []invariant{
 			if !p.serverBacked {
 				return "no Server, so no provider is resolved on this path; there is no provider error to map"
 			}
+			if p.serverDriven {
+				// An always-erroring provider would fail the driver's initial
+				// subscribe, so the cell would silently assert against the
+				// subscribe-first-run seam instead of the refresh. Arming the
+				// error after the first run (the panicOnRefresh pattern) does
+				// not work either: the Touch request that triggers the refresh
+				// resolves the same provider and would fail first. The refresh
+				// outcome of a provider error is refresh-specific anyway — an
+				// error frame and a surviving subscription that re-resolves —
+				// which this generic rejection assertion cannot express.
+				return "an always-erroring provider fails the driver's subscribe before any refresh runs; the refresh-specific outcome (error frame, subscription survives and re-resolves) is asserted by TestPrincipal_ProviderErrorOnRefreshKeepsSubscription"
+			}
 			return ""
 		},
 		check: func(t *testing.T, p dispatchPath) {
