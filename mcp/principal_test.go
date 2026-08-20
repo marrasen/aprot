@@ -2,13 +2,13 @@ package mcp
 
 import (
 	"context"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	json "github.com/go-json-experiment/json"
 	"github.com/marrasen/aprot"
 )
 

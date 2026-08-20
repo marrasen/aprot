@@ -2,6 +2,8 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -10,9 +12,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"unicode"
-
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()

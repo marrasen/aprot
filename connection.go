@@ -2,13 +2,12 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/v2"
 	"net/http"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/go-json-experiment/json"
 )
 
 // ConnInfo contains connection metadata captured at connection time. For the

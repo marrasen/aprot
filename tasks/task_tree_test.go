@@ -2,11 +2,11 @@ package tasks
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/go-json-experiment/json"
 	"github.com/marrasen/aprot"
 )
 

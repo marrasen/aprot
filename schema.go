@@ -65,7 +65,7 @@ func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Slice:
 		if isUnnamedByteSlice(t) {
 			// Unnamed []byte is base64-encoded as a string on the wire under
-			// both encoding/json v1 and go-json-experiment/json v2 (issue
+			// both encoding/json v1 and encoding/json/v2 (issue
 			// #174). OpenAPI 3.0 represents this as {type: string, format:
 			// byte}.
 			return &JSONSchema{Type: "string", Format: "byte"}
@@ -77,7 +77,7 @@ func (g *schemaGen) goTypeToJSONSchema(t reflect.Type) *JSONSchema {
 	case reflect.Array:
 		if isByteArray(t) {
 			// [N]byte (named or not) is base64-encoded as a string by
-			// go-json-experiment/json v2, same as unnamed []byte (#240).
+			// encoding/json/v2, same as unnamed []byte (#240).
 			return &JSONSchema{Type: "string", Format: "byte"}
 		}
 		n := t.Len()

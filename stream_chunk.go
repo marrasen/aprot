@@ -2,10 +2,9 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"sync"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // streamChunker batches marshaled stream items into StreamChunkMessage frames

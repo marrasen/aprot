@@ -2,14 +2,13 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"net"
 	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // recordingObserver captures observer callbacks for assertions. It embeds

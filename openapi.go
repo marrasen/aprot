@@ -316,7 +316,7 @@ func (g *OpenAPIGenerator) GenerateJSON() ([]byte, error) {
 }
 
 // byteSliceFieldSchema returns the JSON Schema for a byte-slice or byte-array
-// field, honoring the go-json-experiment/json v2 `format:` tag (issue #174).
+// field, honoring the encoding/json/v2 `format:` tag (issue #174).
 // Returns nil if the field type is not a byte slice or array — caller should
 // fall through to the default goTypeToJSONSchema path.
 func byteSliceFieldSchema(field reflect.StructField) *JSONSchema {

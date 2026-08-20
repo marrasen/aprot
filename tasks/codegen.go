@@ -218,7 +218,7 @@ func goTypeToTS(t reflect.Type) string {
 		return elemType + "[]"
 	case reflect.Array:
 		// [N]byte (named or not) is base64-encoded as a string by
-		// go-json-experiment/json v2, same as unnamed []byte (#240).
+		// encoding/json/v2, same as unnamed []byte (#240).
 		if t.Elem().Kind() == reflect.Uint8 {
 			return "string"
 		}

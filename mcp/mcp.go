@@ -36,16 +36,16 @@
 package mcp
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	json "github.com/go-json-experiment/json"
 	"io"
 	"net/http"
 	"runtime/debug"
 	"sort"
 	"strings"
 
-	"github.com/go-json-experiment/json/jsontext"
 	"github.com/marrasen/aprot"
 )
 

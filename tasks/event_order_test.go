@@ -2,13 +2,13 @@ package tasks
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gorilla/websocket"
 	"github.com/marrasen/aprot"
 )

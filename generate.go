@@ -1477,7 +1477,7 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			}
 		}
 		if isByteSlice(field.Type) || isByteArray(field.Type) {
-			// go-json-experiment/json v2 per-field `format:` tag (issue
+			// encoding/json/v2 per-field `format:` tag (issue
 			// #174). A tag value wins over the issue #174 default — it can
 			// force an unnamed []byte to serialize as a number array, or
 			// force a named byte slice to serialize as a base-N string.
@@ -1751,7 +1751,7 @@ func elemTypeInfo(t reflect.Type) (goKind string, typeName string) {
 }
 
 // isUnnamedByteSlice reports whether t is the unnamed type []byte. Under
-// both encoding/json v1 and go-json-experiment/json v2, unnamed byte slices
+// both encoding/json v1 and encoding/json/v2, unnamed byte slices
 // marshal as base64 strings, not number arrays — so TS/Zod/OpenAPI codegen
 // must emit a string shape. Named byte slices (`type Foo []byte`) are
 // treated as number arrays by v2 per Go issue #24746, so those intentionally
@@ -1761,14 +1761,14 @@ func isUnnamedByteSlice(t reflect.Type) bool {
 }
 
 // isByteSlice reports whether t is any byte slice — named or unnamed. Used
-// to gate the go-json-experiment/json v2 `format:` tag override, which
+// to gate the encoding/json/v2 `format:` tag override, which
 // applies to every []byte / `type Foo []byte` regardless of naming.
 func isByteSlice(t reflect.Type) bool {
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8
 }
 
 // isByteArray reports whether t is a fixed-size byte array ([N]byte, named or
-// not). go-json-experiment/json v2 encodes byte arrays as base64 strings by
+// not). encoding/json/v2 encodes byte arrays as base64 strings by
 // default — unlike named byte slices, which encode as number arrays — so
 // TS/Zod/OpenAPI codegen must emit a string shape (#240).
 func isByteArray(t reflect.Type) bool {
@@ -1798,8 +1798,8 @@ func tsTupleOrArray(elemTS string, n int) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-// jsonFormatOption parses the `format:X` option from a go-json-experiment
-// json struct tag and returns X, or "" if the tag has no format option.
+// jsonFormatOption parses the `format:X` option from an encoding/json/v2
+// struct tag and returns X, or "" if the tag has no format option.
 // The tag grammar is `name,opt1,opt2,...` where each option is a bare word
 // or `key:value`. Only the first format: option is honored.
 func jsonFormatOption(field reflect.StructField) string {
@@ -1901,9 +1901,18 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 		return tsType
 	}
 
-	// json.RawMessage is a named []byte but carries arbitrary embedded JSON, so
-	// number[] (the named-byte-slice default) is wrong. Type it as `unknown`.
+	// json.RawMessage and jsontext.Value are named []byte but carry arbitrary
+	// embedded JSON, so number[] (the named-byte-slice default) is wrong.
+	// Type them as `unknown`.
+	//
+	// Both identities are matched because they are the same type on modern
+	// toolchains: since Go 1.27, encoding/json.RawMessage is an alias for
+	// jsontext.Value, so reflection reports the jsontext identity and a check
+	// for encoding/json.RawMessage alone silently stops matching (#344).
 	if t.PkgPath() == "encoding/json" && t.Name() == "RawMessage" {
+		return "unknown"
+	}
+	if t.PkgPath() == "encoding/json/jsontext" && t.Name() == "Value" {
 		return "unknown"
 	}
 

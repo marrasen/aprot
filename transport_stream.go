@@ -4,12 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"io"
 	"math"
 	"sync"
 	"sync/atomic"
-
-	"github.com/go-json-experiment/json"
 )
 
 // streamTransport adapts any bidirectional byte stream — stdio pipes to a

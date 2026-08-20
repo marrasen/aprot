@@ -3,6 +3,7 @@ package aprot
 import (
 	"bytes"
 	"context"
+	"encoding/json/jsontext"
 	"log/slog"
 	"math"
 	"net/http/httptest"
@@ -10,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // Handlers used by the marshal-failure tests.

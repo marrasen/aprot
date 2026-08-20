@@ -41,6 +41,31 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Changed
 
+- **Breaking:** aprot now marshals with the standard library's
+  `encoding/json/v2` and `encoding/json/jsontext` instead of the
+  `github.com/go-json-experiment/json` staging module, which raises the
+  minimum Go version to **1.27** (#344). Consumers that implement custom
+  marshalers, or that pass `jsontext.Value` around, change their imports the
+  same way: `github.com/go-json-experiment/json` becomes `encoding/json/v2`
+  and `.../json/jsontext` becomes `encoding/json/jsontext`. Consumers that
+  pinned the staging module to match aprot's version no longer need to.
+
+  The wire format is unchanged. Verified before merge: the full test suite,
+  the e2e suite, and byte-identical regeneration of both example clients and
+  the e2e client.
+
+  The staging module remains a single-symbol dependency. Per-field `format:`
+  tags — which aprot requires for `time.Duration` (#174) and for the
+  byte-slice wire shapes (#240) — stayed experimental when json/v2 landed in
+  Go 1.27, and `encoding/json/v2` exports no constructor for the opt-in; the
+  standard library reaches the feature through a duck-typed interface it
+  documents by name as being for
+  `github.com/go-json-experiment/json.ExperimentalSupportFormatTag`. aprot
+  passes that option to the stdlib marshaler. Nothing about the encoding
+  comes from the staging module, and the import goes away once the standard
+  library exports its own opt-in.
+
+
 - **Breaking:** the MCP adapter no longer installs a detached connection on
   tool calls. `aprot.Connection(ctx)` is now nil over MCP, exactly as over
   REST, so connection presence consistently means "there is a socket here"
@@ -54,6 +79,13 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   floor; it now skips delivery cleanly, as on REST.
 
 ### Fixed
+
+- Codegen typed a `json.RawMessage` field as `number[]` instead of `unknown`
+  on Go 1.27 (#344). Since Go 1.27 `encoding/json.RawMessage` is an alias for
+  `jsontext.Value`, so reflection reports the `jsontext` identity and the
+  codegen check for `encoding/json.RawMessage` silently stopped matching. Both
+  identities are now matched, which also fixes the same mistyping for fields
+  declared directly as `jsontext.Value`.
 
 - `Server.Invoke` now resolves the principal provider registered on a
   connection carried in the request context, so REST and MCP executions are no

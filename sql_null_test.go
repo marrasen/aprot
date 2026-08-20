@@ -2,10 +2,9 @@ package aprot
 
 import (
 	"database/sql"
+	"encoding/json/v2"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json"
 )
 
 func TestMarshalJSON_SQLNull(t *testing.T) {

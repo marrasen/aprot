@@ -2,10 +2,9 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"strings"
 	"sync"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // triggerCollector collects trigger keys during handler execution.

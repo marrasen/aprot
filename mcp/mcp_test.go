@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	json "github.com/go-json-experiment/json"
 	"github.com/marrasen/aprot"
 )
 

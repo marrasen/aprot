@@ -3,12 +3,11 @@ package aprot
 import (
 	"bufio"
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"net"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // Handlers used by the ServeStream tests. EchoRequest/EchoResponse and

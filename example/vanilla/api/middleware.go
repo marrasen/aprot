@@ -2,12 +2,12 @@ package api
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"log"
 	"strings"
 	"time"
 
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 	"github.com/marrasen/aprot"
 )
 

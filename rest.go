@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,8 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // HTTPMethod represents an HTTP method.

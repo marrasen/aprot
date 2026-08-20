@@ -3,9 +3,8 @@ package aprot
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json/v2"
 	"testing"
-
-	"github.com/go-json-experiment/json"
 )
 
 func TestSendResponseByteSliceStaysJSON(t *testing.T) {

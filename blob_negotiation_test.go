@@ -3,12 +3,12 @@ package aprot
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/go-json-experiment/json"
 	"github.com/gorilla/websocket"
 )
 

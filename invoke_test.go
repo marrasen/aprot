@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -10,8 +11,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // invokeTestHandlers exercises the transport-agnostic pipeline seam.
