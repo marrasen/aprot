@@ -50,7 +50,11 @@ consistent with them.
   wire-error mapping (`Conn.sendErrorFor`), principal resolution
   (`Conn.resolvePrincipal`, #330), and connection registration
   (`Server.registerConn`, #347) all follow this shape. A rule that can
-  drift per dispatch path eventually does.
+  drift per dispatch path eventually does — so the drift is now a CI
+  failure: `matrix_test.go` asserts every cross-path invariant on every
+  dispatch path (#339). Adding a path means adding a column, adding an
+  invariant means adding a row, and a cell that cannot hold must carry a
+  reason rather than be absent.
 - **A connection the client can use is never missing from the server's
   fan-out set.** The inverse of the presence rule below: presence is a
   transport fact, so the server's own view of it must not lag the client's.
