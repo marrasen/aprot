@@ -258,3 +258,31 @@ func TestMarshalJSON_WithoutOptions(t *testing.T) {
 		t.Fatal("sql.NullString now marshals correctly without custom options — custom marshalers may no longer be needed")
 	}
 }
+
+// The canary must pass for the module graph this build resolved — if it does
+// not, every other test in this package would already have failed at init,
+// so this asserts the check itself rather than the encoding.
+func TestFormatTagSupportCanary(t *testing.T) {
+	if err := checkFormatTagSupport(); err != nil {
+		t.Fatalf("format-tag opt-in is not taking effect: %v", err)
+	}
+}
+
+// The canary detects the failure it exists for: without the opt-in, json/v2
+// rejects a format-tagged field outright rather than encoding it some other
+// way, so the check must report an error rather than a wrong value.
+func TestFormatTagCanaryDetectsMissingOptIn(t *testing.T) {
+	out, err := json.Marshal(formatTagCanary{D: time.Second}, sqlNullOptions)
+	if err == nil {
+		t.Fatalf("marshaling without the opt-in unexpectedly succeeded: %s", out)
+	}
+	// And with it, the probe encodes exactly what the canary compares against,
+	// so the expected value cannot drift away from the real wire encoding.
+	got, err := json.Marshal(formatTagCanary{D: time.Second}, wireJSONOptions)
+	if err != nil {
+		t.Fatalf("marshaling with the opt-in failed: %v", err)
+	}
+	if string(got) != formatTagCanaryWant {
+		t.Errorf("probe encoded as %s, want %s", got, formatTagCanaryWant)
+	}
+}

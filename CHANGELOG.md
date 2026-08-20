@@ -41,6 +41,18 @@ authorization input (#330, #336, #337).
 
 - `Server.Logger()` returns the server's configured logger, so middleware and
   handlers can log through the same sink aprot does (#327).
+- Startup check for the json/v2 `format:` tag opt-in (#352). aprot enables
+  per-field `format:` tags by passing an option from
+  `github.com/go-json-experiment/json` to the standard library's
+  `encoding/json/v2`, which accepts it through an unexported interface. A
+  consumer's module graph can resolve a different version of that module than
+  aprot pins, and if that version stops satisfying the interface the opt-in
+  silently stops applying **in that build alone** — changing the wire encoding
+  of every `format:`-tagged field. aprot now marshals one probe at package
+  init and panics with the cause and the fix if the encoding is not what it
+  requires, so the failure is loud at startup instead of surfacing as
+  client-side decode errors. It goes away with the dependency (#344).
+
 - Request-scoped identity: a **principal** carried in the request context
   (#330). `WithPrincipal` attaches it, `PrincipalFrom` reads it back (nil
   when anonymous) — the principal is whatever your auth resolves to; aprot
