@@ -135,6 +135,8 @@ The hook sets two different things, and the distinction matters:
 
 Per-execution resolution does not mean a database hit per request: memoize `lookupUser` per session or credential with a TTL of your choosing, and revocation takes effect within that TTL on every transport at once. Returning a value captured in the hook is the degenerate cache (TTL = connection lifetime) — supported, but a per-session cache is the better default. See the [scope document](scope.md) for why the cache itself stays on your side of the line.
 
+If your wrapper installs a detached connection so connection-shaped middleware keeps working (`aprot.WithConnection` with `server.NewDetachedConn()`), you can register the same `PrincipalProvider` on it instead of calling `WithPrincipal` — aprot resolves it for the request, so one auth setup covers sockets and REST/MCP. When both are present the explicit `WithPrincipal` wins and the provider does not run: the wrapper that authenticated the request is the authority on that execution. `aprot.WithPrincipal(ctx, nil)` counts as resolved too, so an explicit anonymous result is never overwritten by a provider.
+
 Both values are readable the same way on every transport. `aprot.PrincipalFrom(ctx)` returns the principal; `aprot.UserID(ctx)` returns the address, reading through to the connection on sockets. Over REST and MCP there is no connection, so the wrapping `http.Handler` that authenticates the request attaches both itself:
 
 ```go

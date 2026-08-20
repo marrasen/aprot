@@ -521,6 +521,14 @@ func (s *Server) Invoke(ctx context.Context, method string, params jsontext.Valu
 // Subscription re-execution deliberately bypasses invoke: it must run with
 // no refresh queue at all so refreshes cannot cascade.
 //
+// It also resolves the principal for request-scoped executions that carry a
+// connection, so a detached connection's [PrincipalProvider] populates
+// identity over REST and MCP the same way it does over a socket. Precedence:
+// an explicit [WithPrincipal] upstream wins and the provider does not run.
+// Provider errors are returned like handler errors and map onto the wire the
+// same way; a panicking provider is caught by the recover below and becomes a
+// generic CodeInternalError, like any other panic on this path.
+//
 // A handler panic is recovered here and returned as a CodeInternalError
 // [ProtocolError], so every transport turns it into an error response
 // instead of unwinding — on REST/MCP an unrecovered panic would reach
@@ -542,6 +550,23 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (r
 			err = panicError(s.logger(), r, req.Method)
 		}
 	}()
+
+	// Resolve the connection's principal for request-scoped executions. The
+	// socket paths resolve before they get here and mark the principal
+	// resolved, so this neither re-runs their provider nor overwrites a
+	// principal a wrapper attached with WithPrincipal upstream — that wrapper
+	// authenticated the request and is the authority on this execution.
+	// Without it a consumer who reuses their socket auth by installing a
+	// detached connection saw a nil principal on every REST/MCP execution
+	// while identical middleware saw identity over WebSocket (#337).
+	if !principalResolved(ctx) {
+		if conn := Connection(ctx); conn != nil {
+			var perr error
+			if ctx, perr = conn.resolvePrincipal(ctx); perr != nil {
+				return nil, perr
+			}
+		}
+	}
 
 	ctx = withHandlerInfo(ctx, info)
 	ctx = withRequest(ctx, req)

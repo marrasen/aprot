@@ -507,6 +507,16 @@
 // authenticates the request attaches the resolved principal directly with
 // [WithPrincipal].
 //
+// A request-scoped execution that carries a connection resolves that
+// connection's provider too, so a consumer who installs a detached connection
+// (see [Server.NewDetachedConn]) to reuse socket-shaped middleware gets the
+// same identity over REST and MCP as over a socket. Precedence when both are
+// present: [WithPrincipal] upstream wins and the provider does not run, since
+// the wrapper that authenticated the request is the authority on that
+// execution. WithPrincipal(ctx, nil) counts as resolved — an explicit
+// anonymous result is still a result. A provider error fails the execution
+// before middleware runs, with the error's own wire code.
+//
 // Because the provider runs per execution, the natural way to bound
 // identity lookups is a session cache owned by the consumer: memoize the
 // resolver keyed by credential or session ID with a TTL of your choosing,
