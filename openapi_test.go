@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenAPIGenerator_BasicSpec(t *testing.T) {
@@ -534,5 +535,45 @@ func TestOpenAPIByteArrayFormatTag(t *testing.T) {
 	hash := schema.Properties["hash"]
 	if hash == nil || hash.Type != "string" || hash.Format != "byte" {
 		t.Errorf("hash = %+v, want {string, byte}", hash)
+	}
+}
+
+// DurationSchemaStruct covers every duration shape the OpenAPI schema has to
+// describe: the untagged default and the four numeric formats are integers,
+// and the two string formats are strings.
+type DurationSchemaStruct struct {
+	Bare  time.Duration `json:"bare"`
+	Nano  time.Duration `json:"nano,format:nano"`
+	Sec   time.Duration `json:"sec,format:sec"`
+	Units time.Duration `json:"units,format:units"`
+	Iso   time.Duration `json:"iso,format:iso8601"`
+}
+
+func TestOpenAPIDurationFormatTag(t *testing.T) {
+	gen := NewOpenAPIGenerator(NewRegistry(), "Test", "1.0.0")
+	sg := &schemaGen{registry: gen.registry, refs: gen.schemas}
+
+	sg.buildStructSchema(reflect.TypeOf(DurationSchemaStruct{}))
+
+	schema := gen.schemas[reflect.TypeOf(DurationSchemaStruct{})]
+	if schema == nil {
+		t.Fatal("DurationSchemaStruct schema not registered")
+	}
+
+	want := map[string]JSONSchema{
+		"bare":  {Type: "integer"},
+		"nano":  {Type: "integer"},
+		"sec":   {Type: "integer"},
+		"units": {Type: "string"},
+		"iso":   {Type: "string", Format: "duration"},
+	}
+	for name, w := range want {
+		prop := schema.Properties[name]
+		if prop == nil {
+			t.Fatalf("property %q missing", name)
+		}
+		if prop.Type != w.Type || prop.Format != w.Format {
+			t.Errorf("%s = {Type: %q, Format: %q}, want {%q, %q}", name, prop.Type, prop.Format, w.Type, w.Format)
+		}
 	}
 }

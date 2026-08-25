@@ -1883,11 +1883,14 @@ func TestGenerateInstantiatedGenericInterface(t *testing.T) {
 	}
 }
 
-// time.Duration has no default JSON representation in jsonv2 and fails at
-// runtime, so the generator should reject it at generation time unless an
-// explicit json `format:` option is present.
+// A time.Duration field needs no `json:"...,format:..."` tag: aprot encodes a
+// bare one as int64 nanoseconds (see durationAsNano), and generates `number`.
+// It used to be rejected at generation time, which pushed a format tag into
+// every consumer's struct — and since Go 1.27 such a tag makes plain
+// encoding/json reject the whole struct.
 type DurationRequest struct {
-	Timeout time.Duration `json:"timeout"`
+	Timeout time.Duration  `json:"timeout"`
+	Retry   *time.Duration `json:"retry"`
 }
 
 type DurationHandlers struct{}
@@ -1895,7 +1898,10 @@ type DurationHandlers struct{}
 func (h *DurationHandlers) Submit(ctx context.Context, req *DurationRequest) error { return nil }
 
 type DurationFormattedRequest struct {
-	Timeout time.Duration `json:"timeout,format:nano"`
+	Nano  time.Duration `json:"nano,format:nano"`
+	Sec   time.Duration `json:"sec,format:sec"`
+	Units time.Duration `json:"units,format:units"`
+	Iso   time.Duration `json:"iso,format:iso8601"`
 }
 
 type DurationFormattedHandlers struct{}
@@ -1904,31 +1910,45 @@ func (h *DurationFormattedHandlers) Submit(ctx context.Context, req *DurationFor
 	return nil
 }
 
-func TestGenerateDurationErrors(t *testing.T) {
-	t.Run("bare duration errors", func(t *testing.T) {
+func TestGenerateDuration(t *testing.T) {
+	t.Run("bare duration generates as a number", func(t *testing.T) {
 		registry := NewRegistry()
 		registry.Register(&DurationHandlers{})
 
-		if _, err := NewGenerator(registry).Generate(); err == nil {
-			t.Fatal("expected Generate() to error on a bare time.Duration field")
-		} else if !strings.Contains(err.Error(), "time.Duration") {
-			t.Errorf("error should mention time.Duration, got: %v", err)
-		}
-
-		registry2 := NewRegistry()
-		registry2.Register(&DurationHandlers{})
 		var buf bytes.Buffer
-		if err := NewGenerator(registry2).GenerateTo(&buf); err == nil {
-			t.Error("expected GenerateTo() to error on a bare time.Duration field")
+		if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+			t.Fatalf("a bare time.Duration field should generate, got: %v", err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, "timeout: number;") {
+			t.Errorf("expected timeout: number\n%s", output)
+		}
+		if !strings.Contains(output, "retry: number | null;") {
+			t.Errorf("expected retry: number | null\n%s", output)
 		}
 	})
 
-	t.Run("formatted duration is allowed", func(t *testing.T) {
+	// A format tag that keeps the duration numeric changes nothing; one that
+	// sends a string has to be reported as a string, or the client gets a
+	// `number` typing for "1m30s".
+	t.Run("format tag decides the generated type", func(t *testing.T) {
 		registry := NewRegistry()
 		registry.Register(&DurationFormattedHandlers{})
 
-		if _, err := NewGenerator(registry).Generate(); err != nil {
-			t.Errorf("time.Duration with a format option should generate, got: %v", err)
+		var buf bytes.Buffer
+		if err := NewGenerator(registry).GenerateTo(&buf); err != nil {
+			t.Fatalf("time.Duration with a format option should generate, got: %v", err)
+		}
+		output := buf.String()
+		for _, want := range []string{
+			"nano: number;",
+			"sec: number;",
+			"units: string;",
+			"iso: string;",
+		} {
+			if !strings.Contains(output, want) {
+				t.Errorf("expected %q\n%s", want, output)
+			}
 		}
 	})
 }

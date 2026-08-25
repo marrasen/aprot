@@ -1439,19 +1439,6 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 		if ov := g.registry.fieldTypeOverride(t, field.Name); ov != nil {
 			field.Type = ov
 		}
-		// time.Duration has no default JSON representation in jsonv2 and fails
-		// at runtime (both marshal and unmarshal) unless an explicit json
-		// `format:` option is given. Fail at generation time instead so the
-		// developer learns of it up front rather than on the wire.
-		if dt := field.Type; dt != nil {
-			ft := dt
-			if ft.Kind() == reflect.Pointer {
-				ft = ft.Elem()
-			}
-			if ft.PkgPath() == "time" && ft.Name() == "Duration" && jsonFormatOption(field) == "" {
-				g.recordGenError(fmt.Errorf("%s.%s: time.Duration has no default JSON representation and fails at runtime; add a json format option (e.g. `json:\"%s,format:nano\"`) or use a different type", t.Name(), field.Name, g.getJSONName(field)))
-			}
-		}
 
 		elemGoKind, elemTypeName := elemTypeInfo(field.Type)
 		goType := goKindString(field.Type)
@@ -1474,6 +1461,24 @@ func (g *Generator) collectInterfaceFields(t reflect.Type) []fieldData {
 			optional = false
 			if !strings.HasSuffix(tsType, " | null") {
 				tsType += " | null"
+			}
+		}
+		if isDuration(field.Type) {
+			// A `format:` tag can move a duration off the numeric wire shape
+			// entirely: `units` sends "1m30s" and `iso8601` sends "PT1M30S".
+			// Reported by its int64 kind alone the field would generate
+			// `number` for a string, so ask the tag. Every other case — the
+			// numeric formats, and an untagged duration, which aprot encodes
+			// as nanoseconds (see durationAsNano) — is already an int64 kind
+			// and needs nothing here.
+			if ts, ok := durationFormatShape(jsonFormatOption(field)); ok {
+				tsType = ts
+				goType = "string"
+				elemGoKind = ""
+				elemTypeName = ""
+				if nullable {
+					tsType += " | null"
+				}
 			}
 		}
 		if isByteSlice(field.Type) || isByteArray(field.Type) {
@@ -1814,6 +1819,33 @@ func jsonFormatOption(field reflect.StructField) string {
 		}
 	}
 	return ""
+}
+
+// isDuration reports whether t is time.Duration, or a pointer to one.
+func isDuration(t reflect.Type) bool {
+	if t == nil {
+		return false
+	}
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.PkgPath() == "time" && t.Name() == "Duration"
+}
+
+// durationFormatShape returns the TS type a time.Duration takes under a v2
+// json format tag value that encodes it as a string. Returns ok=false for
+// every other format — including the numeric ones and the empty tag — because
+// those keep the int64 shape the caller already computed.
+//
+// Per the v2 package docs a duration format is one of: "units" (Go's own
+// syntax, "1m30s"), "iso8601" ("PT1M30S"), or "sec" / "milli" / "micro" /
+// "nano" (a JSON number). Only the first two change the wire type.
+func durationFormatShape(format string) (tsType string, ok bool) {
+	switch format {
+	case "units", "iso8601":
+		return "string", true
+	}
+	return "", false
 }
 
 // byteSliceFormatShape returns the TS / Go-kind / element-kind tuple that a
