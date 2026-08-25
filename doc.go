@@ -1101,9 +1101,17 @@
 //   - struct → interface
 //   - Registered enum → const object + union type
 //
-// time.Duration has no default JSON representation in the v2 encoder and is
-// rejected at generation time; add a json format option (e.g.
-// `json:"d,format:nano"`) or use a different type.
+// time.Duration becomes number, encoded as int64 nanoseconds. No struct tag is
+// needed: json/v2 has no default representation for a duration, so aprot
+// supplies one on every path it marshals. An explicit format option still
+// wins — sec, milli, micro and nano stay number; units ("1m30s") and iso8601
+// ("PT1M30S") generate string.
+//
+// Do not write `json:"d,format:nano"` by hand. Until v0.61.0 aprot rejected a
+// bare duration and asked for that tag. Since Go 1.27, plain encoding/json
+// rejects any struct holding a format-tagged field — the v1 API cannot opt in
+// to format tags — so the tag breaks a type you also persist with
+// encoding/json.
 //
 // Per-field `format:` tags are supported on every marshal/unmarshal path
 // (results, params, push/refresh payloads, stream items): aprot enables

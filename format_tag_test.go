@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// Handlers used by the `format:` tag tests. The codegen requires a json
-// format option on time.Duration fields (see collectInterfaceFields), so the
-// runtime must accept them: json/v2 snapshots since 2026-06 reject
-// format-tagged fields unless ExperimentalSupportFormatTag is set.
+// Handlers used by the `format:` tag tests. A duration no longer needs the tag
+// (aprot defaults to nanoseconds — see durationAsNano), but a consumer may
+// still write one, here or on a byte slice, so the runtime has to keep
+// accepting it: json/v2 rejects a format-tagged field outright unless
+// ExperimentalSupportFormatTag is set.
 type FormatTagHandlers struct{}
 
 type DurationPayload struct {

@@ -286,3 +286,63 @@ func TestFormatTagCanaryDetectsMissingOptIn(t *testing.T) {
 		t.Errorf("probe encoded as %s, want %s", got, formatTagCanaryWant)
 	}
 }
+
+// A time.Duration with no struct tag must cross the wire as int64 nanoseconds
+// in both directions. Consumers used to have to write `format:nano` on every
+// duration field to get this, and that tag makes plain encoding/json reject
+// the whole struct from Go 1.27 on.
+func TestBareDurationIsNanoseconds(t *testing.T) {
+	type payload struct {
+		D time.Duration
+		P *time.Duration
+		L []time.Duration
+		M map[string]time.Duration
+	}
+
+	d := 2 * time.Second
+	in := payload{
+		D: 90 * time.Second,
+		P: &d,
+		L: []time.Duration{3 * time.Second},
+		M: map[string]time.Duration{"k": 4 * time.Second},
+	}
+
+	got, err := json.Marshal(in, wireJSONOptions)
+	if err != nil {
+		t.Fatalf("marshaling a bare duration failed: %v", err)
+	}
+	const want = `{"D":90000000000,"P":2000000000,"L":[3000000000],"M":{"k":4000000000}}`
+	if string(got) != want {
+		t.Errorf("encoded as %s, want %s", got, want)
+	}
+
+	var out payload
+	if err := json.Unmarshal([]byte(want), &out, wireJSONOptions); err != nil {
+		t.Fatalf("unmarshaling a bare duration failed: %v", err)
+	}
+	if out.D != in.D || *out.P != d || len(out.L) != 1 || out.L[0] != in.L[0] || out.M["k"] != in.M["k"] {
+		t.Errorf("round trip lost data: %+v", out)
+	}
+}
+
+// An explicit `format:` tag still wins over the default, so the tags consumers
+// wrote before v0.61.0 keep encoding exactly as they did, and a field that
+// wants another shape can still ask for one.
+func TestDurationFormatTagWinsOverDefault(t *testing.T) {
+	type payload struct {
+		Nano  time.Duration `json:"nano,format:nano"`
+		Sec   time.Duration `json:"sec,format:sec"`
+		Units time.Duration `json:"units,format:units"`
+		Iso   time.Duration `json:"iso,format:iso8601"`
+	}
+
+	d := 90 * time.Second
+	got, err := json.Marshal(payload{Nano: d, Sec: d, Units: d, Iso: d}, wireJSONOptions)
+	if err != nil {
+		t.Fatalf("marshaling failed: %v", err)
+	}
+	const want = `{"nano":90000000000,"sec":90,"units":"1m30s","iso":"PT1M30S"}`
+	if string(got) != want {
+		t.Errorf("encoded as %s, want %s", got, want)
+	}
+}

@@ -2,6 +2,7 @@ package aprot
 
 import (
 	"database/sql"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -191,13 +192,23 @@ var sqlNullOptions = json.JoinOptions(
 // wireJSONOptions is the single options set applied everywhere aprot marshals
 // or unmarshals user data: response results, request params, push/refresh
 // payloads, stream items, the $blob JSON fallback, and the codegen's
-// zero-value marshaling probes. It combines the sql.Null* overrides with the
-// opt-in for per-field `format:` struct tags: json/v2 rejects format-tagged
-// fields at marshal/unmarshal time unless this option is set, and aprot's
-// codegen requires such tags on some types (`json:"d,format:nano"` on
-// time.Duration, and the byte-slice shape overrides of #240).
+// zero-value marshaling probes. It combines three things.
 //
-// The option comes from github.com/go-json-experiment/json even though
+// The sql.Null* overrides, so those types serialize as the unwrapped value.
+//
+// A default representation for time.Duration: int64 nanoseconds, which is what
+// v1 encoding/json has always written. json/v2 deliberately has no default
+// (go.dev/issue/71631), so without this option every duration field fails at
+// marshal and unmarshal time. aprot used to make the caller solve that with a
+// `json:"d,format:nano"` tag on every duration field; see [durationAsNano] for
+// why that was the wrong place to put it. An explicit `format:` tag still wins
+// over this option, so a field that wants seconds or ISO 8601 still gets them.
+//
+// The opt-in for per-field `format:` struct tags. json/v2 rejects a
+// format-tagged field unless this option is set, and the byte-slice shape
+// overrides of #240 are expressed as such tags.
+//
+// That last option comes from github.com/go-json-experiment/json even though
 // everything else here is encoding/json/v2. The `format:` tag stayed
 // experimental when json/v2 landed in Go 1.27: encoding/json/v2 exports no
 // constructor for it, and the standard library reaches this feature through a
@@ -209,12 +220,43 @@ var sqlNullOptions = json.JoinOptions(
 // standard library exports its own opt-in (#344).
 var wireJSONOptions = json.JoinOptions(
 	sqlNullOptions,
+	durationAsNano,
 	experimentjson.ExperimentalSupportFormatTag(true),
 )
 
+// durationAsNano makes a time.Duration field marshal as int64 nanoseconds
+// without any struct tag.
+//
+// The option is jsonv1.FormatDurationAsNano, borrowed from the v1 compatibility
+// layer. Nothing else about v1 semantics comes with it, and the encoding is the
+// one v1 encoding/json has always produced for a duration.
+//
+// # Why aprot sets this rather than asking for a tag
+//
+// Until v0.61.0 aprot rejected a bare time.Duration at generation time and told
+// the developer to write `json:"ScanDuration,format:nano"`. That worked, but it
+// pushed a tag into the consumer's own struct definitions, and the tag is not
+// free: since Go 1.27, plain encoding/json rejects any struct holding a
+// format-tagged field, because v1 has no way to opt in to format tags. A type
+// that aprot sends over the wire and the consumer also persists with
+// encoding/json stopped loading and stopped saving, in both directions:
+//
+//	json: cannot unmarshal object into Filter.ImageBanks.0 of type
+//	filter.ImageBankData: Go struct field ScanDuration has unsupported
+//	`format` tag option
+//
+// aprot was making every consumer with a duration field take on that hazard to
+// solve a problem aprot can solve once, here. Setting the default is
+// backward compatible: json/v2 checks the format tag before this flag, so the
+// tags consumers already wrote keep encoding exactly as they did.
+var durationAsNano = jsonv1.FormatDurationAsNano(true)
+
 // formatTagCanary is the probe checkFormatTagSupport marshals. The `format:`
 // tag is the whole point: without the opt-in applying, json/v2 rejects the
-// field outright rather than falling back to a default encoding.
+// field outright rather than falling back to a default encoding. It probes the
+// mechanism, not a shape anyone should copy — a duration field needs no tag
+// (see durationAsNano), and this one only encodes the same nanoseconds it
+// would without it.
 type formatTagCanary struct {
 	D time.Duration `json:"d,format:nano"`
 }
@@ -234,8 +276,8 @@ const formatTagCanaryWant = `{"d":1000000000}`
 // their whole module graph. If that version's option stops satisfying the
 // stdlib's marker interface — or a future Go release changes the interface —
 // the opt-in silently stops applying in that consumer's build alone, and
-// every `format:` tag aprot's codegen relies on (`format:nano` durations,
-// the byte-slice shape overrides of #240) changes behavior on the wire.
+// every `format:` tag a consumer wrote (the byte-slice shape overrides of
+// #240, or a duration on an explicit format) changes behavior on the wire.
 // aprot's tests cannot see that; the consumer sees client-side decode
 // errors.
 //

@@ -167,7 +167,7 @@ func (g *schemaGen) buildStructSchema(t reflect.Type) *JSONSchema {
 
 		jsonName := jsonFieldName(field)
 		var fieldSchema *JSONSchema
-		if s := byteSliceFieldSchema(field); s != nil {
+		if s := formatFieldSchema(field); s != nil {
 			fieldSchema = s
 		} else {
 			fieldSchema = g.goTypeToJSONSchema(field.Type)
@@ -207,7 +207,7 @@ func (g *schemaGen) buildFieldsInto(t reflect.Type, schema *JSONSchema) {
 		}
 		jsonName := jsonFieldName(field)
 		var fieldSchema *JSONSchema
-		if s := byteSliceFieldSchema(field); s != nil {
+		if s := formatFieldSchema(field); s != nil {
 			fieldSchema = s
 		} else {
 			fieldSchema = g.goTypeToJSONSchema(field.Type)

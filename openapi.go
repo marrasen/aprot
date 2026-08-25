@@ -315,6 +315,35 @@ func (g *OpenAPIGenerator) GenerateJSON() ([]byte, error) {
 	return json.MarshalIndent(spec, "", "  ")
 }
 
+// formatFieldSchema returns the JSON Schema for a field whose wire shape is
+// decided by its `format:` tag or its type rather than by its Go kind alone.
+// Returns nil when neither applies, and the caller falls through to the
+// default goTypeToJSONSchema path.
+func formatFieldSchema(field reflect.StructField) *JSONSchema {
+	if s := durationFieldSchema(field); s != nil {
+		return s
+	}
+	return byteSliceFieldSchema(field)
+}
+
+// durationFieldSchema returns the JSON Schema for a time.Duration field whose
+// `format:` tag encodes it as a string. Returns nil for every other field,
+// including a duration on a numeric format or no format at all: those are
+// integers, which the default int64 path already describes.
+func durationFieldSchema(field reflect.StructField) *JSONSchema {
+	if !isDuration(field.Type) {
+		return nil
+	}
+	switch jsonFormatOption(field) {
+	case "units":
+		// Go's own duration syntax, "1m30s". No JSON Schema format matches it.
+		return &JSONSchema{Type: "string"}
+	case "iso8601":
+		return &JSONSchema{Type: "string", Format: "duration"}
+	}
+	return nil
+}
+
 // byteSliceFieldSchema returns the JSON Schema for a byte-slice or byte-array
 // field, honoring the encoding/json/v2 `format:` tag (issue #174).
 // Returns nil if the field type is not a byte slice or array — caller should

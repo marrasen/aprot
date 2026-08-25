@@ -10,6 +10,59 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Upgrading
+
+**A `format:` struct tag breaks plain `encoding/json`.** Go 1.27 rebuilt
+`encoding/json` on top of `encoding/json/v2`, and v2 rejects any struct holding
+a format-tagged field unless the caller opts in to format tags. The v1 API has
+no opt-in. So a type that aprot sends over the wire and you *also* read or write
+with `encoding/json` now fails, in both directions:
+
+```
+json: cannot unmarshal object into Filter.ImageBanks.0 of type
+filter.ImageBankData: Go struct field ScanDuration has unsupported
+`format` tag option
+```
+
+aprot caused this by requiring `json:"d,format:nano"` on every `time.Duration`
+field. It no longer does. **Delete those tags.** Nothing changes on the wire and
+nothing changes in the generated client — aprot now encodes a bare duration as
+int64 nanoseconds itself. This is the whole migration for most consumers.
+
+If you keep a `format:` tag for another reason — a byte-slice shape override
+(#240), or a duration you deliberately send as `format:sec` — that struct stays
+unreadable by plain `encoding/json`. Marshal it with `encoding/json/v2` plus
+`github.com/go-json-experiment/json.ExperimentalSupportFormatTag(true)`, joined
+with `encoding/json.DefaultOptionsV1()` if you want v1 semantics and the exact
+bytes v1 used to write.
+
+### Changed
+
+- **`time.Duration` no longer needs a `format:` tag.** aprot marshals a bare
+  duration as int64 nanoseconds, the encoding v1 `encoding/json` has always
+  used, by adding `encoding/json.FormatDurationAsNano` to the wire options.
+  The codegen no longer rejects an untagged duration field; it generates
+  `number`, as it did for a `format:nano` field.
+
+  Backward compatible in every direction. json/v2 checks a field's `format:`
+  tag before this option, so tags already written encode exactly as they did,
+  and the wire bytes are identical either way.
+
+  The requirement was wrong to begin with. aprot pushed a tag into consumers'
+  own struct definitions to solve a problem aprot can solve once, in its own
+  options — and from Go 1.27 that tag stops the standard library from reading
+  the struct at all. See "Upgrading" above.
+
+### Fixed
+
+- A `time.Duration` under `format:units` or `format:iso8601` generated
+  `number`, but those formats send a **string** (`"1m30s"`, `"PT1M30S"`). Only
+  byte slices consulted the `format:` tag when deciding a shape; a duration was
+  reported by its int64 kind whatever the tag said. They now generate `string`
+  in the TypeScript client and the Zod schema, and `{"type": "string"}` in
+  OpenAPI — with `"format": "duration"` for `iso8601`, which is the JSON Schema
+  keyword for ISO 8601 durations.
+
 ## [0.60.0] - 2026-08-20
 
 ### Upgrading
