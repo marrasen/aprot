@@ -10,6 +10,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-08-25
+
 ### Upgrading
 
 **A `format:` struct tag breaks plain `encoding/json`.** Go 1.27 rebuilt
