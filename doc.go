@@ -831,6 +831,11 @@
 //	const client = new ApiClient(getWebSocketUrl());
 //	await client.connect(); // REQUIRED — never called automatically
 //
+// Auto-reconnect backs off linearly: attempt n waits n × ReconnectInterval,
+// capped at ReconnectMaxInterval — 1s, 2s, 3s, … 10s with the defaults (both
+// are [ServerOptions] fields pushed to clients on connect, and client-side
+// ApiClientOptions).
+//
 // connect() is cheap and idempotent: a no-op while connected or connecting,
 // and an immediate attempt otherwise — including while a reconnect backoff is
 // pending, in which case the backoff is abandoned rather than waited out. Call

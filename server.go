@@ -46,9 +46,11 @@ type AuthHook func(ctx context.Context, conn *Conn, token string) error
 
 // ServerOptions configures the server behavior.
 type ServerOptions struct {
-	// ReconnectInterval is the initial reconnect delay in milliseconds. Default: 1000
+	// ReconnectInterval is the reconnect delay step in milliseconds: clients
+	// back off linearly, waiting n × this before attempt n, capped at
+	// ReconnectMaxInterval. Default: 1000
 	ReconnectInterval int
-	// ReconnectMaxInterval is the maximum reconnect delay in milliseconds. Default: 30000
+	// ReconnectMaxInterval is the maximum reconnect delay in milliseconds. Default: 10000
 	ReconnectMaxInterval int
 	// ReconnectMaxAttempts is the maximum number of reconnect attempts. 0 = unlimited. Default: 0
 	ReconnectMaxAttempts int
@@ -163,7 +165,7 @@ type StreamChunking struct {
 func defaultServerOptions() ServerOptions {
 	return ServerOptions{
 		ReconnectInterval:    1000,
-		ReconnectMaxInterval: 30000,
+		ReconnectMaxInterval: 10000,
 		ReconnectMaxAttempts: 0,
 		MaxMessageSize:       4 << 20,
 		WriteTimeout:         30 * time.Second,
