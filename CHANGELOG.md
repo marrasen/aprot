@@ -10,6 +10,57 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-08-31
+
+Fixes rare 25–30 second connect/login stalls in the generated TypeScript
+client (#361, #362). No server-side wire changes; regenerate your clients to
+pick this up.
+
+### Upgrading
+
+- **Reconnect defaults changed.** Backoff is now linear instead of
+  exponential — attempt n waits n × `reconnectInterval` (1s, 2s, 3s, …) —
+  and the default `reconnectMaxInterval` dropped from 30000 to 10000, in
+  both the client and `ServerOptions`. Servers that set these explicitly
+  keep their values; the meaning of `reconnectInterval` is now the step
+  size rather than the initial delay of a doubling series.
+- **New `ConnectionErrorReason` value.** A throwing URL function or
+  `getConnectParams` now classifies as `'connect-params-failed'` instead of
+  `'network-error'`. An exhaustive `switch` on the reason union gets a
+  compile error after regenerating — add the new case.
+
+### Changed
+
+- **Linear reconnect backoff** (#361): exponential backoff let attempts
+  that fail with no visible network traffic (a throwing token fetch in
+  `getConnectParams` or a URL function) silently climb to a 30s wait, so
+  the first attempt after the token source recovered could sit a full max
+  interval away. Linear growth with a 10s cap bounds that worst case.
+
+### Added
+
+- **`connectTimeout` client option** (#362): default 10000 ms, `0`
+  disables. The built-in WebSocket and SSE transports now abandon a
+  handshake that hangs, failing into the normal retry path instead of
+  pinning the client in `'connecting'` — where `connect()` and
+  `reconnectNow()` are no-ops — until the browser's own TCP timeout
+  (often 20–30s). Custom `ClientTransport` implementations must bound
+  their own `connect()`; the interface contract now says so.
+- **`'connect-params-failed'` connection error reason** (#362): a throwing
+  URL function or `getConnectParams` carries the thrown error on
+  `err.cause` (plus an `isConnectParamsFailed()` helper), distinguishing
+  "my token service is down" from "the socket dropped". `'offline'` still
+  wins when `navigator.onLine` is false, and the reconnect backoff still
+  applies.
+
+### Fixed
+
+- **SSE transport wedge** (#362): a connection error before the
+  `connected` event left the transport's connect promise pending forever,
+  permanently blocking all future reconnect attempts. It now rejects, like
+  the WebSocket transport. A malformed `connected` frame also fails the
+  attempt via the connect timeout instead of wedging.
+
 ## [0.61.0] - 2026-08-25
 
 ### Upgrading
