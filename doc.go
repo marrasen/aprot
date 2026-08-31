@@ -834,7 +834,13 @@
 // Auto-reconnect backs off linearly: attempt n waits n × ReconnectInterval,
 // capped at ReconnectMaxInterval — 1s, 2s, 3s, … 10s with the defaults (both
 // are [ServerOptions] fields pushed to clients on connect, and client-side
-// ApiClientOptions).
+// ApiClientOptions). Each attempt's transport handshake is bounded by the
+// client-side connectTimeout option (default 10s, 0 disables), so a hung
+// handshake fails into the normal retry path instead of pinning the client
+// until the browser's own TCP timeout. When the URL function or
+// getConnectParams throws, the attempt fails with ConnectionError reason
+// 'connect-params-failed' (the thrown error on .cause) and still retries —
+// distinguishing a token-provider outage from a dropped socket.
 //
 // connect() is cheap and idempotent: a no-op while connected or connecting,
 // and an immediate attempt otherwise — including while a reconnect backoff is

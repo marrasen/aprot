@@ -153,7 +153,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
 - **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs; works over WebSocket and SSE
 - **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
-- **Automatic reconnection** — page visibility + network-aware, with linear backoff (1s, 2s, 3s, … capped at 10s by default); `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
+- **Automatic reconnection** — page visibility + network-aware, with linear backoff (1s, 2s, 3s, … capped at 10s by default) and a `connectTimeout` (default 10s) that fails a hung handshake instead of waiting out the browser's TCP timeout; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
 - **Zod schema generation** — opt-in generation of Zod validation schemas alongside TypeScript interfaces
@@ -854,7 +854,8 @@ Reasons:
 | `offline` | `navigator.onLine` was `false` at failure time. |
 | `server-rejected` | The server sent an `ApiError` with code `ConnectionRejected` (e.g. invalid session) before closing, or a first-message `auth_error` failed the handshake. The original `ApiError` is attached as `err.cause`. |
 | `server-closed` | Transport closed cleanly after the WebSocket upgrade completed. `err.closeCode` and `err.closeReason` carry the WebSocket `CloseEvent` fields. |
-| `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. |
+| `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. Also used when the handshake exceeded `connectTimeout`. |
+| `connect-params-failed` | The URL function or `getConnectParams` threw before any transport activity — typically a token-provider fetch failing. The thrown error is attached as `err.cause`. The normal reconnect backoff still applies, so this distinguishes "my token service is down" from "the socket dropped". |
 | `manual` | The caller invoked `client.disconnect()`. |
 
 The same `ConnectionError` instance is delivered to:
