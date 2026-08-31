@@ -31,7 +31,7 @@ Values are URL-encoded for you and override same-named parameters already presen
 
 > **Use `skipCache: true` (or your provider's equivalent).** Clerk caches tokens for roughly 50 seconds and hands back whatever it has. On a reconnect that can be a token with a second of life left, which then expires mid-handshake — the failure looks intermittent and is miserable to debug.
 
-If the callback throws, the attempt fails like a transport error and the normal reconnect backoff applies — a token service blip does not permanently stop reconnection.
+If the callback throws, the attempt fails and the normal reconnect backoff applies — a token service blip does not permanently stop reconnection. The failure surfaces through `onConnectionError` with reason `'connect-params-failed'` (the thrown error on `err.cause`), so a token-provider outage is distinguishable from a dropped socket. Don't wait unbounded inside the callback: while it is pending the attempt counts as in flight and `connect()` is a no-op — resolve within a few seconds or throw and let the next attempt retry.
 
 The same per-attempt guarantee holds for a **URL function**, which is the older form of this recipe and still supported:
 

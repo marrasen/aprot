@@ -149,12 +149,18 @@ function decodeBlobResult(result: unknown): unknown {
 //                        completed; closeCode and closeReason are populated.
 //   - 'network-error':   pre-upgrade failure or close code 1006 — refused,
 //                        unreachable, TLS or upgrade-time HTTP error.
+//   - 'connect-params-failed': the URL function or getConnectParams threw
+//                        before any transport activity (e.g. a token
+//                        provider fetch failed). The thrown error is
+//                        attached via ConnectionError.cause. The normal
+//                        reconnect backoff still applies.
 //   - 'manual':          the caller invoked client.disconnect().
 export type ConnectionErrorReason =
     | 'offline'
     | 'server-rejected'
     | 'server-closed'
     | 'network-error'
+    | 'connect-params-failed'
     | 'manual';
 
 // ConnectionErrorInit carries the optional diagnostic fields attached to a
@@ -194,6 +200,7 @@ export class ConnectionError extends Error {
     isServerRejected(): boolean { return this.reason === 'server-rejected'; }
     isServerClosed(): boolean { return this.reason === 'server-closed'; }
     isNetworkError(): boolean { return this.reason === 'network-error'; }
+    isConnectParamsFailed(): boolean { return this.reason === 'connect-params-failed'; }
     isManual(): boolean { return this.reason === 'manual'; }
 }
 
@@ -260,6 +267,10 @@ export interface TransportCloseInfo {
  * - connect() resolves once the channel is ready; deliver every inbound
  *   protocol message to onMessage as a JSON string, and call onClose exactly
  *   once when the channel ends (after a successful connect).
+ * - connect() must settle within a bounded time (the built-in transports
+ *   give up after ApiClientOptions.connectTimeout). A promise that never
+ *   settles pins the client in 'connecting', where connect() is a no-op
+ *   and nothing can start a fresh attempt.
  * - send() receives a protocol message object; serialize it (e.g.
  *   JSON.stringify) onto the channel.
  * - The client calls connect() again for reconnects; a transport instance
@@ -286,6 +297,18 @@ export interface ApiClientOptions {
     reconnectMaxInterval?: number;
     /** Maximum reconnect attempts. 0 = unlimited. Default: 0 */
     reconnectMaxAttempts?: number;
+    /**
+     * Milliseconds to wait for the transport handshake before giving up on
+     * the attempt. Applies to the built-in WebSocket and SSE transports; a
+     * custom ClientTransport enforces its own bound. Without one, a
+     * handshake that black-holes (e.g. into a dead network path right after
+     * wake) pins the client in 'connecting' for the browser's own TCP
+     * timeout — often 20-30s — and connect()/reconnectNow() cannot
+     * interrupt an attempt already in flight. A timed-out attempt fails
+     * like any transport error, so the normal reconnect path applies.
+     * 0 disables the timeout. Default: 10000
+     */
+    connectTimeout?: number;
     /**
      * Called when the server rejects the connection (e.g. invalid session).
      * The connection will not auto-reconnect unless reconnectOnRejected is set.
@@ -347,6 +370,7 @@ const defaultOptions: ResolvedOptions = {
     reconnectInterval: 1000,
     reconnectMaxInterval: 10000,
     reconnectMaxAttempts: 0,
+    connectTimeout: 10000,
     reconnectOnRejected: false,
 };
 
@@ -402,6 +426,11 @@ export function getSSEUrl(path: string = '/sse'): string {
 
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
+    private connectTimeout: number;
+
+    constructor(connectTimeoutMs: number = 10000) {
+        this.connectTimeout = connectTimeoutMs;
+    }
 
     connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         return new Promise((resolve, reject) => {
@@ -415,12 +444,35 @@ class WebSocketTransport implements ClientTransport {
                 this.ws = null;
             }
             let opened = false;
-            this.ws = new WebSocket(url);
-            this.ws.binaryType = 'arraybuffer';
-            this.ws.onopen = () => { opened = true; resolve(); };
-            this.ws.onerror = () => {}; // Error is followed by close
-            this.ws.onmessage = (e) => onMessage(e.data);
-            this.ws.onclose = (event) => {
+            const ws = new WebSocket(url);
+            this.ws = ws;
+            // Bound the handshake: a stalled upgrade otherwise holds this
+            // promise (and the whole client, which serializes attempts) until
+            // the browser's own TCP timeout. Detach handlers before closing so
+            // the socket's eventual close event cannot report a second
+            // failure for an attempt the client already moved past.
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            if (this.connectTimeout > 0) {
+                timer = setTimeout(() => {
+                    ws.onopen = null;
+                    ws.onclose = null;
+                    ws.onerror = null;
+                    ws.onmessage = null;
+                    ws.close();
+                    if (this.ws === ws) this.ws = null;
+                    reject(new Error('WebSocket connect timed out'));
+                }, this.connectTimeout);
+            }
+            ws.binaryType = 'arraybuffer';
+            ws.onopen = () => {
+                if (timer) clearTimeout(timer);
+                opened = true;
+                resolve();
+            };
+            ws.onerror = () => {}; // Error is followed by close
+            ws.onmessage = (e) => onMessage(e.data);
+            ws.onclose = (event) => {
+                if (timer) clearTimeout(timer);
                 this.ws = null;
                 // Surface the structured CloseEvent so the ApiClient can
                 // distinguish a clean post-upgrade close (codes 1000-1015,
@@ -465,37 +517,63 @@ class SSETransport implements ClientTransport {
     private connectionId: string | null = null;
     private baseUrl: string = '';
     private onMessage: ((data: string) => void) | null = null;
+    private connectTimeout: number;
+
+    constructor(connectTimeoutMs: number = 10000) {
+        this.connectTimeout = connectTimeoutMs;
+    }
 
     connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
         this.baseUrl = url;
         this.onMessage = onMessage;
 
-        return new Promise((resolve) => {
-            this.eventSource = new EventSource(url);
+        return new Promise((resolve, reject) => {
+            let connected = false;
+            const es = new EventSource(url);
+            this.eventSource = es;
+            // Bound the handshake, mirroring WebSocketTransport: without it a
+            // stream that never delivers 'connected' leaves this promise
+            // pending forever and wedges the client's attempt serialization.
+            let timer: ReturnType<typeof setTimeout> | null = null;
+            if (this.connectTimeout > 0) {
+                timer = setTimeout(() => {
+                    es.close();
+                    if (this.eventSource === es) {
+                        this.eventSource = null;
+                        this.connectionId = null;
+                    }
+                    reject(new Error('SSE connect timed out'));
+                }, this.connectTimeout);
+            }
 
-            this.eventSource.addEventListener('connected', (e: MessageEvent) => {
+            es.addEventListener('connected', (e: MessageEvent) => {
+                // Parse before clearing the timer or marking connected: a
+                // malformed frame must leave the timeout armed so the attempt
+                // fails instead of the promise never settling.
                 const msg = JSON.parse(e.data);
+                if (timer) clearTimeout(timer);
+                connected = true;
                 this.connectionId = msg.connectionId;
                 resolve();
             });
 
-            this.eventSource.addEventListener('config', (e: MessageEvent) => {
+            es.addEventListener('config', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('auth_ok', (e: MessageEvent) => {
+            es.addEventListener('auth_ok', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('auth_error', (e: MessageEvent) => {
+            es.addEventListener('auth_error', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('response', (e: MessageEvent) => {
+            es.addEventListener('response', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('error', (e: MessageEvent) => {
+            es.addEventListener('error', (e: MessageEvent) => {
                 if (e.data) {
                     onMessage(e.data);
                 } else {
@@ -503,30 +581,37 @@ class SSETransport implements ClientTransport {
                     // EventSource exposes nothing structured here, so the
                     // ApiClient classifier falls through to 'network-error'
                     // after offline/manual checks.
-                    this.eventSource?.close();
-                    this.eventSource = null;
-                    this.connectionId = null;
+                    if (timer) clearTimeout(timer);
+                    es.close();
+                    if (this.eventSource === es) {
+                        this.eventSource = null;
+                        this.connectionId = null;
+                    }
+                    // Settle the connect promise on a pre-'connected' failure,
+                    // like the WebSocket transport: leaving it pending would
+                    // hold the client's in-flight attempt forever.
+                    if (!connected) reject(new Error('SSE closed before connected'));
                     onClose({ wasClean: false });
                 }
             });
 
-            this.eventSource.addEventListener('progress', (e: MessageEvent) => {
+            es.addEventListener('progress', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('push', (e: MessageEvent) => {
+            es.addEventListener('push', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('stream_item', (e: MessageEvent) => {
+            es.addEventListener('stream_item', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('stream_chunk', (e: MessageEvent) => {
+            es.addEventListener('stream_chunk', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
-            this.eventSource.addEventListener('stream_end', (e: MessageEvent) => {
+            es.addEventListener('stream_end', (e: MessageEvent) => {
                 onMessage(e.data);
             });
 
@@ -702,6 +787,12 @@ export class ApiClient {
     // completing — compare attempt ids rather than relying on ordering.
     private connectAttemptId = 0;
     private lastRejectionAttemptId = -1;
+    // connectParamsFailure is set when the URL function or getConnectParams
+    // throws, just before the failure is routed through handleClose(), so
+    // classifyClose() can name the reason and attach the thrown error as
+    // cause. Wrapped in an object so a thrown null/undefined still counts.
+    // Consumed by handleClose(), exactly like pendingRejection.
+    private connectParamsFailure: { cause: unknown } | null = null;
     // lastConnectionError is the most recently observed ConnectionError,
     // exposed via getLastConnectionError() so a UI can render an offline
     // banner / "server unreachable" message after the fact.
@@ -718,8 +809,8 @@ export class ApiClient {
         this.transport = typeof this.options.transport === 'object'
             ? this.options.transport
             : this.options.transport === 'sse'
-                ? new SSETransport()
-                : new WebSocketTransport();
+                ? new SSETransport(this.options.connectTimeout)
+                : new WebSocketTransport(this.options.connectTimeout);
 
         const retry = this.options.reconnectOnRejected;
         if (retry) {
@@ -821,7 +912,8 @@ export class ApiClient {
             if (this.options.getConnectParams) {
                 url = appendQueryParams(url, await this.options.getConnectParams());
             }
-        } catch {
+        } catch (err) {
+            this.connectParamsFailure = { cause: err };
             this.handleClose({ wasClean: false });
             return;
         }
@@ -912,10 +1004,15 @@ export class ApiClient {
     //   2. Manual disconnect comes next — the caller initiated the close.
     //   3. Offline overrides everything else; navigator.onLine being false
     //      means even a clean close happened during a network outage and
-    //      "offline" is the more useful message.
-    //   4. A close code outside the abnormal range (1006) and 0 means the
+    //      "offline" is the more useful message — including when it was the
+    //      URL/params callback that failed, since it failed *because* the
+    //      network is down.
+    //   4. A URL function / getConnectParams throw is named before the
+    //      transport buckets: no socket was ever involved, so close-code
+    //      reasoning does not apply.
+    //   5. A close code outside the abnormal range (1006) and 0 means the
     //      WebSocket upgrade succeeded and the server closed cleanly.
-    //   5. Otherwise the failure happened before/at upgrade time and the
+    //   6. Otherwise the failure happened before/at upgrade time and the
     //      browser collapses every cause into an indistinguishable
     //      'network-error'.
     private classifyClose(info?: TransportCloseInfo): ConnectionErrorReason {
@@ -926,6 +1023,7 @@ export class ApiClient {
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
             return 'offline';
         }
+        if (this.connectParamsFailure) return 'connect-params-failed';
         if (info?.code !== undefined && info.code !== 1006 && info.code !== 0) {
             return 'server-closed';
         }
@@ -958,6 +1056,14 @@ export class ApiClient {
             case 'network-error':
                 message = 'Network error: connection lost';
                 break;
+            case 'connect-params-failed': {
+                const cause = this.connectParamsFailure?.cause;
+                init.cause = cause;
+                message = cause instanceof Error && cause.message
+                    ? `Failed to resolve connection URL or params: ${cause.message}`
+                    : 'Failed to resolve connection URL or params';
+                break;
+            }
             case 'manual':
                 message = 'Disconnected';
                 break;
@@ -1006,13 +1112,16 @@ export class ApiClient {
         // re-notify listeners or rebuild the error.
         if (this.manualDisconnect && this.state === 'disconnected') {
             this.pendingRejection = null;
+            this.connectParamsFailure = null;
             return;
         }
         const reason = this.classifyClose(info);
         const error = this.buildConnectionError(reason, info);
-        // Consume the pending rejection: subsequent reconnect attempts
-        // (e.g. after the auth flow refreshes) must not be misclassified.
+        // Consume the pending rejection and params failure: subsequent
+        // reconnect attempts (e.g. after the auth flow refreshes) must not
+        // be misclassified.
         this.pendingRejection = null;
+        this.connectParamsFailure = null;
 
         // Reject all pending requests (but keep subscription entries for reconnect)
         const subIds = new Set(this.subscriptions.keys());
