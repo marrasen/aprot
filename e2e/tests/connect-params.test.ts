@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { wsTokenUrl, wsUrl } from './helpers';
-import { ApiClient } from '../api/client';
+import { ApiClient, type ConnectionError } from '../api/client';
 import { getConnURL } from '../api/conn-handlers';
 
 // getConnectParams resolves per connection attempt and merges into the URL
@@ -71,8 +71,8 @@ describe('getConnectParams (WebSocket)', () => {
         client.disconnect();
     });
 
-    test('a throwing getConnectParams fails the attempt like a transport error', async () => {
-        const errors: string[] = [];
+    test('a throwing getConnectParams fails the attempt as connect-params-failed', async () => {
+        const errors: ConnectionError[] = [];
         let rejections = 0;
         let attempt = 0;
 
@@ -87,13 +87,16 @@ describe('getConnectParams (WebSocket)', () => {
                 rejections++;
             },
         });
-        client.onConnectionError((err) => errors.push(err.reason));
+        client.onConnectionError((err) => errors.push(err));
 
         await client.connect();
         await new Promise((resolve) => setTimeout(resolve, 800));
 
-        // The failure is a local one, not a server rejection.
-        expect(errors[0]).toBe('network-error');
+        // The failure is named as a params failure — not a server rejection,
+        // and not a dropped socket — with the thrown error as cause.
+        expect(errors[0].reason).toBe('connect-params-failed');
+        expect(errors[0].isConnectParamsFailed()).toBe(true);
+        expect((errors[0].cause as Error).message).toBe('token mint failed');
         expect(rejections).toBe(0);
         // And normal reconnect recovers once the callback succeeds.
         expect(client.getState()).toBe('connected');

@@ -547,9 +547,12 @@ class SSETransport implements ClientTransport {
             }
 
             es.addEventListener('connected', (e: MessageEvent) => {
+                // Parse before clearing the timer or marking connected: a
+                // malformed frame must leave the timeout armed so the attempt
+                // fails instead of the promise never settling.
+                const msg = JSON.parse(e.data);
                 if (timer) clearTimeout(timer);
                 connected = true;
-                const msg = JSON.parse(e.data);
                 this.connectionId = msg.connectionId;
                 resolve();
             });
