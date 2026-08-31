@@ -80,7 +80,7 @@ const client = new ApiClient(getWebSocketUrl());
 client.connect(); // REQUIRED once. `await` optional: requests issued while connecting are buffered and flushed on ready.
 ```
 
-React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. After the first successful call, auto-reconnect handles drops, so no reconnect loop of your own is needed.
+React: create the client at module scope, call `client.connect()` there (or in a `useEffect`), then mount `<ApiClientProvider value={client}>`. After the first successful call, auto-reconnect handles drops, so no reconnect loop of your own is needed. The backoff is linear: attempt n waits n × `reconnectInterval`, capped at `reconnectMaxInterval` — 1s, 2s, 3s, … 10s with the defaults (server `ServerOptions` push these to clients on connect).
 
 `connect()` is cheap and idempotent — a no-op while connected/connecting, and an immediate attempt otherwise, **including while a reconnect backoff is pending** (the backoff is abandoned rather than waited out). Call it whenever the connection needs to be live (after signing in, on resume) rather than caching an "already connected" flag: such a flag skips the call exactly when the socket has since dropped, and nothing opens a new one — the symptom is a UI that waits with no `/ws` request in the network panel. `client.reconnectNow()` is the same thing without the connected/connecting no-op; reach for it only when a socket the runtime left half-open still reports `'connected'`. Neither drops subscriptions or rejects in-flight requests, unlike `disconnect()` + `connect()`.
 

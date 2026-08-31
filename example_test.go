@@ -236,7 +236,7 @@ func ExampleServer_Stop() {
 func ExampleNewServer_options() {
 	registry := aprot.NewRegistry()
 	server := aprot.NewServer(registry, aprot.ServerOptions{
-		ReconnectInterval:    2000,  // initial delay (ms)
+		ReconnectInterval:    2000,  // linear backoff step (ms): attempt n waits n × this
 		ReconnectMaxInterval: 60000, // max delay (ms)
 		ReconnectMaxAttempts: 10,    // 0 = unlimited
 	})

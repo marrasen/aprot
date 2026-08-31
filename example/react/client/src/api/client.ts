@@ -287,9 +287,9 @@ export interface ApiClientOptions {
     transport?: 'websocket' | 'sse' | ClientTransport;
     /** Enable auto-reconnect on connection loss. Default: true */
     reconnect?: boolean;
-    /** Initial reconnect delay in ms. Default: 1000 */
+    /** Reconnect delay step in ms: attempt n waits n × this (linear backoff). Default: 1000 */
     reconnectInterval?: number;
-    /** Maximum reconnect delay in ms (for exponential backoff). Default: 30000 */
+    /** Maximum reconnect delay in ms (caps the linear backoff). Default: 10000 */
     reconnectMaxInterval?: number;
     /** Maximum reconnect attempts. 0 = unlimited. Default: 0 */
     reconnectMaxAttempts?: number;
@@ -352,7 +352,7 @@ const defaultOptions: ResolvedOptions = {
     transport: 'websocket',
     reconnect: true,
     reconnectInterval: 1000,
-    reconnectMaxInterval: 30000,
+    reconnectMaxInterval: 10000,
     reconnectMaxAttempts: 0,
     reconnectOnRejected: false,
 };
@@ -1112,8 +1112,13 @@ export class ApiClient {
     private scheduleReconnect(): void {
         if (this.reconnectTimer) return;
 
+        // Linear backoff: attempt n waits n × reconnectInterval, capped at
+        // reconnectMaxInterval — 1s, 2s, 3s, … 10s with the defaults. Chosen
+        // over exponential deliberately: a failure streak (e.g. a token
+        // provider outage) otherwise escalates to a max-interval wait that
+        // stalls the next successful connect far longer than it saves.
         const delay = Math.min(
-            this.options.reconnectInterval * Math.pow(2, this.reconnectAttempts),
+            this.options.reconnectInterval * (this.reconnectAttempts + 1),
             this.options.reconnectMaxInterval
         );
         this.reconnectAttempts++;

@@ -1513,8 +1513,8 @@ func TestServerOptionsDefaults(t *testing.T) {
 	if msg.ReconnectInterval != 1000 {
 		t.Errorf("Expected default ReconnectInterval 1000, got %d", msg.ReconnectInterval)
 	}
-	if msg.ReconnectMaxInterval != 30000 {
-		t.Errorf("Expected default ReconnectMaxInterval 30000, got %d", msg.ReconnectMaxInterval)
+	if msg.ReconnectMaxInterval != 10000 {
+		t.Errorf("Expected default ReconnectMaxInterval 10000, got %d", msg.ReconnectMaxInterval)
 	}
 }
 
