@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
-    "oxlint": "^1.78.0",
+    "oxlint": "^1.80.0",
     "typescript": "^7.0.2"
   }
 }
