@@ -10,6 +10,11 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.63.0] - 2026-09-21
+
+Adds one field to the shared-task wire format. Regenerate your clients to
+pick it up; nothing existing changes.
+
 ### Added
 
 - **`SharedTaskState.startedHere`** (#370): reports whether this exact
