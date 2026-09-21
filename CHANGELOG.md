@@ -10,6 +10,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **`SharedTaskState.startedHere`** (#370): reports whether this exact
+  connection started the shared task, where `isOwner` reports whether the
+  viewing user owns it. A user with the app open in two windows reads
+  `isOwner: true` in both, so a UI that auto-opens a progress dialog on the
+  `created` broadcast opened it in every window. Read `startedHere` for UI
+  that reacts to the call itself, and `isOwner` for anything about rights —
+  a reconnect gets a new connection ID and clears `startedHere`, which is
+  why it must never gate a permission. `isOwner` and the cancel policy are
+  unchanged. Regenerate your clients to pick up the field.
+
 ## [0.62.0] - 2026-08-31
 
 Fixes rare 25–30 second connect/login stalls in the generated TypeScript

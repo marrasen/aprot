@@ -41,6 +41,7 @@ export interface SharedTaskState {
     meta?: TaskMeta;
     children?: TaskNode[];
     isOwner: boolean;
+    startedHere: boolean;
 }
 
 export interface TaskMeta {

@@ -91,7 +91,11 @@
 //	ctx, task := tasks.StartTask[MyMeta](ctx, "Building index", tasks.Shared())
 //
 // All clients receive [TaskStateEvent] and [TaskUpdateEvent] push events.
-// Each client sees an IsOwner flag indicating whether it started the task.
+// Each client sees two flags on a top-level shared task. IsOwner reports that
+// the viewing user owns it, and is what the cancel policy reads. StartedHere
+// reports that this exact connection made the call. They differ when a user
+// has the app open twice: both windows are owners, only one started the task,
+// so a UI that pops a progress dialog open should read StartedHere.
 //
 // A shared task started on the request context is auto-completed (or
 // auto-failed) when the handler returns, like a request-scoped task.
@@ -188,6 +192,8 @@
 // request-scoped transport can cancel the task it started, having no
 // connection of its own. This is the same rule clients see as
 // SharedTaskState.IsOwner, so a rendered cancel button is never refused.
+// SharedTaskState.StartedHere is not an authorization input: it names the
+// connection that made the call and goes false on a reconnect.
 //
 // Pass [WithCancelAuthorizer] to install any other policy from a
 // [TaskCancelInfo] carrying the owning connection and address. The authorizer
