@@ -96,6 +96,65 @@ func TestSharedTaskOwnershipFallsBackToConn(t *testing.T) {
 	}
 }
 
+// StartedHere is narrower than IsOwner: it names the one connection that made
+// the call, so a second window of the same user reads as an owner that did not
+// start the task, and a reconnect onto a new connection reads the same way.
+func TestSharedTaskStartedHereIsPerConnection(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	node := tm.create("owned by u1", 10, "u1", true, context.Background())
+
+	s := node.sharedSnapshotForConn(10, "u1")
+	if !s.StartedHere {
+		t.Error("StartedHere should be true on the connection that created the task")
+	}
+	if !s.IsOwner {
+		t.Error("IsOwner should be true on the connection that created the task")
+	}
+
+	// Second window of the same user, or the same window after a reconnect.
+	s = node.sharedSnapshotForConn(11, "u1")
+	if s.StartedHere {
+		t.Error("StartedHere should be false on another connection of the same user")
+	}
+	if !s.IsOwner {
+		t.Error("IsOwner should stay true on another connection of the same user")
+	}
+
+	// A different user holding the creating connection ID cannot happen on a
+	// live server, but the flag answers the connection question either way.
+	if s := node.sharedSnapshotForConn(12, "u2"); s.StartedHere || s.IsOwner {
+		t.Error("a different connection of a different user is neither owner nor starter")
+	}
+}
+
+// A sub-task is never reported as started here, matching IsOwner: only a
+// top-level shared task carries an origin.
+func TestSharedTaskStartedHereIgnoresSubTasks(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	node := tm.create("sub-task", 10, "u1", false, context.Background())
+
+	if s := node.sharedSnapshotForConn(10, "u1"); s.StartedHere || s.IsOwner {
+		t.Error("a sub-task should be neither started here nor owned")
+	}
+}
+
+// An unauthenticated owner is matched by connection for both flags, so they
+// agree for an anonymous caller.
+func TestSharedTaskStartedHereMatchesAnonymousOwner(t *testing.T) {
+	_, tm := setupTestServer(t)
+
+	node := tm.create("anon task", 7, "", true, context.Background())
+
+	if s := node.sharedSnapshotForConn(7, ""); !s.StartedHere || !s.IsOwner {
+		t.Error("the creating connection of an anonymous task is both owner and starter")
+	}
+	if s := node.sharedSnapshotForConn(8, ""); s.StartedHere || s.IsOwner {
+		t.Error("another connection of an anonymous task is neither")
+	}
+}
+
 // CancelTaskByID cancels regardless of authorizer or connection, and reports
 // whether a live task was found.
 func TestCancelTaskByID(t *testing.T) {

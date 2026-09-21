@@ -58,6 +58,10 @@ type SharedTaskState struct {
 	Meta     any            `json:"meta,omitempty"`
 	Children []*TaskNode    `json:"children,omitempty"`
 	IsOwner  bool           `json:"isOwner"`
+	// StartedHere reports that this exact connection created the task, where
+	// IsOwner reports that the viewing user did. A second window of the same
+	// user sees IsOwner true and StartedHere false.
+	StartedHere bool `json:"startedHere"`
 }
 
 // RequestTaskTreeEvent is the push event sent to the requesting client with

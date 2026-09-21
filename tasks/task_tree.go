@@ -451,16 +451,28 @@ func (n *taskNode) ownedBy(connID uint64, userID string) bool {
 	return n.ownerConnID != 0 && n.ownerConnID == connID
 }
 
-// sharedSnapshotForConn returns a SharedTaskState with IsOwner set for the
-// viewing caller, identified by connection ID and address. Sub-tasks are
-// never reported as owned; ownership of a top-level task is [taskNode.ownedBy].
+// startedOn reports whether the connection identified by connID is the one that
+// created this task. It is narrower than [taskNode.ownedBy]: a second window of
+// the same user is an owner but did not start the task, and a reconnect gets a
+// new connection ID, so a task never reads as started on a connection that did
+// not carry the call.
+func (n *taskNode) startedOn(connID uint64) bool {
+	return n.ownerConnID != 0 && n.ownerConnID == connID
+}
+
+// sharedSnapshotForConn returns a SharedTaskState with IsOwner and StartedHere
+// set for the viewing caller, identified by connection ID and address. Sub-tasks
+// are never reported as owned or started here; ownership of a top-level task is
+// [taskNode.ownedBy] and origin is [taskNode.startedOn].
 func (n *taskNode) sharedSnapshotForConn(connID uint64, userID string) SharedTaskState {
 	state := n.sharedSnapshot()
 	if !n.topLevel {
 		state.IsOwner = false
+		state.StartedHere = false
 		return state
 	}
 	state.IsOwner = n.ownedBy(connID, userID)
+	state.StartedHere = n.startedOn(connID)
 	return state
 }
 

@@ -104,6 +104,13 @@ consistent with them.
   is the standing keep-condition. If that coverage lapses, deletion becomes
   the right call, on the same "unused in practice" standard as the SSE
   proposal (#280). Ruling recorded for #340.
+- **A connection-scoped fact may be reported to the client, but never
+  becomes an authorization input.** `SharedTaskState.startedHere` says which
+  connection carried the call (#370). That is transport, so carrying it is
+  in. It sits next to `isOwner`, which is per user, rather than narrowing it:
+  ownership is the cancel policy's input and must survive a reconnect, while
+  an origin flag by definition does not. Two flags with one meaning each,
+  not one flag that means both.
 - **Auth mechanics in, auth meaning out.** First-message auth, the
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and
