@@ -134,7 +134,15 @@ func TestInFlightRequests_SnapshotNamesTheMethod(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	waitEntered(t, h, "Stuck")
-	eventually(t, 3*time.Second, func() bool { return len(server.InFlightRequests()) == 1 })
+	// Age comes from a monotonic clock, and a coarse one reports exactly zero
+	// for a request sampled inside its first tick — Windows ticks at ~15.6ms,
+	// so a single sample here read 0 on every run (#382). Poll until the age
+	// is measurable, as the OldestRequestAge assertions already do: one try on
+	// a fine-grained clock, one tick on a coarse one.
+	eventually(t, 3*time.Second, func() bool {
+		snapshot := server.InFlightRequests()
+		return len(snapshot) == 1 && snapshot[0].Age > 0
+	})
 
 	got := server.InFlightRequests()[0]
 	if got.Method != "inflightHandlers.Stuck" {
@@ -145,9 +153,6 @@ func TestInFlightRequests_SnapshotNamesTheMethod(t *testing.T) {
 	}
 	if got.Subscribe {
 		t.Error("Subscribe = true, want false for a one-shot request")
-	}
-	if got.Age <= 0 {
-		t.Errorf("Age = %v, want > 0", got.Age)
 	}
 	if got.ConnID == 0 {
 		t.Error("ConnID = 0, want the ID of the connection the request arrived on")
