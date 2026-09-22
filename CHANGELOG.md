@@ -12,6 +12,12 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- **`InFlightRequest.Age` can no longer be negative** (#374 follow-up):
+  `Server.InFlightRequests` reads the clock once and then walks the connections
+  one at a time, so a request registered during the walk had `started > now` and
+  reported a negative duration to whatever was scraping it. Ages are now floored
+  at zero.
+
 - **A panicking `OnAuth` hook no longer crashes the process** (#341):
   `handleAuth` runs in the WebSocket read-loop goroutine, which has no recover
   above it, so a panic in the auth hook killed the whole server. Over SSE the
@@ -39,6 +45,14 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   README promises clients see everywhere.
 
 ### Changed
+
+- **The stuck-handler guide now says which paths are counted.** `README.md`
+  described `ServerStats.InFlightRequests` as the way to find a handler that
+  never returns without noting that only the four socket dispatch paths are
+  counted — REST and MCP are request-scoped and have no registered connection to
+  hold the bookkeeping, so a REST-only deployment reads 0 while a handler is
+  parked forever. `APROT_AI.md` already said so; `README.md` and `doc.go` now
+  do too.
 
 - **Documented the one place the panic guarantee stops** (#341): task middleware
   that panics *after* calling `next()` is re-raised on the task's goroutine

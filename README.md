@@ -1097,6 +1097,10 @@ for _, r := range inflight[:min(5, len(inflight))] {
 
 `Conn.InFlightRequests()` gives the per-connection count on its own. All three walk the connections' request maps, so they are sized for periodic scraping or a threshold dump, not for calling per request.
 
+**What is counted:** the four socket dispatch paths — unary request, streaming request, subscribe first-run, and server-driven subscription refresh (`Subscribe` is true for the last two). REST and MCP calls are **not** counted: they are request-scoped, with no registered connection to hold the bookkeeping, so a REST-only deployment sees `InFlightRequests` stay at 0 while a handler is parked forever. Your HTTP server's own in-flight metrics cover those paths; these numbers cover the socket ones, where the connection outlives the request and nothing else is watching.
+
+`Age` is floored at zero. One snapshot shares a single clock read, so ages are comparable with each other, and a request that starts mid-walk reports 0 in place of a negative duration.
+
 aprot deliberately does not decide what "too slow" means — there is no threshold option and no slow-request event. How long a handler may legitimately run is your policy, and you already have the numbers to alert on it.
 
 ### Server-side error logging

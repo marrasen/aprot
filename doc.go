@@ -655,9 +655,14 @@
 // snapshot naming the method, request ID, connection, and age of everything
 // currently running, and [Conn.InFlightRequests] gives one connection's count.
 // All three walk the connections' request maps, so scrape them periodically or
-// dump them on a threshold rather than calling them per request. aprot does not
-// define "too slow": there is no threshold option and no slow-request event,
-// because how long a handler may legitimately run is consumer policy.
+// dump them on a threshold rather than calling them per request. They count the
+// four socket dispatch paths — unary, streaming, subscribe first-run, and
+// server-driven refresh — and not REST or MCP, which are request-scoped and
+// have no registered connection to hold the bookkeeping. Ages within one
+// snapshot share a single clock read, so they are comparable, and are floored
+// at zero for a request that starts mid-walk. aprot does not define "too slow":
+// there is no threshold option and no slow-request event, because how long a
+// handler may legitimately run is consumer policy.
 //
 // Set [ServerOptions.Logger] (a *slog.Logger; nil uses slog.Default) to
 // receive server-side error logs. Currently logged: response-encode failures —

@@ -579,7 +579,7 @@ func (c *Conn) appendInFlight(dst []InFlightRequest, now time.Time) []InFlightRe
 			RequestID: id,
 			Method:    req.method,
 			Subscribe: req.subscribe,
-			Age:       now.Sub(req.started),
+			Age:       requestAge(now, req.started),
 		})
 	}
 	return dst
@@ -591,11 +591,24 @@ func (c *Conn) inFlightStats(now time.Time) (count int, oldest time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, req := range c.requests {
-		if age := now.Sub(req.started); age > oldest {
+		if age := requestAge(now, req.started); age > oldest {
 			oldest = age
 		}
 	}
 	return len(c.requests), oldest
+}
+
+// requestAge is now - started, floored at zero.
+//
+// Server.InFlightRequests reads the clock once and then walks the connections
+// one at a time, so a request that starts during the walk has started > now and
+// would otherwise report a negative age to a metrics backend. Zero is the
+// honest answer for a request younger than the snapshot.
+func requestAge(now, started time.Time) time.Duration {
+	if age := now.Sub(started); age > 0 {
+		return age
+	}
+	return 0
 }
 
 // handleIncomingMessage processes a raw message from any transport.
