@@ -1140,6 +1140,16 @@ REST requests run through the same request pipeline as WebSocket/SSE, via the tr
 
 On request-scoped transports `aprot.Connection(ctx)` is **nil** — connection presence means "there is a socket here", never "the caller authenticated", so don't gate auth on it. A wrapper that authenticates the request itself can still hand middleware a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token).
 
+`conn.Detached()` reports whether there is a transport behind a connection. Use it when code can either push to a live client or return the payload in its response, so it picks a path up front instead of calling `Push` and handling `ErrDetachedConn`:
+
+```go
+if conn := aprot.Connection(ctx); conn != nil && !conn.Detached() {
+    conn.Push(ProgressEvent{Percent: 50}) // live socket
+}
+```
+
+It answers a transport question only. A detached connection carries no authentication state, and aprot exposes none at the connection level — authorize on `aprot.PrincipalFrom(ctx)`.
+
 ## MCP Adapter
 
 > **Experimental.** This adapter's API may change without notice, and without a

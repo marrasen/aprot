@@ -131,6 +131,24 @@ consistent with them.
   owning a sweeper goroutine, a default that is wrong for someone, and the
   definition of "slow". Ship the numbers; the consumer's alert is one
   comparison. Ruling recorded for #374.
+- **Connection state answers transport questions; aprot exports no
+  connection-level auth accessor.** `Conn.Detached()` reports whether there
+  is a socket behind the connection, so code that must choose a delivery
+  path — push to a live client, or fold the payload into the response — can
+  decide up front instead of calling `Push` and handling `ErrDetachedConn`
+  after the fact. That is a transport fact, so it is in. Its doc comment
+  states what it answers, because `!Detached()` is one careless read away
+  from becoming the auth signal #326 was about. The paired ruling is a
+  **no**: `NewDetachedConn` does not take the authenticated state, and
+  aprot exports no `Conn.Authenticated()`. The `authenticated` flag has one
+  job — the first-message gate in `Conn.handleIncomingMessage` and its SSE
+  equivalent — and both run only when a frame arrives off a transport. A
+  detached conn has no read loop and is never registered with the server,
+  so nothing reads the flag; a constructor argument would advertise a
+  control that controls nothing. Exporting a reader would make it real,
+  which is the reason not to: connection-level auth state is the #326
+  footgun in a new wrapper, and the principal already answers that question
+  per execution. Ruling recorded for #342.
 
 ## How to use this document
 

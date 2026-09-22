@@ -12,6 +12,20 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Added
 
+- **`Conn.Detached()`** (#342): reports whether a connection has a transport
+  behind it. Code that can either push to a live client or fold the payload
+  into its response had no way to ask up front — it called `Push` and handled
+  `ErrDetachedConn` after the fact. It answers a transport question only;
+  a detached connection carries no authentication state, and aprot still
+  exposes none at the connection level. `PrincipalFrom(ctx)` is the
+  authorization input.
+
+  The paired question from #342 — whether `NewDetachedConn` should take the
+  authenticated state — is answered **no**, with no code change. That flag is
+  read only when a frame arrives off a transport, and a detached connection
+  has no read loop and is never registered with the server, so nothing reads
+  it. Both rulings are recorded in `docs/scope.md`.
+
 - **In-flight request visibility** (#374): a handler that never returns was
   invisible. `unregisterRequest` runs from a `defer` as the handler unwinds, so
   a handler blocked forever on a channel send, a mutex, or a syscall keeps its

@@ -352,6 +352,13 @@
 // their lifetime is the caller's (per request or per session), and no
 // cleanup is needed.
 //
+// [Conn.Detached] reports whether a connection has a transport behind it,
+// so code that can either push to a live client or fold the payload into
+// its response picks a path up front rather than sending and handling
+// [ErrDetachedConn]. It answers a transport question only: a detached
+// connection carries no authentication state, and aprot exposes none at
+// the connection level — [PrincipalFrom] is the authorization input.
+//
 // Handlers can also be served as MCP (Model Context Protocol) tools, so an
 // AI assistant calls them through the same pipeline, middleware and auth.
 // Exposure is per-method opt-in via [Registry.EnableMCP], with model-facing
