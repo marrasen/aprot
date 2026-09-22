@@ -243,10 +243,13 @@ func TestInFlightRequests_OldestRequestAgeTracksLongestRunning(t *testing.T) {
 		t.Errorf("oldest entry RequestID = %q, want %q", snapshot[0].RequestID, "old")
 	}
 
-	// The reported age is the oldest one, so it is at least the head start.
-	if age := server.Stats().OldestRequestAge; age < 20*time.Millisecond {
-		t.Errorf("OldestRequestAge = %v, want >= 20ms (the head start of the older request)", age)
-	}
+	// The reported age is the oldest one, so it grows past the head start. A
+	// coarse monotonic clock (Windows ticks at ~15.6ms) can still read back
+	// less than 20ms right after a 20ms sleep, so poll rather than assert on a
+	// single sample — the same reason the snapshot test polls (#382).
+	eventually(t, 3*time.Second, func() bool {
+		return server.Stats().OldestRequestAge >= 20*time.Millisecond
+	})
 	if age, oldest := server.Stats().OldestRequestAge, snapshot[0].Age; age < oldest-50*time.Millisecond {
 		t.Errorf("OldestRequestAge = %v, want to track the oldest snapshot entry (%v)", age, oldest)
 	}
