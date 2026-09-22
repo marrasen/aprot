@@ -41,6 +41,20 @@ jobs:
       - name: Check Go formatting
         run: test -z "$(gofmt -l .)"
 
+      # example/vanilla, example/react, example/task-middleware and e2e all
+      # `replace` the root module, so they carry the root's dependencies as
+      # indirect requirements pinned in their own go.mod. Bumping only the root
+      # leaves them stale and `go run` in them fails with "updates to go.mod
+      # needed" — which is how #366 broke go-lint, typescript-compile and
+      # e2e-tests at once, with no message naming the real cause.
+      - name: Check module dependencies are in sync
+        run: |
+          for m in example/vanilla example/react example/task-middleware e2e; do
+            (cd "$m" && go mod tidy)
+          done
+          git diff --exit-code -- '*/go.mod' '*/go.sum' \
+            || { echo "::error::Sibling modules are out of sync with the root — run 'go mod tidy' in example/vanilla, example/react, example/task-middleware and e2e, and commit the result"; exit 1; }
+
   go-lint:
     runs-on: ubuntu-latest
     steps:

@@ -39,5 +39,9 @@ e2e/react-api/
 # e2e server binary built by tests/setup.ts globalSetup (issue #180)
 e2e/server/server
 
+# task-middleware example binary. `go build ./...` in that module writes a
+# binary named after the directory, which the generic patterns above miss.
+example/task-middleware/task-middleware
+
 # JetBrains Junie IDE assistant
 .junie/
