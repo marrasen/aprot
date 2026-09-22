@@ -862,18 +862,53 @@ func (s *Server) ConnectionCount() int {
 	return len(s.conns)
 }
 
-// Stats returns a point-in-time snapshot of gauge-style server metrics
-// (active connections and subscriptions). It is safe for concurrent use and is
-// the pull-based companion to the push-based [Observer]; scrape it periodically
-// for gauges rather than tracking those counts from events yourself.
+// Stats returns a point-in-time snapshot of gauge-style server metrics (active
+// connections and subscriptions, and in-flight request count and age). It is
+// safe for concurrent use and is the pull-based companion to the push-based
+// [Observer]; scrape it periodically for gauges rather than tracking those
+// counts from events yourself.
+//
+// The in-flight fields walk every connection's request map, so the cost is
+// proportional to the number of connections plus running requests. That is
+// sized for periodic scraping, not for a per-request call.
 func (s *Server) Stats() ServerStats {
-	s.mu.RLock()
-	conns := len(s.conns)
-	s.mu.RUnlock()
-	return ServerStats{
-		Connections:   conns,
+	conns := s.connsSnapshot()
+	now := time.Now()
+	stats := ServerStats{
+		Connections:   len(conns),
 		Subscriptions: s.subscriptions.count(),
 	}
+	for _, c := range conns {
+		count, oldest := c.inFlightStats(now)
+		stats.InFlightRequests += count
+		if oldest > stats.OldestRequestAge {
+			stats.OldestRequestAge = oldest
+		}
+	}
+	return stats
+}
+
+// InFlightRequests returns a snapshot of every request running across all
+// connections. The order is unspecified; sort by Age to find the
+// longest-running one.
+//
+// This is the "which method is stuck" companion to
+// [ServerStats.InFlightRequests]: the count tells you a handler is parked, this
+// tells you which one. Detached connections are not included; they are not
+// registered with the server.
+//
+// Each entry's Age is measured against a single clock read, so ages within one
+// snapshot are comparable. The cost is proportional to the number of
+// connections plus running requests, so treat it as a diagnostic to scrape or
+// to dump on a threshold, not a per-request call.
+func (s *Server) InFlightRequests() []InFlightRequest {
+	conns := s.connsSnapshot()
+	now := time.Now()
+	var out []InFlightRequest
+	for _, c := range conns {
+		out = c.appendInFlight(out, now)
+	}
+	return out
 }
 
 func (s *Server) run() {

@@ -258,7 +258,7 @@ func TestDisconnectUser_SkipsReauthenticatedConnection(t *testing.T) {
 		id:        1,
 		server:    server,
 		transport: &mockTransport{},
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 	}
 	conn.userID = "bob" // already re-authenticated as bob
 

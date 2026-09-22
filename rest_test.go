@@ -534,7 +534,7 @@ func TestRESTAdapter_TriggerRefresh_RefreshesSubscribers(t *testing.T) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	s.requestsWg.Add(1)

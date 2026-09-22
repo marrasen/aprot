@@ -136,7 +136,7 @@ func TestServerInvoke_FlushesRefreshTriggers(t *testing.T) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	s.requestsWg.Add(1)
@@ -169,7 +169,7 @@ func TestServerInvoke_ErrorDropsTriggers(t *testing.T) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	s.requestsWg.Add(1)

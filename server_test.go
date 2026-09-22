@@ -2037,7 +2037,7 @@ func TestServerTriggerRefresh_CompositeKey(t *testing.T) {
 		conn: &Conn{
 			id:        1,
 			transport: &mockTransport{},
-			requests:  make(map[string]context.CancelCauseFunc),
+			requests:  make(map[string]inflight),
 		},
 		id:     "sub-1",
 		method: "Handlers.GetUser",
@@ -2060,7 +2060,7 @@ func TestRefreshBatching(t *testing.T) {
 	conn := &Conn{
 		id:        1,
 		transport: &mockTransport{},
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 	}
 
 	// Register one subscription with two trigger keys

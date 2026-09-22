@@ -28,7 +28,7 @@ func newPatchTestConn(t *testing.T) (*Server, *Conn, *recordingTransport) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	return s, c, rt

@@ -10,6 +10,29 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **In-flight request visibility** (#374): a handler that never returns was
+  invisible. `unregisterRequest` runs from a `defer` as the handler unwinds, so
+  a handler blocked forever on a channel send, a mutex, or a syscall keeps its
+  request entry and its goroutine, and nothing counted it. `Conn.close` cancels
+  pending requests, but that only helps a handler that watches its context, and
+  on a connection held open for a working shift or for days that bound is weak.
+
+  `ServerStats` gains `InFlightRequests` (count across all connections) and
+  `OldestRequestAge` (how long the longest-running one has been running, zero
+  when idle). A count that only grows, or an age past anything a handler should
+  take, is the signal. `Server.InFlightRequests()` then returns a snapshot —
+  `[]InFlightRequest{ConnID, UserID, RequestID, Method, Subscribe, Age}` — that
+  names *which* method, and `Conn.InFlightRequests()` gives one connection's
+  count. Requests, subscribe first-runs, and server-driven refreshes are all
+  counted; `Subscribe` is true for the latter two.
+
+  All three walk the connections' request maps, so they are sized for periodic
+  scraping or a threshold dump, not for calling per request. aprot ships no
+  threshold option and no slow-request event: how long a handler may
+  legitimately run is consumer policy. Ruling recorded in `docs/scope.md`.
+
 ## [0.63.0] - 2026-09-21
 
 Adds one field to the shared-task wire format. Regenerate your clients to

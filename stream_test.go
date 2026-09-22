@@ -24,7 +24,7 @@ func streamTestServer(t *testing.T) (*Conn, *recordingTransport) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	return c, rt
@@ -243,7 +243,7 @@ func TestSubscribeRejectsStreamHandler(t *testing.T) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 
@@ -328,7 +328,7 @@ func TestStreamIterator_TransportCloseDuringSend(t *testing.T) {
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	info := &HandlerInfo{Kind: HandlerKindStream, ResponseType: reflect.TypeOf(int(0))}

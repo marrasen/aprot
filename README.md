@@ -152,7 +152,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
 - **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs; works over WebSocket and SSE
-- **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot, with zero hot-path cost when unset
+- **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot and an `InFlightRequests()` dump that names a handler that never returned, with zero hot-path cost when unset
 - **Automatic reconnection** — page visibility + network-aware, with linear backoff (1s, 2s, 3s, … capped at 10s by default) and a `connectTimeout` (default 10s) that fails a hung handshake instead of waiting out the browser's TCP timeout; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -1069,7 +1069,33 @@ Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, sub
 - **Embed `NoopObserver`** so you implement only the events you care about and stay forward-compatible as new ones are added.
 - **Hot-path discipline** — callbacks run synchronously on the server's hot paths and may fire concurrently, so keep them fast and non-blocking; offload heavy work to a goroutine.
 - **Cardinality** — `Method` is bounded by your handler set, but per-user / per-connection labels can explode a metrics backend; aggregate those.
-- **Gauges** — `server.Stats()` returns a pull-based snapshot (`Connections`, `Subscriptions`) for periodic scraping, rather than tracking those from events.
+- **Gauges** — `server.Stats()` returns a pull-based snapshot (`Connections`, `Subscriptions`, `InFlightRequests`, `OldestRequestAge`) for periodic scraping, rather than tracking those from events.
+
+#### Finding a handler that never returns
+
+A handler that blocks forever — on a channel send with no receiver, a mutex, or a syscall — never unwinds, so the `defer` that unregisters its request never runs. Its goroutine stays parked and its request ID stays taken. Closing the connection cancels pending requests, but that only helps a handler that watches its context, and on a connection held open for a working shift or for days that bound is weak anyway.
+
+Two numbers in `Stats()` make that visible:
+
+```go
+st := server.Stats()
+log.Printf("conns=%d subs=%d inflight=%d oldest=%v",
+    st.Connections, st.Subscriptions, st.InFlightRequests, st.OldestRequestAge)
+```
+
+`InFlightRequests` that only ever grows, or an `OldestRequestAge` that climbs past anything your slowest handler should take, means something is stuck. To find out *which* method, take a snapshot:
+
+```go
+inflight := server.InFlightRequests() // ConnID, UserID, RequestID, Method, Subscribe, Age
+sort.Slice(inflight, func(i, j int) bool { return inflight[i].Age > inflight[j].Age })
+for _, r := range inflight[:min(5, len(inflight))] {
+    log.Printf("stuck? %s age=%v conn=%d user=%s", r.Method, r.Age, r.ConnID, r.UserID)
+}
+```
+
+`Conn.InFlightRequests()` gives the per-connection count on its own. All three walk the connections' request maps, so they are sized for periodic scraping or a threshold dump, not for calling per request.
+
+aprot deliberately does not decide what "too slow" means — there is no threshold option and no slow-request event. How long a handler may legitimately run is your policy, and you already have the numbers to alert on it.
 
 ### Server-side error logging
 
