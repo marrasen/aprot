@@ -35,12 +35,21 @@ func (detachedTransport) CloseGracefully() error                { return nil }
 // fan-out: SetUserID records the ID for UserID() but does not associate the
 // connection with the server's user index, so PushToUser and Broadcast never
 // try to deliver to it. Direct sends (Push, Progress) fail with
-// [ErrDetachedConn].
+// [ErrDetachedConn]; [Conn.Detached] reports this up front.
+//
+// A detached connection carries no authentication state of its own. The
+// first-message auth gate applies only to connections that read frames off
+// a transport; the caller that builds a detached conn is the authority on
+// whether the request behind it was authenticated, and records that with
+// [WithPrincipal] or [Conn.SetPrincipalProvider].
 func (s *Server) NewDetachedConn() *Conn {
 	c := newConn(detachedTransport{}, s, atomic.AddUint64(&s.nextConnID, 1), ConnInfo{}, context.Background())
 	c.detached = true
-	// First-message auth gates dispatch on socket connections; a detached
-	// conn is created by server-side code, which owns authentication.
+	// Inert here, set so the zero value never reads as "pending auth". The
+	// flag is consulted only when a frame arrives off a transport, and a
+	// detached conn has no read loop and is never registered. It is not an
+	// authorization decision, which is why NewDetachedConn does not take it
+	// as an argument — see docs/scope.md, ruling for #342.
 	c.authenticated.Store(true)
 	return c
 }
@@ -51,4 +60,18 @@ func (s *Server) NewDetachedConn() *Conn {
 // have no socket.
 func WithConnection(ctx context.Context, conn *Conn) context.Context {
 	return withConnection(ctx, conn)
+}
+
+// Detached reports whether c was created by [Server.NewDetachedConn] and so
+// has no transport behind it: [Conn.Push] and [Conn.Progress] fail with
+// [ErrDetachedConn], and push fan-out never reaches it.
+//
+// This answers "can I deliver a frame to this connection", not "did the
+// caller authenticate". Connection presence is a transport fact on every
+// transport; [PrincipalFrom] is the authorization input. The intended
+// caller is code that picks a delivery path up front — push to a live
+// socket, or fold the payload into the response — rather than calling
+// [Conn.Push] and handling [ErrDetachedConn] after the fact.
+func (c *Conn) Detached() bool {
+	return c.detached
 }
