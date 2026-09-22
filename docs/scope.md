@@ -115,6 +115,31 @@ consistent with them.
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and
   deciding what they may do never will.
+- **A failed auth hook leaves the address and the principal provider as it
+  found them, and puts back nothing else.** `handleAuth` captures
+  `Conn.userID` and `Conn.principalProvider` before calling the hook and
+  puts them back on any failure, error or panic (#384). This is in because
+  both are aprot's own fields, set through aprot's own setters, and sending
+  `auth_error` while keeping what that failure produced is aprot
+  contradicting itself on the wire: the client is told the token was
+  rejected, while the connection resolves the new principal on every later
+  execution and `PushToUser` delivers to the new address. Putting them back
+  is aprot keeping its bookkeeping consistent with the result it just
+  reported — transport, not policy.
+
+  What is **out** is everything else the hook touched: `Conn.Set` values,
+  the consumer's own stores, external side effects. aprot does not know
+  what they meant, and reaching for them would be guessing. The restore is
+  also not atomic against dispatch — a request already running can resolve
+  the principal with the new provider in the window before it is put back —
+  so it narrows the failure without closing it, and the hook stays the
+  authority on its own partial work.
+
+  Two alternatives were considered and dropped. Restoring only on a panic
+  gives one hook two failure semantics, the per-path drift this document
+  exists to prevent. Closing the connection on a hook panic undoes #341,
+  which exists so a panicking refresh does not downgrade a live session.
+  Ruling recorded for #384.
 - **Reporting what the connection is doing is in; deciding when that is
   wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
   `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the

@@ -667,6 +667,9 @@ func (c *Conn) sendAuthError(message string) {
 //   - failure while already authenticated (a bad refresh): send auth_error but
 //     keep the existing session — a live connection is not downgraded.
 //
+// Either failure also puts back the address and the principal provider the hook
+// may have set before failing — see [Conn.restoreAuthSnapshot].
+//
 // With no auth hook registered, an auth frame is accepted as a no-op auth_ok so
 // clients configured with getAuthToken still get a clean handshake.
 //
@@ -680,6 +683,7 @@ func (c *Conn) handleAuth(token string) {
 		return
 	}
 
+	before := c.captureAuthSnapshot()
 	err := c.runAuthHook(token)
 	if err == nil {
 		firstAuth := c.authenticated.CompareAndSwap(false, true)
@@ -689,6 +693,11 @@ func (c *Conn) handleAuth(token string) {
 		c.sendAuthOK()
 		return
 	}
+
+	// The hook may have set the address or the principal provider before it
+	// failed. Put both back before telling the client the token was rejected,
+	// so the session the client keeps is the session it had.
+	c.restoreAuthSnapshot(before)
 
 	// Only a ProtocolError message (e.g. from ErrAuthFailed) is treated as
 	// client-safe. Any other error from the hook — a raw DB/JWT/network failure —
@@ -738,6 +747,48 @@ func (c *Conn) runAuthHook(token string) (err error) {
 // errAuthHookPanicked marks a recovered auth-hook panic. It is deliberately not
 // a ProtocolError, so handleAuth redacts it to the generic failure message.
 var errAuthHookPanicked = errors.New("aprot: auth hook panicked")
+
+// authSnapshot holds the two fields an OnAuth hook sets: the address and the
+// principal provider. handleAuth captures it before calling the hook so a
+// failure can put both back.
+type authSnapshot struct {
+	userID   string
+	provider PrincipalProvider
+}
+
+func (c *Conn) captureAuthSnapshot() authSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return authSnapshot{userID: c.userID, provider: c.principalProvider}
+}
+
+// restoreAuthSnapshot puts back the address and the principal provider captured
+// before a failed auth hook.
+//
+// Both are aprot's own fields, and the hook sets them through aprot's own
+// setters. Leaving either applied after sending auth_error means the connection
+// resolves the principal the client was just told it could not have, and
+// PushToUser delivers to the address that came with it (#384). A hook that
+// returns an error chose to fail; a hook that panicked partway chose nothing.
+//
+// Two limits. Anything else the hook touched stays as the hook left it —
+// [Conn.Set] values, the consumer's own stores, external side effects — because
+// aprot does not know what they meant. And the restore is not atomic against
+// dispatch: a request already running on this connection can resolve the
+// principal with the new provider in the window before it is put back. The hook
+// is still the authority on its own partial work.
+func (c *Conn) restoreAuthSnapshot(s authSnapshot) {
+	c.mu.Lock()
+	c.principalProvider = s.provider
+	changed := c.userID != s.userID
+	c.mu.Unlock()
+
+	// SetUserID also repairs the server's user index, and takes s.mu, so it
+	// runs outside c.mu — and only when the hook moved the address.
+	if changed {
+		c.SetUserID(s.userID)
+	}
+}
 
 // stopAuthTimer cancels the pending-auth timeout, if armed.
 func (c *Conn) stopAuthTimer() {

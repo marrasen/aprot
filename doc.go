@@ -413,7 +413,7 @@
 // REST and MCP adapters re-panic it into net/http, preserving the stdlib's
 // abort-quietly convention. A panicking [AuthHook] is recovered the same way
 // and reported to the client as a plain authentication failure, on every
-// transport.
+// transport, with any address or principal provider it set put back first.
 //
 // The guarantee covers handlers and request-path middleware. Task middleware
 // that panics *after* calling next() is the one case outside it: by then the
@@ -483,6 +483,14 @@
 //	    conn.SetUserID(claims.Subject)
 //	    return nil
 //	})
+//
+// A hook that fails leaves the connection's identity as it was: if it called
+// [Conn.SetUserID] or [Conn.SetPrincipalProvider] before returning an error or
+// panicking, aprot rolls both back before sending auth_error, so a refresh the
+// client is told was rejected cannot leave the session running as the new
+// identity. The rollback covers those two fields only — anything else the hook
+// touched ([Conn.Set], the consumer's own stores) stays as the hook left
+// it.
 //
 // With no hook registered the flow is unchanged (authenticate via [Server.OnConnect]
 // / a URL token if desired). The generated TypeScript client drives this with a
