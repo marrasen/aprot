@@ -404,7 +404,15 @@
 // embed internal state, so the value and stack go only to
 // [ServerOptions.Logger]. http.ErrAbortHandler is the one exception: the
 // REST and MCP adapters re-panic it into net/http, preserving the stdlib's
-// abort-quietly convention.
+// abort-quietly convention. A panicking [AuthHook] is recovered the same way
+// and reported to the client as a plain authentication failure, on every
+// transport.
+//
+// The guarantee covers handlers and request-path middleware. Task middleware
+// that panics *after* calling next() is the one case outside it: by then the
+// task entry point has already returned, so there is no caller to receive the
+// panic and no client to send an error to. It is re-raised on the task's
+// goroutine rather than swallowed, so a bug there is loud instead of silent.
 //
 // The concurrency caps bound the work a single connection (or the whole
 // fleet) can pin at once: each inbound request or subscribe frame takes one

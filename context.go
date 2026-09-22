@@ -2,6 +2,8 @@ package aprot
 
 import (
 	"context"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 )
 
@@ -122,14 +124,26 @@ func (h *streamHooks) add(hook StreamCompleteHook) {
 // by the dispatcher after streamIterator has returned. Hooks fire in
 // registration order; a panic in one hook does not prevent later hooks
 // from running.
-func (h *streamHooks) run(err error, items int) {
+//
+// A hook panic is logged with its value and stack. It used to be dropped by a
+// bare recover, the one site that broke the rule that a recovered panic's value
+// and stack always reach the log (#341). The outcome is not changed: the stream
+// has already finished and its terminal frame has already been decided, so
+// there is nothing left to report to the client — the log line is the whole
+// signal that a hook is broken.
+func (h *streamHooks) run(logger *slog.Logger, method string, err error, items int) {
 	h.mu.Lock()
 	hooks := make([]StreamCompleteHook, len(h.hooks))
 	copy(hooks, h.hooks)
 	h.mu.Unlock()
 	for _, hook := range hooks {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("aprot: OnStreamComplete hook panicked",
+						"method", method, "panic", r, "stack", string(debug.Stack()))
+				}
+			}()
 			hook(err, items)
 		}()
 	}

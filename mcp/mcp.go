@@ -223,7 +223,10 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				a.server.Logger().Error("aprot: panic serving MCP request",
 					"rpcMethod", req.Method, "panic", rec, "stack", string(debug.Stack()))
 				result = nil
-				rerr = &rpcError{Code: codeInternalError, Message: "internal error"}
+				// "handler panicked" is the message every other dispatch
+				// path sends, and what the README promises clients see on
+				// all of them. This site said "internal error" (#341).
+				rerr = &rpcError{Code: codeInternalError, Message: "handler panicked"}
 			}
 		}()
 		switch req.Method {

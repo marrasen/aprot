@@ -3,6 +3,7 @@ package aprot
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"net/http"
 	"reflect"
 	"sync"
@@ -666,7 +667,7 @@ func (c *Conn) handleAuth(token string) {
 		return
 	}
 
-	err := c.server.authHook(c.ctx, c, token)
+	err := c.runAuthHook(token)
 	if err == nil {
 		firstAuth := c.authenticated.CompareAndSwap(false, true)
 		if firstAuth {
@@ -692,6 +693,38 @@ func (c *Conn) handleAuth(token string) {
 		c.close()
 	}
 }
+
+// runAuthHook calls the server's auth hook and converts a panic into an error,
+// so a panicking hook cannot take down the process.
+//
+// Without this the policy was asymmetric across transports: handleAuth runs in
+// the WebSocket read-loop goroutine, which has no recover above it, so a hook
+// panic killed the process; over SSE the same panic ran under net/http and only
+// dropped the connection. The hook is also where the principal provider is
+// registered, so consumer code in it has grown (#332). Recovering here — the
+// one place both transports call the hook — keeps it a single policy point
+// (#327).
+//
+// The panic is logged through panicError like every other recover site, so the
+// value and stack reach the log exactly once. Its generic message is discarded:
+// handleAuth redacts anything that is not a ProtocolError to "authentication
+// failed", and that rule applies to a panic more than to anything else.
+// http.ErrAbortHandler is not re-panicked, for the same reason the socket
+// dispatch backstop does not re-panic it — over WebSocket nothing above this
+// goroutine would recover it, and crashing is the behaviour being fixed.
+func (c *Conn) runAuthHook(token string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			_ = panicError(c.server.logger(), r, "OnAuth")
+			err = errAuthHookPanicked
+		}
+	}()
+	return c.server.authHook(c.ctx, c, token)
+}
+
+// errAuthHookPanicked marks a recovered auth-hook panic. It is deliberately not
+// a ProtocolError, so handleAuth redacts it to the generic failure message.
+var errAuthHookPanicked = errors.New("aprot: auth hook panicked")
 
 // stopAuthTimer cancels the pending-auth timeout, if armed.
 func (c *Conn) stopAuthTimer() {
@@ -870,7 +903,7 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 	if !seq.IsValid() || seq.Kind() == reflect.Func && seq.IsNil() {
 		c.sendStreamEnd(reqID, nil)
 		if hooks != nil {
-			hooks.run(nil, 0)
+			hooks.run(c.server.logger(), info.StructName+"."+info.Name, nil, 0)
 		}
 		return nil
 	}
@@ -949,7 +982,7 @@ func (c *Conn) streamIterator(ctx context.Context, reqID string, seq reflect.Val
 	// guarantees the log entry reflects the real outcome even if the
 	// transport is already torn down by the time sendStreamEnd fires.
 	if hooks != nil {
-		hooks.run(finalErr, itemCount)
+		hooks.run(c.server.logger(), info.StructName+"."+info.Name, finalErr, itemCount)
 	}
 
 	// Context cancellation or transport close are clean terminations from

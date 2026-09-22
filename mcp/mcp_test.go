@@ -529,4 +529,9 @@ func TestToolsCall_ResponseMarshalPanicIsRPCError(t *testing.T) {
 	if strings.Contains(fmt.Sprint(e["message"]), "secret-dsn") {
 		t.Errorf("panic value leaked to the client: %v", e)
 	}
+	// Same generic message as every other dispatch path. This site used to
+	// say "internal error", the one wording that differed (#341).
+	if got := fmt.Sprint(e["message"]); got != "handler panicked" {
+		t.Errorf("message = %q, want %q", got, "handler panicked")
+	}
 }

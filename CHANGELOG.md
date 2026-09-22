@@ -10,6 +10,50 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A panicking `OnAuth` hook no longer crashes the process** (#341):
+  `handleAuth` runs in the WebSocket read-loop goroutine, which has no recover
+  above it, so a panic in the auth hook killed the whole server. Over SSE the
+  same panic ran under `net/http` and only dropped the connection — the policy
+  was asymmetric across transports. The hook is now called through one recover
+  shared by both. The panic is logged with its value and stack like every other
+  recover site, and the client gets the generic `authentication failed`: the
+  auth boundary redacts anything that is not a `ProtocolError`, and that applies
+  to a panic value more than to anything else. A panicking refresh on an
+  already-authenticated connection keeps the live session, unchanged.
+
+  This mattered more than it used to because `OnAuth` is where the principal
+  provider is registered, so consumer code in it has grown.
+
+- **`OnStreamComplete` hook panics are logged** (#341): `streamHooks.run` did a
+  bare `_ = recover()` — the one recover site where a panic's value and stack
+  reached nothing. It now logs `aprot: OnStreamComplete hook panicked` with the
+  method, value, and stack. Behaviour is otherwise unchanged: the stream's
+  outcome is already decided by the time hooks run, so later hooks still run and
+  nothing new reaches the client.
+
+- **MCP panic message matches every other path** (#341): the adapter's recover
+  around argument binding and result marshaling sent `internal error` where
+  every other dispatch path sends `handler panicked` — which is also what the
+  README promises clients see everywhere.
+
+### Changed
+
+- **Documented the one place the panic guarantee stops** (#341): task middleware
+  that panics *after* calling `next()` is re-raised on the task's goroutine
+  rather than recovered. By then the task entry point has returned, so there is
+  no caller to receive the panic and no client to send an error to; re-raising
+  keeps the bug loud instead of silent. The claim in `README.md` and `doc.go`
+  that "one buggy handler cannot take down the process" is now scoped to
+  handlers and request-path middleware, which is what it always meant.
+
+- **`PrincipalFrom` warns against nil comparisons** (#341): a provider returning
+  a typed nil — `(*User)(nil), nil` — makes `PrincipalFrom(ctx) != nil` true for
+  an identity that is not there. Documented on both `PrincipalFrom` and
+  `PrincipalProvider`, with the rule for providers: return a plain `nil` for an
+  anonymous caller, never a nil pointer of your principal type.
+
 ### Added
 
 - **In-flight request visibility** (#374): a handler that never returns was
