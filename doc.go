@@ -413,7 +413,7 @@
 // REST and MCP adapters re-panic it into net/http, preserving the stdlib's
 // abort-quietly convention. A panicking [AuthHook] is recovered the same way
 // and reported to the client as a plain authentication failure, on every
-// transport.
+// transport. Anything the hook set before panicking stays set.
 //
 // The guarantee covers handlers and request-path middleware. Task middleware
 // that panics *after* calling next() is the one case outside it: by then the
@@ -483,6 +483,14 @@
 //	    conn.SetUserID(claims.Subject)
 //	    return nil
 //	})
+//
+// A hook that fails leaves the connection's identity as it was: if it called
+// [Conn.SetUserID] or [Conn.SetPrincipalProvider] before returning an error or
+// panicking, aprot rolls both back before sending auth_error, so a refresh the
+// client is told was rejected cannot leave the session running as the new
+// identity. The rollback covers those two fields only — anything else the hook
+// touched ([Conn.Set], the consumer's own stores) stays as the hook left
+// it.
 //
 // With no hook registered the flow is unchanged (authenticate via [Server.OnConnect]
 // / a URL token if desired). The generated TypeScript client drives this with a
@@ -655,9 +663,14 @@
 // snapshot naming the method, request ID, connection, and age of everything
 // currently running, and [Conn.InFlightRequests] gives one connection's count.
 // All three walk the connections' request maps, so scrape them periodically or
-// dump them on a threshold rather than calling them per request. aprot does not
-// define "too slow": there is no threshold option and no slow-request event,
-// because how long a handler may legitimately run is consumer policy.
+// dump them on a threshold rather than calling them per request. They count the
+// four socket dispatch paths — unary, streaming, subscribe first-run, and
+// server-driven refresh — and not REST or MCP, which are request-scoped and
+// have no registered connection to hold the bookkeeping. Ages within one
+// snapshot share a single clock read, so they are comparable, and are floored
+// at zero for a request that starts mid-walk. aprot does not define "too slow":
+// there is no threshold option and no slow-request event, because how long a
+// handler may legitimately run is consumer policy.
 //
 // Set [ServerOptions.Logger] (a *slog.Logger; nil uses slog.Default) to
 // receive server-side error logs. Currently logged: response-encode failures —

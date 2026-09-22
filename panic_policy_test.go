@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -86,9 +87,11 @@ func TestAuth_HookPanicIsSymmetricOverSSE(t *testing.T) {
 // live session — same as any other refresh failure. A panic must not downgrade
 // a connection that is already authenticated.
 func TestAuth_HookPanicOnRefreshKeepsSession(t *testing.T) {
-	var panicNow bool
+	// atomic: written here, read on the server read-loop goroutine. A socket
+	// write between them is not a happens-before edge, and CI runs -race.
+	var panicNow atomic.Bool
 	hook := func(ctx context.Context, conn *Conn, token string) error {
-		if panicNow {
+		if panicNow.Load() {
 			panic("refresh boom")
 		}
 		conn.SetUserID("alice")
@@ -106,7 +109,7 @@ func TestAuth_HookPanicOnRefreshKeepsSession(t *testing.T) {
 	}
 
 	// A panicking refresh reports the failure but leaves the session up.
-	panicNow = true
+	panicNow.Store(true)
 	sendAuth(t, ws, "refresh")
 	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthError) {
 		t.Fatalf("expected auth_error for the panicking refresh, got %q", f.Type)

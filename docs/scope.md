@@ -115,6 +115,27 @@ consistent with them.
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and
   deciding what they may do never will.
+- **aprot keeps what an auth hook set, and never undoes it.** A hook that
+  calls `Conn.SetUserID` or `Conn.SetPrincipalProvider` and then fails
+  keeps both applied — on an error and on a recovered panic alike (#384).
+  The hook made those calls. Undoing them would be aprot deciding what the
+  call meant, which is the policy side of the rule, and it would mean the
+  library overwriting consumer state on a condition the consumer did not
+  ask it to watch.
+
+  The invariant lives on the hook instead, and the docs state it: **run the
+  checks first, set the address and the principal provider last**, once
+  success is certain. A hook written that way has nothing half-applied on
+  any failure path, so the question does not arise. One rule the consumer
+  can follow beats a partial unwind the library can only ever do halfway —
+  it could restore those two fields, but never `Conn.Set` values, the
+  consumer's own stores, or external side effects, and never atomically
+  against a request already dispatching on the connection.
+
+  This replaces an earlier decision on the same issue to capture both
+  fields before the hook and restore them on failure. Ruling recorded for
+  #384.
+
 - **Reporting what the connection is doing is in; deciding when that is
   wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
   `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the
