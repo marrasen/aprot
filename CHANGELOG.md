@@ -12,28 +12,6 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
-- **A failed `OnAuth` hook no longer keeps the address and principal provider
-  it set** (#384): the hook is where consumers call `Conn.SetUserID` and
-  `Conn.SetPrincipalProvider`, and a hook that called either and then failed
-  left both applied while the client was sent `auth_error`. Every later
-  execution on that connection resolved the new principal, and `PushToUser`
-  delivered to the new address, on a refresh the client was told was rejected.
-  `handleAuth` now captures both fields before calling the hook and puts them
-  back on any failure, error or panic, on WebSocket and SSE alike.
-
-  Those two fields are all it puts back. `Conn.Set` values, the consumer's own
-  stores, and external side effects stay as the hook left them, because aprot
-  does not know what they meant. The restore is also not atomic against
-  dispatch: a request already running on the connection can resolve the
-  principal with the new provider in the small window before it is put back. A
-  hook that does more should still clean up after itself. The scope ruling, and
-  the two alternatives it beat, are in `docs/scope.md`.
-
-  This changes behaviour for a hook that sets the address or the provider and
-  *then* returns an error. The client is told authentication failed in that
-  case, so the two states contradicted each other; check any hook that relied
-  on the old one.
-
 - **`InFlightRequest.Age` can no longer be negative** (#374 follow-up):
   `Server.InFlightRequests` reads the clock once and then walks the connections
   one at a time, so a request registered during the walk had `started > now` and
@@ -49,8 +27,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   recover site, and the client gets the generic `authentication failed`: the
   auth boundary redacts anything that is not a `ProtocolError`, and that applies
   to a panic value more than to anything else. A panicking refresh on an
-  already-authenticated connection keeps the live session — and, since #384
-  below, keeps the identity that session had.
+  already-authenticated connection keeps the live session, and keeps whatever
+  the hook set before it panicked — see the `OnAuth` note under Changed.
 
   This mattered more than it used to because `OnAuth` is where the principal
   provider is registered, so consumer code in it has grown.
@@ -68,6 +46,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   README promises clients see everywhere.
 
 ### Changed
+
+- **`OnAuth` hooks should set the address and the principal provider last**
+  (#384): a hook that calls `Conn.SetUserID` or `Conn.SetPrincipalProvider` and
+  then fails keeps both applied, on an error and on a recovered panic alike. The
+  connection goes on resolving the new principal, and `PushToUser` goes on
+  delivering to the new address, after the client was sent `auth_error`.
+
+  aprot does not undo those calls. The hook made them, and undoing them would
+  be aprot deciding what the call meant. Run every check first and set the
+  address and the provider last, once success is certain — a hook written that
+  way has nothing half-applied on any failure path. `README.md`, `doc.go` and
+  `APROT_AI.md` now say so, and `docs/scope.md` records the ruling. No code
+  change: this documents behaviour that was always there.
 
 - **The stuck-handler guide now says which paths are counted.** `README.md`
   described `ServerStats.InFlightRequests` as the way to find a handler that

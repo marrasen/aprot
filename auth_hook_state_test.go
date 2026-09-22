@@ -11,15 +11,16 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// A failed auth hook puts back the address and the principal provider it set.
+// A failed auth hook keeps the address and the principal provider it set.
 //
-// OnAuth is where consumers register the principal provider and set the
-// address. A hook that sets either and then fails used to leave both applied
-// while the client was told the token was rejected: every later execution
-// resolved the new principal, and PushToUser delivered to the new address
-// (#384). Both failure modes are covered — the client is told the same thing
-// for an error and for a panic.
-func TestAuth_FailedRefreshRollsBackIdentity(t *testing.T) {
+// aprot does not undo SetUserID or SetPrincipalProvider when the hook fails.
+// The hook called them, and undoing that would be aprot deciding what the call
+// meant. The contract is on the hook instead: run the checks first, set the
+// address and the provider last, once success is certain (#384).
+//
+// Both failure modes are covered, because the rule does not bend for a panic:
+// a recovered panic is still a hook that ran SetUserID.
+func TestAuth_FailedHookKeepsWhatItSet(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		fail func()
@@ -36,9 +37,9 @@ func TestAuth_FailedRefreshRollsBackIdentity(t *testing.T) {
 				conn = c
 				mu.Unlock()
 
-				// Every call sets the address and the provider first, then
-				// decides. That ordering is the point: both are applied by
-				// the time the failure happens.
+				// The shape this test pins down: set first, then fail. A
+				// well-written hook does the opposite, which is why the
+				// doc comments say so.
 				who, _ := cutAuthToken(token)
 				c.SetUserID(who)
 				c.SetPrincipalProvider(func(context.Context) (any, error) { return who, nil })
@@ -50,9 +51,8 @@ func TestAuth_FailedRefreshRollsBackIdentity(t *testing.T) {
 				return ErrAuthFailed("invalid token")
 			}
 
-			h := &principalHandlers{}
 			registry := NewRegistry()
-			registry.Register(h)
+			registry.Register(&principalHandlers{})
 			server := NewServer(registry, ServerOptions{
 				Logger: slog.New(slog.NewTextHandler(&syncBuffer{}, nil)),
 			})
@@ -78,18 +78,17 @@ func TestAuth_FailedRefreshRollsBackIdentity(t *testing.T) {
 			c := conn
 			mu.Unlock()
 
-			// The authorization input is back to what it was.
-			if who := whoFromSocket(t, ws, "1"); who != "alice" {
-				t.Errorf("principal after failed refresh = %q, want %q — the rejected identity is still resolving", who, "alice")
+			// Both stay where the hook put them.
+			if who := whoFromSocket(t, ws, "1"); who != "bob" {
+				t.Errorf("principal after a failed refresh = %q, want %q — aprot does not undo the hook's SetPrincipalProvider", who, "bob")
 			}
-			// So is the push-routing address, in the connection and in the
-			// server's fan-out index, which SetUserID maintains separately.
-			if got := c.UserID(); got != "alice" {
-				t.Errorf("UserID after failed refresh = %q, want %q", got, "alice")
+			if got := c.UserID(); got != "bob" {
+				t.Errorf("UserID after a failed refresh = %q, want %q", got, "bob")
 			}
-			assertUserIndex(t, server, c, "alice")
+			assertUserIndex(t, server, c, "bob")
 
-			// Failure path only: a good refresh still moves both.
+			// The session itself is still live and still authenticated: a
+			// failed refresh never downgrades a connection (#341).
 			sendAuth(t, ws, "good:carol")
 			if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
 				t.Fatalf("expected auth_ok on the good refresh, got %q", f.Type)
@@ -97,19 +96,14 @@ func TestAuth_FailedRefreshRollsBackIdentity(t *testing.T) {
 			if who := whoFromSocket(t, ws, "2"); who != "carol" {
 				t.Errorf("principal after a good refresh = %q, want %q", who, "carol")
 			}
-			if got := c.UserID(); got != "carol" {
-				t.Errorf("UserID after a good refresh = %q, want %q", got, "carol")
-			}
 			assertUserIndex(t, server, c, "carol")
 		})
 	}
 }
 
-// A hook that fails on the *first* auth puts both back too, leaving the
-// anonymous state it started from. The connection is closed either way, so this
-// covers the window before the close lands: disassociateUser reads UserID to
-// clear the fan-out index, and must not find an address the hook never earned.
-func TestAuth_FailedFirstAuthRollsBackToAnonymous(t *testing.T) {
+// The documented shape: checks first, set last. A hook written this way has
+// nothing half-applied to reason about, on either failure mode.
+func TestAuth_HookThatSetsLastLeavesNothingBehind(t *testing.T) {
 	var mu sync.Mutex
 	var conn *Conn
 
@@ -120,9 +114,13 @@ func TestAuth_FailedFirstAuthRollsBackToAnonymous(t *testing.T) {
 		mu.Lock()
 		conn = c
 		mu.Unlock()
-		c.SetUserID("bob")
-		c.SetPrincipalProvider(func(context.Context) (any, error) { return "bob", nil })
-		return ErrAuthFailed("invalid token")
+		who, ok := cutAuthToken(token)
+		if !ok {
+			return ErrAuthFailed("invalid token")
+		}
+		c.SetUserID(who)
+		c.SetPrincipalProvider(func(context.Context) (any, error) { return who, nil })
+		return nil
 	})
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
@@ -130,7 +128,7 @@ func TestAuth_FailedFirstAuthRollsBackToAnonymous(t *testing.T) {
 	ws := connectWSPath(t, ts, "")
 	defer ws.Close()
 
-	sendAuth(t, ws, "nope")
+	sendAuth(t, ws, "nope") // no ":", so the hook fails before it sets anything
 	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthError) {
 		t.Fatalf("expected auth_error, got %q", f.Type)
 	}
@@ -142,48 +140,6 @@ func TestAuth_FailedFirstAuthRollsBackToAnonymous(t *testing.T) {
 		t.Errorf("UserID after a failed first auth = %q, want %q", got, "")
 	}
 	assertUserIndex(t, server, c, "")
-}
-
-// Only the two fields aprot owns are put back. A hook that stashed a connection
-// value before failing keeps it — aprot does not know what it meant. Documented
-// in doc.go and README, and asserted here so the boundary does not drift.
-func TestAuth_RollbackLeavesConnValuesAlone(t *testing.T) {
-	type stash struct{ note string }
-	var mu sync.Mutex
-	var conn *Conn
-
-	registry := NewRegistry()
-	registry.Register(&principalHandlers{})
-	server := NewServer(registry, ServerOptions{})
-	server.OnAuth(func(ctx context.Context, c *Conn, token string) error {
-		mu.Lock()
-		conn = c
-		mu.Unlock()
-		c.Set("note", stash{note: "written before failing"})
-		c.SetUserID("bob")
-		return ErrAuthFailed("invalid token")
-	})
-	ts := httptest.NewServer(server)
-	t.Cleanup(ts.Close)
-
-	ws := connectWSPath(t, ts, "")
-	defer ws.Close()
-
-	sendAuth(t, ws, "nope")
-	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthError) {
-		t.Fatalf("expected auth_error, got %q", f.Type)
-	}
-
-	mu.Lock()
-	c := conn
-	mu.Unlock()
-	if got := c.UserID(); got != "" {
-		t.Errorf("UserID = %q, want it put back to %q", got, "")
-	}
-	v, ok := c.Load("note")
-	if got, isStash := v.(stash); !ok || !isStash || got.note != "written before failing" {
-		t.Errorf("Load(\"note\") = (%+v, %v), want the hook's write left in place", v, ok)
-	}
 }
 
 // cutAuthToken splits "<prefix>:<user>" into the user and whether it parsed.

@@ -413,7 +413,7 @@
 // REST and MCP adapters re-panic it into net/http, preserving the stdlib's
 // abort-quietly convention. A panicking [AuthHook] is recovered the same way
 // and reported to the client as a plain authentication failure, on every
-// transport, with any address or principal provider it set put back first.
+// transport. Anything the hook set before panicking stays set.
 //
 // The guarantee covers handlers and request-path middleware. Task middleware
 // that panics *after* calling next() is the one case outside it: by then the
