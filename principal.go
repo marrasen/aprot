@@ -42,6 +42,11 @@ import "context"
 // the provider, keyed by credential or session with a TTL of their
 // choosing. Resolving once in [Server.OnAuth] and returning the snapshot is
 // the degenerate cache (TTL = connection lifetime).
+//
+// Return a plain nil for an anonymous caller, never a nil pointer of your
+// principal type. A typed nil — (*User)(nil), nil — makes
+// PrincipalFrom(ctx) != nil report true for an identity that is not there.
+// See [PrincipalFrom].
 type PrincipalProvider func(ctx context.Context) (any, error)
 
 // principalBox wraps the principal so a context carrying an explicitly
@@ -75,6 +80,18 @@ func WithPrincipal(ctx context.Context, p any) context.Context {
 //	if !ok {
 //	    return nil, aprot.ErrUnauthorized("authentication required")
 //	}
+//
+// Use that ok-form assertion rather than comparing the result to nil.
+// PrincipalFrom(ctx) != nil is not an authentication check: a provider that
+// returns a typed nil — (*User)(nil), nil — hands back an interface with a
+// non-nil type and a nil value, so the comparison is true for an identity
+// that is not there.
+//
+// The ok-form is the right guard for the normal case, because an absent
+// principal is an untyped nil and the assertion fails. It does not rescue a
+// typed nil either — that assertion succeeds and leaves user nil — so the
+// other half of the rule is on the provider: return a plain nil for an
+// anonymous caller, never a nil pointer of your principal type.
 func PrincipalFrom(ctx context.Context) any {
 	box, _ := ctx.Value(principalKey).(principalBox)
 	return box.v
