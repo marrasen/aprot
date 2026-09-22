@@ -1362,6 +1362,13 @@ cd example/vanilla/tools/generate && go run main.go
 cd example/react/tools/generate && go run main.go
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to write issues, pull
+requests, and commit messages, plus the checks to run before opening a PR.
+[docs/scope.md](docs/scope.md) covers what belongs in aprot in the first
+place.
+
 ## License
 
 MIT
