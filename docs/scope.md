@@ -115,6 +115,22 @@ consistent with them.
   pending-auth state, `AuthTimeout`, and mid-session token refresh are wire
   concerns and belong here. Verifying the token, looking up the user, and
   deciding what they may do never will.
+- **Reporting what the connection is doing is in; deciding when that is
+  wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
+  `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the
+  connection's own request bookkeeping — how many executions it is running
+  and for how long (#374). That is a transport fact, and it was the one
+  connection-scoped structure whose size depends on application behaviour
+  with nothing reporting it: `c.values` is keyed by fixed types and
+  subscriptions are capped by `MaxSubscriptions`, but a handler that never
+  returns keeps its request entry forever, because the unregister runs from a
+  `defer` as the handler unwinds. What aprot does **not** ship is a
+  `SlowRequestThreshold` option or an `Observer.RequestSlow` event, both of
+  which #374 offered. How long a handler may legitimately run is consumer
+  policy — it varies per method and per deployment — and owning it would mean
+  owning a sweeper goroutine, a default that is wrong for someone, and the
+  definition of "slow". Ship the numbers; the consumer's alert is one
+  comparison. Ruling recorded for #374.
 
 ## How to use this document
 

@@ -20,7 +20,7 @@ func streamChunkTestServer(t *testing.T, cfg StreamChunking) (*Conn, *recordingT
 	c := &Conn{
 		transport: rt,
 		server:    s,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        1,
 	}
 	return c, rt

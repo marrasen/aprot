@@ -109,7 +109,7 @@ func TestRegisterRequestAfterCloseCancelsImmediately(t *testing.T) {
 		called = true
 		gotCause = cause
 	}
-	c.registerRequest("late", cancel)
+	c.registerRequest("late", "Test.Late", false, cancel)
 
 	if !called {
 		t.Fatal("late request registered after close was never canceled (leaks requestsWg, stalls Stop)")
@@ -385,7 +385,7 @@ func TestStopRefusesConnectionRegisteredDuringShutdown(t *testing.T) {
 	conn := &Conn{
 		transport: rt,
 		server:    server,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        99,
 	}
 
@@ -511,11 +511,11 @@ func TestRegisterRequestIDCollisionCancelsPrevious(t *testing.T) {
 
 	var firstCause error
 	firstCanceled := false
-	c.registerRequest("dup", func(cause error) {
+	c.registerRequest("dup", "Test.First", false, func(cause error) {
 		firstCanceled = true
 		firstCause = cause
 	})
-	c.registerRequest("dup", func(cause error) {})
+	c.registerRequest("dup", "Test.Second", false, func(cause error) {})
 
 	if !firstCanceled {
 		t.Fatal("reusing an in-flight request ID must cancel the shadowed request to avoid a leak")
@@ -535,11 +535,11 @@ func TestUnregisterRequestKeepsReplacement(t *testing.T) {
 	c := tc.Conn
 
 	first := func(cause error) {}
-	c.registerRequest("dup", first)
+	c.registerRequest("dup", "Test.First", false, first)
 
 	replacementCanceled := false
 	replacement := func(cause error) { replacementCanceled = true }
-	c.registerRequest("dup", replacement)
+	c.registerRequest("dup", "Test.Replacement", false, replacement)
 
 	// The shadowed (first) handler unwinds and runs its deferred unregister
 	// with its own cancel func. This must be a no-op because the map now holds
@@ -554,7 +554,7 @@ func TestUnregisterRequestKeepsReplacement(t *testing.T) {
 	}
 
 	// The retained entry must be the replacement, and canceling it must work.
-	got(ErrClientCanceled)
+	got.cancel(ErrClientCanceled)
 	if !replacementCanceled {
 		t.Error("retained cancel func is not the replacement's")
 	}
@@ -573,7 +573,7 @@ func TestSetUserIDConcurrentWithDisassociate(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		conn := &Conn{
 			server:   server,
-			requests: make(map[string]context.CancelCauseFunc),
+			requests: make(map[string]inflight),
 			id:       uint64(i + 1),
 		}
 		wg.Add(2)

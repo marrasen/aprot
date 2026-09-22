@@ -86,6 +86,38 @@ type ServerStats struct {
 	Connections int
 	// Subscriptions is the number of active subscriptions across all connections.
 	Subscriptions int
+	// InFlightRequests is the number of requests currently running across all
+	// connections: requests, subscribe first-runs, and server-driven refreshes.
+	// A handler that never returns is counted here forever, so a value that only
+	// ever grows is the signal that one is stuck.
+	InFlightRequests int
+	// OldestRequestAge is how long the longest-running in-flight request has
+	// been running, or zero when none are in flight. It answers "is something
+	// stuck" directly: a healthy server's value stays near its slowest normal
+	// handler, while a parked handler pushes it up without bound.
+	OldestRequestAge time.Duration
+}
+
+// InFlightRequest describes one request that was running when the snapshot was
+// taken, returned by [Server.InFlightRequests]. It names the method, which a
+// count alone cannot, so a stuck handler can be identified rather than only
+// detected.
+type InFlightRequest struct {
+	// ConnID is the ID of the connection the request arrived on, matching
+	// [Conn.ID].
+	ConnID uint64
+	// UserID is the connection's associated user ID, or empty if none is set.
+	UserID string
+	// RequestID is the client-supplied request ID, unique per connection while
+	// the request is in flight.
+	RequestID string
+	// Method is the wire method name, e.g. "Users.GetUser".
+	Method string
+	// Subscribe is true for a subscribe first-run or a server-driven refresh,
+	// false for a one-shot request.
+	Subscribe bool
+	// Age is how long the request has been running.
+	Age time.Duration
 }
 
 // NoopObserver implements [Observer] with methods that do nothing. Embed it in

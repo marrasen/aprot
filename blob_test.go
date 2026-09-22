@@ -1,7 +1,6 @@
 package aprot
 
 import (
-	"context"
 	"encoding/binary"
 	"encoding/json/v2"
 	"testing"
@@ -9,7 +8,7 @@ import (
 
 func TestSendResponseByteSliceStaysJSON(t *testing.T) {
 	rt := &recordingTransport{}
-	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
+	c := &Conn{transport: rt, requests: make(map[string]inflight)}
 
 	c.sendResponse("req-1", "Test.Method", []byte("hello"))
 
@@ -35,7 +34,7 @@ func TestSendResponseByteSliceStaysJSON(t *testing.T) {
 
 func TestSendResponseNilBlobPointerIsJSONNull(t *testing.T) {
 	rt := &recordingTransport{}
-	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
+	c := &Conn{transport: rt, requests: make(map[string]inflight)}
 
 	c.sendResponse("req-1", "Test.Method", (*Blob)(nil))
 
@@ -64,7 +63,7 @@ func (t *noBinaryRecordingTransport) SupportsBinary() bool { return false }
 
 func TestSendResponseBlobFallsBackToJSONWithoutBinarySupport(t *testing.T) {
 	rt := &noBinaryRecordingTransport{}
-	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
+	c := &Conn{transport: rt, requests: make(map[string]inflight)}
 
 	c.sendResponse("req-1", "Test.Method", Blob{ContentType: "text/plain", Data: []byte("hello")})
 
@@ -108,7 +107,7 @@ func TestBinaryFrameVersionMatchesDocumentedFormat(t *testing.T) {
 
 func TestSendResponseBlobUsesBinaryFrameWhenSupported(t *testing.T) {
 	rt := &recordingTransport{}
-	c := &Conn{transport: rt, requests: make(map[string]context.CancelCauseFunc)}
+	c := &Conn{transport: rt, requests: make(map[string]inflight)}
 
 	c.sendResponse("req-1", "Test.Method", Blob{ContentType: "text/plain", Data: []byte("hello")})
 

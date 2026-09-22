@@ -242,7 +242,7 @@ func TestProcessRefreshQueue_Deduplication(t *testing.T) {
 	conn := &Conn{
 		id:        1,
 		transport: &mockTransport{onSend: func(data []byte) { sent++ }},
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 	}
 
 	// One subscription watching two keys

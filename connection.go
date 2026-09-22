@@ -33,11 +33,22 @@ func connInfoFromRequest(r *http.Request) ConnInfo {
 	}
 }
 
+// inflight is the bookkeeping a connection keeps for one running request. The
+// cancel func is what the connection needs to cancel it; method, subscribe and
+// started exist so a request that never returns can be named rather than only
+// counted (#374).
+type inflight struct {
+	cancel    context.CancelCauseFunc
+	method    string
+	subscribe bool
+	started   time.Time
+}
+
 // Conn represents a single client connection.
 type Conn struct {
 	transport transport
 	server    *Server
-	requests  map[string]context.CancelCauseFunc
+	requests  map[string]inflight
 	mu        sync.Mutex
 	closed    bool
 	userID    string // associated user ID (set by middleware)
@@ -191,7 +202,7 @@ func newConn(t transport, server *Server, id uint64, info ConnInfo, ctx context.
 	c := &Conn{
 		transport: t,
 		server:    server,
-		requests:  make(map[string]context.CancelCauseFunc),
+		requests:  make(map[string]inflight),
 		id:        id,
 		ctx:       ctx,
 		info:      info,
@@ -488,7 +499,10 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 	_ = c.sendJSON(msg)
 }
 
-func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
+func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context.CancelCauseFunc) {
+	// Read the clock before taking the lock: it keeps the clock read off the
+	// critical section, and dispatch time is the age we want to report anyway.
+	started := time.Now()
 	c.mu.Lock()
 	if c.closed {
 		// The connection was closed between the request goroutine starting and
@@ -503,8 +517,13 @@ func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 	// ID. Overwriting the map entry would orphan the previous request's
 	// cancel func — its context would never be canceled until the connection
 	// closes. Cancel the shadowed request instead.
-	old := c.requests[id]
-	c.requests[id] = cancel
+	old := c.requests[id].cancel
+	c.requests[id] = inflight{
+		cancel:    cancel,
+		method:    method,
+		subscribe: subscribe,
+		started:   started,
+	}
 	c.mu.Unlock()
 
 	if old != nil {
@@ -522,18 +541,60 @@ func (c *Conn) registerRequest(id string, cancel context.CancelCauseFunc) {
 func (c *Conn) unregisterRequest(id string, cancel context.CancelCauseFunc) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if reflect.ValueOf(c.requests[id]).Pointer() == reflect.ValueOf(cancel).Pointer() {
+	if reflect.ValueOf(c.requests[id].cancel).Pointer() == reflect.ValueOf(cancel).Pointer() {
 		delete(c.requests, id)
 	}
 }
 
 func (c *Conn) cancelRequest(id string) {
 	c.mu.Lock()
-	cancel, ok := c.requests[id]
+	req, ok := c.requests[id]
 	c.mu.Unlock()
 	if ok {
-		cancel(ErrClientCanceled)
+		req.cancel(ErrClientCanceled)
 	}
+}
+
+// InFlightRequests returns the number of requests currently running on this
+// connection. A count that only ever grows is the symptom of a handler that
+// never returns: the deferred unregister runs as the handler unwinds, so a
+// handler blocked forever keeps its entry. See [Server.InFlightRequests] to
+// find out which method it is.
+func (c *Conn) InFlightRequests() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.requests)
+}
+
+// appendInFlight appends this connection's in-flight requests to dst, with ages
+// measured against now so every entry in one snapshot shares a clock.
+func (c *Conn) appendInFlight(dst []InFlightRequest, now time.Time) []InFlightRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, req := range c.requests {
+		dst = append(dst, InFlightRequest{
+			ConnID:    c.id,
+			UserID:    c.userID,
+			RequestID: id,
+			Method:    req.method,
+			Subscribe: req.subscribe,
+			Age:       now.Sub(req.started),
+		})
+	}
+	return dst
+}
+
+// inFlightStats returns how many requests are running on this connection and
+// the age of the longest-running one (zero when none are).
+func (c *Conn) inFlightStats(now time.Time) (count int, oldest time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, req := range c.requests {
+		if age := now.Sub(req.started); age > oldest {
+			oldest = age
+		}
+	}
+	return len(c.requests), oldest
 }
 
 // handleIncomingMessage processes a raw message from any transport.
@@ -705,7 +766,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(msg.ID, cancel)
+	c.registerRequest(msg.ID, msg.Method, false, cancel)
 	defer func() {
 		c.unregisterRequest(msg.ID, cancel)
 		cancel(nil)
@@ -973,7 +1034,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(msg.ID, cancel)
+	c.registerRequest(msg.ID, msg.Method, true, cancel)
 	defer func() {
 		c.unregisterRequest(msg.ID, cancel)
 		cancel(nil)
@@ -1103,7 +1164,7 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(sub.id, cancel)
+	c.registerRequest(sub.id, sub.method, true, cancel)
 	defer func() {
 		c.unregisterRequest(sub.id, cancel)
 		cancel(nil)
@@ -1195,8 +1256,8 @@ func (c *Conn) closeWithCause(cause error, graceful bool) bool {
 	}
 	c.closed = true
 	// Cancel all pending requests
-	for _, cancel := range c.requests {
-		cancel(cause)
+	for _, req := range c.requests {
+		req.cancel(cause)
 	}
 	c.mu.Unlock()
 	c.server.subscriptions.unregisterConn(c.id)
