@@ -7,7 +7,7 @@ import {
   useListUsers,
   createUser,
   processBatch,
-  useUserCreatedEvent,
+  onUserCreatedEvent,
   useSystemNotificationEvent,
   getTask,
   startSharedWork,
@@ -759,20 +759,34 @@ function GlobalErrorBanner() {
 
 function AppContent() {
   const [logs, setLogs] = useState<{ message: string; type: string; time: string }[]>([])
-  const { isConnected } = useConnection()
-  const { lastEvent: userCreated } = useUserCreatedEvent()
-
-  useEffect(() => {
-    if (isConnected) addLog('Connected to server', 'response')
-  }, [isConnected])
-
-  useEffect(() => {
-    if (userCreated) addLog(`User created: ${userCreated.name} (${userCreated.id})`, 'push')
-  }, [userCreated])
+  const client = useApiClient()
 
   const addLog = (message: string, type = '') => {
     setLogs((prev) => [...prev, { message, type, time: new Date().toLocaleTimeString() }])
   }
+
+  // The log is an append-only record of things that happened outside React —
+  // socket state changes and server pushes — so it is written from the
+  // subscription callbacks rather than from an effect that watches rendered
+  // state. Subscribing in an effect and appending when the event arrives is
+  // the shape React expects for an external system.
+  //
+  // This catches the transition into 'connected', not the fact of being
+  // connected: the client is still connecting when this effect first runs
+  // (connect() is async and started at module scope), so the first connect is
+  // always logged.
+  useEffect(() => {
+    const offState = client.onStateChange((state) => {
+      if (state === 'connected') addLog('Connected to server', 'response')
+    })
+    const offUserCreated = onUserCreatedEvent(client, (event) => {
+      addLog(`User created: ${event.name} (${event.id})`, 'push')
+    })
+    return () => {
+      offState()
+      offUserCreated()
+    }
+  }, [client])
 
   return (
     <>
