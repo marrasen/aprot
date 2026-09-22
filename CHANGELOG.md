@@ -10,6 +10,13 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-09-22
+
+A panicking `OnAuth` hook no longer takes the process down, closing the
+panic-policy gaps left by #327. Adds `Conn.Detached()` and server-side
+visibility for a handler that never returns. No wire-format change — existing
+generated clients keep working without regeneration.
+
 ### Fixed
 
 - **`InFlightRequest.Age` can no longer be negative** (#374 follow-up):
@@ -1158,7 +1165,13 @@ authorization input (#330, #336, #337).
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.58.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.64.0...HEAD
+[0.64.0]: https://github.com/marrasen/aprot/compare/v0.63.0...v0.64.0
+[0.63.0]: https://github.com/marrasen/aprot/compare/v0.62.0...v0.63.0
+[0.62.0]: https://github.com/marrasen/aprot/compare/v0.61.0...v0.62.0
+[0.61.0]: https://github.com/marrasen/aprot/compare/v0.60.0...v0.61.0
+[0.60.0]: https://github.com/marrasen/aprot/compare/v0.59.0...v0.60.0
+[0.59.0]: https://github.com/marrasen/aprot/compare/v0.58.0...v0.59.0
 [0.58.0]: https://github.com/marrasen/aprot/compare/v0.57.0...v0.58.0
 [0.57.0]: https://github.com/marrasen/aprot/compare/v0.56.0...v0.57.0
 [0.56.0]: https://github.com/marrasen/aprot/compare/v0.55.0...v0.56.0
