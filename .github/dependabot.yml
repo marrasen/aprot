@@ -1,40 +1,35 @@
 version: 2
 updates:
-  # Go modules — one entry per module in the repo. Minor/patch bumps are
-  # grouped into a single weekly PR per module to keep the noise down; majors
-  # are raised individually so they can be reviewed on their own.
+  # Go modules — all five in one entry, so a minor/patch bump lands as a single
+  # PR that moves every module together.
+  #
+  # They cannot be updated independently. example/vanilla, example/react,
+  # example/task-middleware and e2e all `replace` the root module, so they carry
+  # the root's dependencies as *indirect* requirements pinned in their own
+  # go.mod. Two consequences:
+  #
+  #   - One entry per module raised one PR per module. Merging the root's PR on
+  #     its own left the other four stale, and `go run` in them fails with
+  #     "updates to go.mod needed" — that is what broke #366.
+  #   - `allow: dependency-type: all` is required. The default is direct
+  #     dependencies only, and for the four siblings every one of these is
+  #     indirect, so the default meant they were never offered an update at all.
+  #
+  # The go-fmt job re-runs `go mod tidy` in all four siblings and fails on a
+  # diff, so a bump that still arrives split gets a message naming the cause
+  # rather than three unrelated-looking job failures. Majors are raised
+  # individually so they can be reviewed on their own.
   - package-ecosystem: gomod
-    directory: /
+    directories:
+      - /
+      - /example/vanilla
+      - /example/react
+      - /example/task-middleware
+      - /e2e
     schedule:
       interval: weekly
-    groups:
-      go-minor-patch:
-        update-types: [minor, patch]
-  - package-ecosystem: gomod
-    directory: /example/vanilla
-    schedule:
-      interval: weekly
-    groups:
-      go-minor-patch:
-        update-types: [minor, patch]
-  - package-ecosystem: gomod
-    directory: /example/react
-    schedule:
-      interval: weekly
-    groups:
-      go-minor-patch:
-        update-types: [minor, patch]
-  - package-ecosystem: gomod
-    directory: /example/task-middleware
-    schedule:
-      interval: weekly
-    groups:
-      go-minor-patch:
-        update-types: [minor, patch]
-  - package-ecosystem: gomod
-    directory: /e2e
-    schedule:
-      interval: weekly
+    allow:
+      - dependency-type: all
     groups:
       go-minor-patch:
         update-types: [minor, patch]
