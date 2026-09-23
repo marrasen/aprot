@@ -62,6 +62,17 @@ type Observer interface {
 	// WriteTimedOut fires when an outbound WebSocket write exceeds
 	// [ServerOptions.WriteTimeout] and the connection is dropped.
 	WriteTimedOut(conn *Conn)
+
+	// PushDropped fires when a push event registered with [Droppable] was
+	// skipped because the connection had not yet written the previous one.
+	// event is the wire event name, which is bounded by the registered push
+	// event set and so safe as a metric label.
+	//
+	// Unlike SendBufferFull this reports a frame that really was discarded —
+	// that is the contract the event opted into. A steady low rate is normal
+	// for a producer faster than the slowest client; a rate at or near the
+	// production rate means that client is receiving almost nothing.
+	PushDropped(conn *Conn, event string)
 }
 
 // RequestEvent describes a completed request or subscribe, passed to
@@ -138,3 +149,4 @@ func (NoopObserver) RefreshFanout(string, int)                      {}
 func (NoopObserver) PatchFanout(string, int, int)                   {}
 func (NoopObserver) SendBufferFull(*Conn)                           {}
 func (NoopObserver) WriteTimedOut(*Conn)                            {}
+func (NoopObserver) PushDropped(*Conn, string)                      {}

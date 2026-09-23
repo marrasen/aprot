@@ -1,6 +1,9 @@
 package aprot
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Standard error codes.
 const (
@@ -96,6 +99,17 @@ func ErrTooManyRequests(message string) *ProtocolError {
 func ErrAuthFailed(message string) *ProtocolError {
 	return NewError(CodeAuthFailed, message)
 }
+
+// ErrPushDropped is returned when a push registered with [Droppable] was
+// skipped because the connection had not kept up with the previous one. It is
+// the expected outcome for a droppable event under backpressure, not a fault:
+// the connection is still live and the next push may well be delivered.
+//
+// Only pushes that opted in can produce it — every other frame keeps aprot's
+// delivery guarantee. [Server.Broadcast] and [Server.PushToUser] discard it
+// along with every other per-connection error; use [Observer.PushDropped] to
+// count fan-out drops.
+var ErrPushDropped = errors.New("aprot: droppable push skipped; connection is behind")
 
 // CancelReason represents why a request context was canceled.
 type CancelReason struct {

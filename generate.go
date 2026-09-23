@@ -953,7 +953,7 @@ func (g *Generator) GenerateTo(w io.Writer) error {
 			Name:        event.Name,
 			HandlerName: tsSafeIdent(g.naming().HandlerName(event.Name)),
 			HookName:    tsSafeIdent(g.naming().HookName(event.Name)),
-			DataType:    sanitizeTSIdent(event.DataType.Name()),
+			DataType:    pushEventTSType(event),
 		})
 	}
 
@@ -1079,7 +1079,7 @@ func (g *Generator) buildTemplateData(group *HandlerGroup, meta *sourceMeta) tem
 			Name:        event.Name,
 			HandlerName: tsSafeIdent(g.naming().HandlerName(event.Name)),
 			HookName:    tsSafeIdent(g.naming().HookName(event.Name)),
-			DataType:    sanitizeTSIdent(event.DataType.Name()),
+			DataType:    pushEventTSType(event),
 		})
 	}
 
@@ -1541,8 +1541,9 @@ func (g *Generator) collectType(t reflect.Type) {
 	}
 	// Blob is never emitted as an interface: top-level results are typed as
 	// the DOM Blob (which an interface of the same name would shadow), and
-	// nested occurrences use the inline wire shape from goTypeToTS.
-	if t == blobType {
+	// nested occurrences use the inline wire shape from goTypeToTS. A type
+	// defined from Blob (a binary push event) is the same case.
+	if isBlobLike(t) {
 		return
 	}
 	if _, ok := g.types[t]; ok {
@@ -1903,6 +1904,17 @@ func shouldSkipField(field reflect.StructField) bool {
 	return field.Tag.Get("json") == "-"
 }
 
+// pushEventTSType is the TypeScript type a push handler receives. A blob event
+// (data typed Blob, or a type defined from Blob) resolves a DOM Blob on both
+// encodings — binary frame and $blob fallback — exactly as a Blob result does,
+// so the handler signature must not name the Go type, which is never emitted.
+func pushEventTSType(event PushEventInfo) string {
+	if isBlobLike(event.DataType) {
+		return "Blob"
+	}
+	return sanitizeTSIdent(event.DataType.Name())
+}
+
 func (g *Generator) goTypeToTS(t reflect.Type) string {
 	// Check if this is a registered enum type
 	if enumInfo := g.registry.GetEnum(t); enumInfo != nil {
@@ -1949,8 +1961,9 @@ func (g *Generator) goTypeToTS(t reflect.Type) string {
 	}
 
 	// Blob outside a top-level result position travels as plain JSON.
-	// buildMethodData overrides top-level unary results to the DOM Blob.
-	if t == blobType {
+	// buildMethodData overrides top-level unary results to the DOM Blob, and
+	// pushEventTSType does the same for a push event's data.
+	if isBlobLike(t) {
 		return blobTSWireShape
 	}
 

@@ -73,9 +73,12 @@ type ResponseMessage struct {
 }
 
 type binaryFrameHeader struct {
-	Version     byte   `json:"version"`
-	Type        string `json:"type"`
-	ID          string `json:"id"`
+	Version byte   `json:"version"`
+	Type    string `json:"type"`
+	// ID correlates a "response" frame with its request or subscription. A
+	// "push" frame carries Event instead, so both are omitted when empty.
+	ID          string `json:"id,omitempty"`
+	Event       string `json:"event,omitempty"`
 	ContentType string `json:"contentType,omitempty"`
 }
 

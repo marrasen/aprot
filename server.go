@@ -594,7 +594,7 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (r
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 func (s *Server) PushToUser(userID string, data any) {
-	event := s.registry.eventName(data)
+	d := s.registry.pushEvent(data)
 
 	// Snapshot under the lock, send outside it: pushes can block on a slow
 	// connection's send buffer, and blocking while holding s.mu would stall
@@ -615,7 +615,7 @@ func (s *Server) PushToUser(userID string, data any) {
 		if conn.UserID() != userID {
 			continue
 		}
-		_ = conn.push(event, data)
+		_ = conn.pushEvent(d, data)
 	}
 }
 
@@ -785,9 +785,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 func (s *Server) Broadcast(data any) {
-	event := s.registry.eventName(data)
+	d := s.registry.pushEvent(data)
 	for _, conn := range s.connsSnapshot() {
-		_ = conn.push(event, data)
+		_ = conn.pushEvent(d, data)
 	}
 }
 

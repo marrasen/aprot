@@ -113,6 +113,45 @@ type PushEventInfo struct {
 	Name       string
 	DataType   reflect.Type
 	StructName string
+	// Droppable records that this event opted into best-effort delivery via
+	// [Droppable]. See that function for what the server does with it.
+	Droppable bool
+}
+
+// PushEventOption configures one push event registration. See [Droppable].
+type PushEventOption func(*PushEventInfo)
+
+// Droppable marks a push event as best-effort: a frame that cannot be handed
+// to the connection's write pump right away is skipped instead of queued.
+// Pass it to [Registry.RegisterPushEventFor]:
+//
+//	registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+//
+// Use it for events whose value expires — a live video frame, a sensor
+// reading, a cursor position — where the next one is along shortly and a
+// stale one is worse than none. Every other push keeps aprot's default
+// guarantee: the send blocks until the frame is queued or the connection is
+// gone, so nothing is silently lost.
+//
+// The threshold is deliberately tight. A droppable frame is sent only when
+// the connection has at most [maxQueuedDroppable] droppable frames still
+// unwritten; beyond that it is dropped and [Observer.PushDropped] fires.
+// Waiting for the 256-slot outbound buffer to fill instead would mean
+// queueing megabytes of expired frames — for 300 KB video frames, ~76 MB and
+// minutes of backlog — before dropping the first one, which is the opposite
+// of what a droppable event asks for.
+//
+// [Conn.Push] returns [ErrPushDropped] when it drops a frame, so a direct
+// caller can count it. [Server.Broadcast] and [Server.PushToUser] discard
+// per-connection errors, so use [Observer.PushDropped] to measure fan-out
+// drops.
+//
+// Droppability is declared per event type rather than per call because
+// staleness is a property of the payload, not of the call site: the same
+// frame is as expendable on a broadcast as on a targeted push. It applies on
+// all three fan-out paths for free.
+func Droppable() PushEventOption {
+	return func(e *PushEventInfo) { e.Droppable = true }
 }
 
 // ErrorCodeInfo describes a custom error code for code generation.
@@ -194,7 +233,7 @@ type Registry struct {
 	handlers        map[string]*HandlerInfo
 	groups          map[string]*HandlerGroup
 	pushEvents      []PushEventInfo
-	pushEventTypes  map[reflect.Type]string                            // type → event name for type-safe push
+	pushEventTypes  map[reflect.Type]pushEventDelivery                 // type → wire name and delivery mode
 	errorCodes      []ErrorCodeInfo                                    // custom error codes for generation
 	errorMappings   []errorMapping                                     // error -> code mappings
 	nextErrorCode   int                                                // auto-incrementing error code
@@ -233,7 +272,7 @@ func NewRegistry() *Registry {
 		handlers:            make(map[string]*HandlerInfo),
 		groups:              make(map[string]*HandlerGroup),
 		pushEvents:          []PushEventInfo{},
-		pushEventTypes:      make(map[reflect.Type]string),
+		pushEventTypes:      make(map[reflect.Type]pushEventDelivery),
 		errorCodes:          []ErrorCodeInfo{},
 		errorMappings:       []errorMapping{},
 		nextErrorCode:       1000, // Start custom codes at 1000
@@ -436,7 +475,9 @@ func (r *Registry) RESTGroups() map[string]bool {
 // Example:
 //
 //	registry.RegisterPushEventFor(publicHandlers, UserCreatedEvent{})
-func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
+//
+// Options adjust delivery for this event; see [Droppable].
+func (r *Registry) RegisterPushEventFor(handler any, dataType any, opts ...PushEventOption) {
 	// Get struct name from handler
 	ht := reflect.TypeOf(handler)
 	if ht.Kind() == reflect.Pointer {
@@ -461,8 +502,11 @@ func (r *Registry) RegisterPushEventFor(handler any, dataType any) {
 		DataType:   dt,
 		StructName: structName,
 	}
+	for _, opt := range opts {
+		opt(&event)
+	}
 	r.pushEvents = append(r.pushEvents, event)
-	r.pushEventTypes[dt] = eventName
+	r.pushEventTypes[dt] = pushEventDelivery{name: eventName, droppable: event.Droppable}
 
 	group.PushEvents = append(group.PushEvents, event)
 }
@@ -545,18 +589,28 @@ func (r *Registry) PushEvents() []PushEventInfo {
 	return r.pushEvents
 }
 
-// eventName returns the registered event name for the given push data type.
-// Panics if the type was not registered via RegisterPushEventFor.
-func (r *Registry) eventName(data any) string {
+// pushEventDelivery is what the fan-out paths need to know about a registered
+// push type: its wire name, and whether it opted into best-effort delivery.
+type pushEventDelivery struct {
+	name      string
+	droppable bool
+}
+
+// pushEvent returns the wire name and delivery mode registered for the given
+// push data type. Panics if the type was not registered via
+// RegisterPushEventFor. Every fan-out path — [Conn.Push], [Server.Broadcast],
+// [Server.PushToUser] — resolves both facts here, so the droppable flag cannot
+// apply on one path and not another.
+func (r *Registry) pushEvent(data any) pushEventDelivery {
 	t := reflect.TypeOf(data)
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	name, ok := r.pushEventTypes[t]
+	d, ok := r.pushEventTypes[t]
 	if !ok {
 		panic("aprot: push type not registered: " + t.Name())
 	}
-	return name
+	return d
 }
 
 // RegisterError registers a Go error with a name for code generation.

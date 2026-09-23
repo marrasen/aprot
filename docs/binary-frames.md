@@ -12,18 +12,34 @@ connection — see [Opting out](#opting-out-of-binary-frames).
 
 ## When aprot sends a binary frame
 
-Every aprot message is a **text** frame carrying JSON, with exactly one
-exception: a handler whose top-level result is `aprot.Blob` (or `*aprot.Blob`)
-is delivered over WebSocket as a **binary** frame.
+Every aprot message is a **text** frame carrying JSON, with one exception: a
+value that is a top-level `aprot.Blob` is delivered over WebSocket as a
+**binary** frame.
 
-That covers two cases:
+That covers three cases:
 
-- the response to a unary call of a `Blob`-returning method, and
-- every server-driven refresh of a subscription to a `Blob`-returning method.
+- the response to a unary call of a `Blob`-returning method,
+- every server-driven refresh of a subscription to a `Blob`-returning method,
+  and
+- a push event whose data is a `Blob`.
+
+"A top-level `aprot.Blob`" means `aprot.Blob`, `*aprot.Blob`, or a type defined
+from it:
+
+```go
+type PreviewFrame aprot.Blob
+```
+
+A push event needs that defined type, because a push event's wire name is its
+Go type name: registering `aprot.Blob` itself would produce an event called
+`Blob` and allow only one per registry. Results accept the same spellings, so
+the rule is one rule.
 
 Everything else stays text JSON — including a `Blob` nested inside another
 struct, streamed as an item, or passed as a parameter, and including a plain
-`[]byte` result. Those travel as `{contentType?, data}` with base64 `data`.
+`[]byte` result. Those travel as `{contentType?, data}` with base64 `data`. A
+binary push therefore carries bytes and a content type and nothing else; a push
+that also needs sibling fields has to travel as ordinary JSON.
 
 A `nil` `*Blob` result is not a blob: it takes the ordinary JSON path and
 arrives as a `null` result, like any other nil pointer.
@@ -47,21 +63,35 @@ arrives as a `null` result, like any other nil pointer.
 
 ## Header fields
 
+A response (or subscription refresh):
+
 ```json
 { "version": 1, "type": "response", "id": "42", "contentType": "image/png" }
+```
+
+A push:
+
+```json
+{ "version": 1, "type": "push", "event": "PreviewFrame", "contentType": "image/jpeg" }
 ```
 
 | Field         | Type   | Notes                                                        |
 | ------------- | ------ | ------------------------------------------------------------ |
 | `version`     | number | Frame format version. Currently always `1`.                   |
-| `type`        | string | Currently always `"response"`.                                |
-| `id`          | string | Correlates with the `id` of the originating request, or with the subscription id for a refresh. Same id space as text `response` frames. |
-| `contentType` | string | Omitted when the handler left `Blob.ContentType` empty.       |
+| `type`        | string | `"response"` or `"push"`.                                     |
+| `id`          | string | On a `"response"`, correlates with the `id` of the originating request, or with the subscription id for a refresh — the same id space as text `response` frames. **Omitted on a `"push"`**, which has no request to correlate with. |
+| `event`       | string | On a `"push"`, the event name, matching the `event` field of a text `push` frame. Omitted on a `"response"`. |
+| `contentType` | string | Omitted when the server left `Blob.ContentType` empty.        |
 
-Clients should treat a frame whose `version` is not `1`, or whose `type` is not
-`"response"`, as an error and **fail the pending request for that `id`** rather
-than ignoring the frame — see the pitfall below. The header is guaranteed to
-carry an `id` even for otherwise unrecognized frames.
+Treat a frame whose `version` is not `1`, or whose `type` is neither
+`"response"` nor `"push"`, as an error. When such a frame carries an `id`,
+**fail the pending request for that `id`** rather than ignoring it — see the
+pitfall below. A frame with no `id` has no caller to fail, so there is nothing
+to do but ignore it.
+
+A client written against an earlier version of this document will not receive a
+`"push"` frame unless the server it talks to pushes a `Blob`, which a server
+only does once someone registers a push event with a `Blob` data type.
 
 ## Reference decoder
 
@@ -89,6 +119,10 @@ ws.onmessage = (ev) => {
     return;
   }
   const { header, payload } = decodeBinaryFrame(ev.data);
+  if (header.type === 'push') {
+    dispatchPush(header.event, { contentType: header.contentType, data: payload });
+    return;
+  }
   settle(header.id, { contentType: header.contentType, data: payload });
 };
 ```
@@ -120,10 +154,11 @@ Three defenses:
 
 - Handle binary frames, per the decoder above.
 - Or decline them with `?binary=0`, and check the `config` frame to confirm.
-- Reject unknown frames instead of ignoring them. Since the header always
-  carries an `id`, a client that cannot make sense of a frame can still fail
-  the corresponding pending request with a clear error rather than leaving the
-  caller to hang.
+- Reject unknown frames instead of ignoring them. When the header carries an
+  `id`, a client that cannot make sense of a frame can still fail the
+  corresponding pending request with a clear error rather than leaving the
+  caller to hang. A `"push"` frame carries no `id`; dropping one loses an
+  event, which is a visible bug but never a hang.
 
 ## Opting out of binary frames
 

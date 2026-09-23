@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -27,11 +28,21 @@ type wsTransport struct {
 	// write timeouts to the server's observer. Set after construction, before
 	// the pumps start; nil in transports created without a connection.
 	conn *Conn
+	// queuedDroppable counts droppable frames handed to send but not yet
+	// dequeued by the write pump, bounded by maxQueuedDroppable. Incremented
+	// before the enqueue and decremented by whoever takes the frame off the
+	// channel (writePump or drainSend), so every increment has exactly one
+	// matching decrement.
+	queuedDroppable atomic.Int64
 }
 
 type outboundFrame struct {
 	messageType int
 	data        []byte
+	// droppable marks a frame that was enqueued through SendDroppable, so the
+	// write pump knows to release its slot in the droppable allowance as it
+	// dequeues. Never set on a frame that took the guaranteed path.
+	droppable bool
 }
 
 // observer returns the server's observer via the connection back-reference, or
@@ -61,6 +72,12 @@ func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
 }
 
+// SendDroppable enqueues a text frame without blocking, or reports
+// ErrPushDropped. See maxQueuedDroppable for why the bar is this high.
+func (t *wsTransport) SendDroppable(data []byte) error {
+	return t.sendDroppableFrame(outboundFrame{messageType: websocket.TextMessage, data: data, droppable: true})
+}
+
 func (t *wsTransport) SupportsBinary() bool { return t.binary }
 
 func (t *wsTransport) SendBinary(data []byte) error {
@@ -77,6 +94,57 @@ func (t *wsTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
 		return errBinaryUnsupported
 	}
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.BinaryMessage, data: data})
+}
+
+// SendBinaryDroppable is SendDroppable for a binary frame. It refuses the
+// write when the peer declined binary, for the same reason SendBinaryCtx does.
+func (t *wsTransport) SendBinaryDroppable(data []byte) error {
+	if !t.binary {
+		return errBinaryUnsupported
+	}
+	return t.sendDroppableFrame(outboundFrame{messageType: websocket.BinaryMessage, data: data, droppable: true})
+}
+
+// sendDroppableFrame enqueues frame if the connection is keeping up, and drops
+// it otherwise. It never blocks: a droppable frame exists to be skipped, and
+// blocking would reintroduce the head-of-line delay the caller opted out of.
+//
+// The allowance is claimed with a compare-and-swap before the enqueue, so
+// concurrent senders cannot both see room for the last slot. A claim that
+// cannot be spent — the buffer is full, or the transport closed — is returned
+// immediately, because the write pump will never dequeue a frame it did not
+// receive and so would never release the slot.
+func (t *wsTransport) sendDroppableFrame(frame outboundFrame) error {
+	for {
+		n := t.queuedDroppable.Load()
+		if n >= maxQueuedDroppable {
+			return ErrPushDropped
+		}
+		if t.queuedDroppable.CompareAndSwap(n, n+1) {
+			break
+		}
+	}
+	select {
+	case <-t.done:
+		t.queuedDroppable.Add(-1)
+		return ErrConnectionClosed
+	case t.send <- frame:
+		return nil
+	default:
+		// Unreachable in practice with an allowance of 1 — it needs the whole
+		// 256-slot buffer full of guaranteed frames — but a claimed slot must
+		// be returned on every path that does not enqueue. Deliberately not
+		// reported as SendBufferFull: that event promises the frame was kept.
+		t.queuedDroppable.Add(-1)
+		return ErrPushDropped
+	}
+}
+
+// releaseDroppable gives back the allowance slot a dequeued frame held.
+func (t *wsTransport) releaseDroppable(frame outboundFrame) {
+	if frame.droppable {
+		t.queuedDroppable.Add(-1)
+	}
 }
 
 func (t *wsTransport) sendFrame(ctx context.Context, frame outboundFrame) error {
@@ -107,8 +175,8 @@ func (t *wsTransport) sendFrame(ctx context.Context, frame outboundFrame) error 
 }
 
 // reportBufferFull signals send-buffer backpressure to the observer. Called on
-// the enqueue path when the buffer has no free slot; the frame is not dropped,
-// the caller falls back to a blocking send.
+// the enqueue path when the buffer has no free slot; on the guaranteed path the
+// frame is not dropped, the caller falls back to a blocking send.
 func (t *wsTransport) reportBufferFull() {
 	if o := t.observer(); o != nil {
 		o.SendBufferFull(t.conn)
@@ -192,6 +260,7 @@ func (t *wsTransport) writePump() {
 				return
 			}
 		case frame := <-t.send:
+			t.releaseDroppable(frame)
 			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
 				return
 			}
@@ -206,6 +275,7 @@ func (t *wsTransport) drainSend() {
 	for {
 		select {
 		case frame := <-t.send:
+			t.releaseDroppable(frame)
 			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
 				return
 			}
