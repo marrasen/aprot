@@ -698,8 +698,9 @@
 //
 //	registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
 //
-// A droppable frame is sent only when the connection has written the previous
-// one; otherwise it is skipped. Use it for data whose value expires — a live
+// A droppable frame is sent only once the connection has finished writing the
+// previous one; a frame produced while that write is still in progress is
+// skipped. Use it for data whose value expires — a live
 // video frame, a sensor reading, a cursor position — where the next value is
 // along shortly and a stale one is worse than none. Without it, one client that
 // reads slowly makes every other client wait, because a fan-out sends to each
@@ -720,13 +721,17 @@
 //
 // A push event whose data is a [Blob] is delivered as a binary frame, the same
 // way a Blob result is, so pushing an image costs no base64 inflation. A push
-// event's wire name is its Go type name, so define a type from Blob rather
+// event's wire name is its Go type name, so wrap Blob in a named type rather
 // than registering Blob itself:
 //
-//	type PreviewFrame aprot.Blob
+//	type PreviewFrame struct{ aprot.Blob }
 //
 //	registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
-//	server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: jpeg})
+//	server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
+//
+// The wrapper must embed Blob and hold no other field. Embedding is the opt-in
+// precisely because it cannot happen by accident: a struct that merely has a
+// string and a []byte is somebody else's type, and aprot leaves it alone.
 //
 // The generated handler receives a DOM Blob. On a connection with no binary
 // channel the same push arrives as the JSON $blob envelope and the client

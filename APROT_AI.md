@@ -266,17 +266,17 @@ server.PushToUser("user_123", &NotificationEvent{Message: "hello"})
 
 Event name on the wire is the Go type name. Subscribed via the generated per-event hook (React) or the `onUserCreatedEvent`-style standalone (vanilla) — generated names match the Go event type name exactly.
 
-**Droppable pushes (#387):** `registry.RegisterPushEventFor(h, PreviewFrame{}, aprot.Droppable())` opts one event out of aprot's delivery guarantee — a frame is sent only if the connection already wrote the previous one, else skipped. For data whose value expires (video frame, sensor reading, cursor position) where a fan-out to one slow client would otherwise make every other client wait. The bar is deliberately "previous frame written", not "256-slot buffer full": the buffer would queue ~76 MB of expired 300 KB frames before the first drop. One allowance **per connection**, shared by all its droppable events (one write pump, one wire). `Conn.Push` returns `aprot.ErrPushDropped`; `Broadcast`/`PushToUser` discard per-connection errors → use `Observer.PushDropped(conn, event)`. Declared per event type, not per call (staleness is a property of the payload), so it applies on all three fan-out paths. Events without the flag keep the guarantee on the same connection.
+**Droppable pushes (#387):** `registry.RegisterPushEventFor(h, PreviewFrame{}, aprot.Droppable())` opts one event out of aprot's delivery guarantee — a frame is sent only once the connection finished writing the previous one (a frame holds its slot until it is on the wire), else skipped. For data whose value expires (video frame, sensor reading, cursor position) where a fan-out to one slow client would otherwise make every other client wait. The bar is deliberately "previous frame written", not "256-slot buffer full": the buffer would queue ~76 MB of expired 300 KB frames before the first drop. One allowance **per connection**, shared by all its droppable events (one write pump, one wire). `Conn.Push` returns `aprot.ErrPushDropped`; `Broadcast`/`PushToUser` discard per-connection errors → use `Observer.PushDropped(conn, event)`. Declared per event type, not per call (staleness is a property of the payload), so it applies on all three fan-out paths. Events without the flag keep the guarantee on the same connection.
 
-**Binary pushes (#387):** a push event whose data is a `Blob` goes out as a binary frame (header `{version, type:"push", event, contentType}` — `event` where a response carries `id`). A push event's wire name is its Go type name, so define a type from `Blob`, don't register `Blob` itself:
+**Binary pushes (#387):** a push event whose data is a `Blob` goes out as a binary frame (header `{version, type:"push", event, contentType}` — `event` where a response carries `id`). A push event's wire name is its Go type name, so wrap `Blob` in a named type, don't register `Blob` itself:
 
 ```go
-type PreviewFrame aprot.Blob
+type PreviewFrame struct{ aprot.Blob } // must embed Blob and hold no other field
 registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
-server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: jpeg})
+server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
 ```
 
-Generated handler is `PushHandler<Blob>` (the Go type is never emitted as an interface). `binary=0` connections and the byte-stream transport get the `$blob` JSON envelope and rebuild the same DOM `Blob`. Types defined from `Blob` also work as handler results — "top-level `Blob` is binary" is one rule. Carries bytes + contentType only; a push needing sibling fields (seq, timestamp) stays ordinary JSON.
+Generated handler is `PushHandler<Blob>` (the Go type is never emitted as an interface). `binary=0` connections and the byte-stream transport get the `$blob` JSON envelope and rebuild the same DOM `Blob`. Wrappers also work as handler results — "top-level `Blob` is binary" is one rule. **Embedding is the opt-in and the detection is exact**: sole field, anonymous, type `aprot.Blob`. A struct that merely *looks* like Blob (`ContentType string; Data []byte` with its own tags) is never reinterpreted, and nor is a wrapper with a second field — structural matching would have silently hijacked both. Carries bytes + contentType only; a push needing sibling fields (seq, timestamp) stays ordinary JSON.
 
 ## Subscription Refresh
 

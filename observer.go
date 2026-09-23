@@ -64,7 +64,8 @@ type Observer interface {
 	WriteTimedOut(conn *Conn)
 
 	// PushDropped fires when a push event registered with [Droppable] was
-	// skipped because the connection had not yet written the previous one.
+	// skipped because the connection had not finished writing the previous
+	// one.
 	// event is the wire event name, which is bounded by the registered push
 	// event set and so safe as a metric label.
 	//

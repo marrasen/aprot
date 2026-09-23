@@ -44,11 +44,11 @@ type transport interface {
 // waiting for its write pump before further droppable frames are skipped.
 //
 // One, because that is what "droppable" is asking for: send this frame if the
-// client has kept up, skip it otherwise. While a frame is being written the
-// next one sits in the queue; a third arriving before the first completes is
-// the definition of not keeping up, and the frame after it will be newer
-// anyway. The effect is delivery at whatever rate the connection sustains,
-// with one frame of latency rather than a growing backlog.
+// client has kept up, skip it otherwise. A frame holds its slot until it is on
+// the wire, so the next droppable frame is accepted only once its predecessor
+// has been written; anything produced in between is skipped, and whatever
+// comes after is newer anyway. The effect is delivery at whatever rate the
+// connection sustains, always with the freshest frame available.
 //
 // It is a constant rather than a ServerOptions knob on purpose. The number is
 // not a tuning parameter, it is the semantics: raising it buys smoothness by

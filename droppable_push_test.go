@@ -14,10 +14,25 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// PreviewFrame is a push event whose data is raw bytes: a type defined from
-// Blob, which is how a push opts into binary delivery (a push event's wire
-// name is its Go type name, so Blob itself cannot serve).
-type PreviewFrame Blob
+// PreviewFrame is a push event whose data is raw bytes: a named wrapper
+// embedding Blob, which is how a push opts into binary delivery (a push
+// event's wire name is its Go type name, so Blob itself cannot serve).
+type PreviewFrame struct{ Blob }
+
+// blobLookalike has Blob's field shape but different JSON tags — the kind of
+// struct a consumer writes for its own reasons. It must never be mistaken for
+// a Blob.
+type blobLookalike struct {
+	ContentType string `json:"mime"`
+	Data        []byte `json:"payload"`
+}
+
+// twoFieldWrapper embeds Blob but adds a field, so it is past the documented
+// boundary for binary delivery and travels as ordinary JSON.
+type twoFieldWrapper struct {
+	Blob
+	Seq int `json:"seq"`
+}
 
 // TickEvent is an ordinary JSON push event registered as droppable.
 type TickEvent struct {
@@ -61,14 +76,14 @@ func TestDroppablePush_SlowClientDropsInsteadOfQueueing(t *testing.T) {
 	// Fill the socket and the pump so nothing can drain.
 	big := strings.Repeat("x", 64*1024)
 	for range 64 {
-		server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: []byte(big)})
+		server.Broadcast(&PreviewFrame{Blob{ContentType: "image/jpeg", Data: []byte(big)}})
 	}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for range 200 {
-			server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: []byte(big)})
+			server.Broadcast(&PreviewFrame{Blob{ContentType: "image/jpeg", Data: []byte(big)}})
 		}
 	}()
 	select {
@@ -183,7 +198,7 @@ func TestDroppablePush_ConnPushReturnsErrPushDropped(t *testing.T) {
 			break
 		}
 		// Keep the pump busy so the allowance cannot drain.
-		_ = target.Push(&PreviewFrame{Data: []byte(big)})
+		_ = target.Push(&PreviewFrame{Blob{Data: []byte(big)}})
 	}
 	if !dropped.Load() {
 		t.Fatal("Conn.Push never returned ErrPushDropped for a client that stopped reading")
@@ -200,7 +215,7 @@ func TestBlobPush_DeliveredAsBinaryFrame(t *testing.T) {
 	waitForConnCount(t, server, 1, 2*time.Second)
 
 	payload := []byte{0x00, 0x01, 0xfe, 0xff, 'v', '1'}
-	server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: payload})
+	server.Broadcast(&PreviewFrame{Blob{ContentType: "image/jpeg", Data: payload}})
 
 	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
 	mt, data, err := ws.ReadMessage()
@@ -256,7 +271,7 @@ func TestBlobPush_FallsBackToJSONWhenBinaryDeclined(t *testing.T) {
 	waitForConnCount(t, server, 1, 2*time.Second)
 
 	payload := []byte{0x00, 0x01, 0xfe, 0xff}
-	server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: payload})
+	server.Broadcast(&PreviewFrame{Blob{ContentType: "image/jpeg", Data: payload}})
 
 	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
 	mt, data, err := ws.ReadMessage()
@@ -297,10 +312,13 @@ func TestBlobLike_RecognizedAsBlob(t *testing.T) {
 	}{
 		{"Blob", Blob{Data: []byte("a")}, true},
 		{"*Blob", &Blob{Data: []byte("a")}, true},
-		{"defined from Blob", PreviewFrame{Data: []byte("a")}, true},
-		{"pointer to defined", &PreviewFrame{Data: []byte("a")}, true},
+		{"wrapper embedding Blob", PreviewFrame{Blob{Data: []byte("a")}}, true},
+		{"pointer to wrapper", &PreviewFrame{Blob{Data: []byte("a")}}, true},
 		{"nil *Blob", (*Blob)(nil), false},
-		{"nil defined pointer", (*PreviewFrame)(nil), false},
+		{"nil wrapper pointer", (*PreviewFrame)(nil), false},
+		{"look-alike with other tags", blobLookalike{Data: []byte("a")}, false},
+		{"pointer to look-alike", &blobLookalike{Data: []byte("a")}, false},
+		{"wrapper with an extra field", twoFieldWrapper{Blob: Blob{Data: []byte("a")}}, false},
 		{"unrelated struct", TickEvent{Seq: 1}, false},
 		{"plain bytes", []byte("a"), false},
 		{"nil", nil, false},
@@ -372,7 +390,7 @@ func TestDroppablePush_EveryFanOutPathDrops(t *testing.T) {
 				t.Fatal("no connection registered")
 			}
 
-			big := &PreviewFrame{Data: []byte(strings.Repeat("x", 64*1024))}
+			big := &PreviewFrame{Blob{Data: []byte(strings.Repeat("x", 64*1024))}}
 			deadline := time.Now().Add(10 * time.Second)
 			for time.Now().Before(deadline) && obs.droppedCount("PreviewFrame") == 0 {
 				p.send(server, target, big)
@@ -381,5 +399,127 @@ func TestDroppablePush_EveryFanOutPathDrops(t *testing.T) {
 				t.Fatalf("%s never dropped a droppable push to a client that stopped reading", p.name)
 			}
 		})
+	}
+}
+
+// A struct that merely has Blob's field shape must not be treated as a Blob.
+// Structural matching (reflect conversion) ignores struct tags and methods, so
+// it would have hijacked a consumer's own type: delivered as a binary frame,
+// typed Blob in the generated client, its tags and MarshalJSON ignored.
+func TestBlobLookalike_NotTreatedAsBlobOnAnySurface(t *testing.T) {
+	lookalike := reflect.TypeOf(blobLookalike{})
+	if isBlobResponse(lookalike) {
+		t.Error("a look-alike struct is treated as a Blob result: it would be sent as a binary frame")
+	}
+	if isBlobLike(reflect.PointerTo(lookalike)) {
+		t.Error("a pointer to a look-alike struct is treated as a Blob")
+	}
+
+	g := NewGenerator(NewRegistry())
+	if got := g.goTypeToTS(lookalike); got == blobTSWireShape {
+		t.Error("a look-alike struct generates as the Blob wire shape, discarding its own JSON tags")
+	}
+	ev := PushEventInfo{Name: lookalike.Name(), DataType: lookalike}
+	if got := pushEventTSType(ev); got == "Blob" {
+		t.Error("a look-alike push event generates a DOM Blob handler, so its own fields become unreachable")
+	}
+
+	// A wrapper that embeds Blob but adds a field is past the documented
+	// boundary for binary delivery, so it stays ordinary JSON too.
+	if isBlobLike(reflect.TypeOf(twoFieldWrapper{})) {
+		t.Error("a wrapper with an extra field is treated as a Blob; it cannot be, as the frame carries no room for the extra field")
+	}
+}
+
+// The allowance is "frames not yet on the wire": a frame still being written
+// holds its slot, so exactly one droppable frame is accepted while another is
+// in flight. Releasing at dequeue instead would make the real bar two frames
+// while every doc promised one.
+func TestDroppablePush_SlotHeldUntilFrameIsWritten(t *testing.T) {
+	transport := &wsTransport{
+		send:   make(chan outboundFrame, 256),
+		done:   make(chan struct{}),
+		binary: true,
+	}
+
+	if err := transport.SendDroppable([]byte("first")); err != nil {
+		t.Fatalf("first droppable send: %v", err)
+	}
+	if err := transport.SendDroppable([]byte("second")); err != ErrPushDropped {
+		t.Fatalf("second send while one is queued: got %v, want ErrPushDropped", err)
+	}
+
+	// Dequeue without writing — the frame is now in flight, not delivered, so
+	// the slot must still be held.
+	frame := <-transport.send
+	if err := transport.SendDroppable([]byte("during write")); err != ErrPushDropped {
+		t.Fatalf("send while the previous frame was still being written: got %v, want ErrPushDropped", err)
+	}
+
+	// Only once the write completes does the next frame get through.
+	transport.releaseDroppable(frame)
+	if err := transport.SendDroppable([]byte("after write")); err != nil {
+		t.Fatalf("send after the previous frame was written: %v", err)
+	}
+}
+
+// countingPush marshals to a fixed JSON document and counts how many times it
+// was asked to, so a fan-out can assert it encoded once rather than per client.
+type countingPush struct {
+	marshals *atomic.Int32
+}
+
+func (c countingPush) MarshalJSON() ([]byte, error) {
+	c.marshals.Add(1)
+	return []byte(`{"counted":true}`), nil
+}
+
+// A fan-out encodes each frame once and shares the bytes. Encoding per
+// connection copied the whole payload per client — for a 300 KB frame to 100
+// clients, ~30 MB per push.
+func TestPush_FanOutEncodesOncePerFrame(t *testing.T) {
+	registry := NewRegistry()
+	handlers := &droppableHandlers{}
+	registry.Register(handlers)
+	registry.RegisterPushEventFor(handlers, countingPush{})
+	registry.RegisterPushEventFor(handlers, PreviewFrame{})
+	server := NewServer(registry)
+	ts := httptest.NewServer(server)
+	t.Cleanup(ts.Close)
+
+	const clients = 4
+	for range clients {
+		ws := connectWS(t, ts)
+		defer ws.Close()
+	}
+	waitForConnCount(t, server, clients, 3*time.Second)
+
+	// JSON path: one marshal for the whole broadcast, not one per client.
+	var marshals atomic.Int32
+	server.Broadcast(countingPush{marshals: &marshals})
+	if got := marshals.Load(); got != 1 {
+		t.Errorf("broadcast to %d clients marshaled %d times, want 1", clients, got)
+	}
+
+	// Binary path: every connection must receive the very same frame, which
+	// only holds if it was encoded once. Compare the backing arrays.
+	var frames [][]byte
+	server.ForEachConn(func(c *Conn) {
+		p := newPushPayload(server.registry.pushEvent(&PreviewFrame{}), &PreviewFrame{Blob{Data: []byte("payload")}})
+		frame, err := p.binaryFrame()
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		second, err := p.binaryFrame()
+		if err != nil {
+			t.Fatalf("re-encode: %v", err)
+		}
+		if &frame[0] != &second[0] {
+			t.Error("binaryFrame re-encoded instead of returning the cached frame")
+		}
+		frames = append(frames, frame)
+	})
+	if len(frames) != clients {
+		t.Fatalf("visited %d connections, want %d", len(frames), clients)
 	}
 }

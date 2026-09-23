@@ -295,10 +295,66 @@ func (c *Conn) ServerBroadcaster() Broadcaster {
 // registered via RegisterPushEventFor.
 //
 // It returns [ErrPushDropped] when the event was registered with [Droppable]
-// and this connection had not yet written the previous one, and
+// and this connection had not finished writing the previous one, and
 // [ErrDetachedConn] on a connection with no transport.
 func (c *Conn) Push(data any) error {
-	return c.pushEvent(c.server.registry.pushEvent(data), data)
+	return c.pushEvent(newPushPayload(c.server.registry.pushEvent(data), data))
+}
+
+// pushPayload holds one push event's encoded frames for the length of a
+// fan-out. Both encodings are produced at most once and then shared by every
+// recipient: the frame bytes do not depend on the connection, only the choice
+// between them does, so encoding per connection copied the whole payload per
+// client — 30 MB for a 300 KB frame to 100 clients.
+//
+// Not safe for concurrent use, and it does not need to be: the fan-out loops
+// in Server.Broadcast and Server.PushToUser are sequential.
+type pushPayload struct {
+	delivery pushEventDelivery
+	data     any
+	blob     Blob
+	isBlob   bool
+
+	binary    []byte // encoded binary frame, nil until first needed
+	binaryErr error
+	text      []byte // encoded JSON frame, nil until first needed
+	textErr   error
+}
+
+func newPushPayload(d pushEventDelivery, data any) *pushPayload {
+	p := &pushPayload{delivery: d, data: data}
+	p.blob, p.isBlob = asBlob(data)
+	return p
+}
+
+// binaryFrame returns the encoded binary frame for a blob push.
+func (p *pushPayload) binaryFrame() ([]byte, error) {
+	if p.binary == nil && p.binaryErr == nil {
+		p.binary, p.binaryErr = encodeBinaryFrame(binaryFrameHeader{
+			Type:        "push",
+			Event:       p.delivery.name,
+			ContentType: p.blob.ContentType,
+		}, p.blob.Data)
+	}
+	return p.binary, p.binaryErr
+}
+
+// textFrame returns the encoded JSON push frame. A blob push takes the same
+// $blob envelope the response path uses, so a client with no binary channel
+// rebuilds the identical Blob.
+func (p *pushPayload) textFrame() ([]byte, error) {
+	if p.text == nil && p.textErr == nil {
+		msg := PushMessage{
+			Type:  TypePush,
+			Event: p.delivery.name,
+			Data:  p.data,
+		}
+		if p.isBlob {
+			msg.Data = blobFallbackResult{Blob: p.blob}
+		}
+		p.text, p.textErr = marshalJSON(msg)
+	}
+	return p.text, p.textErr
 }
 
 // pushEvent sends one push frame using the delivery mode its event registered.
@@ -306,50 +362,34 @@ func (c *Conn) Push(data any) error {
 // Server.PushToUser — so the droppable and binary decisions cannot differ per
 // path.
 //
-// Data that is a Blob (or a type defined from one) goes out as a binary frame
-// where the transport has one, and as the JSON $blob envelope where it does
-// not, matching what a Blob result does on the response path.
-func (c *Conn) pushEvent(d pushEventDelivery, data any) error {
-	err := c.pushFrame(d, data)
+// Data that is a Blob (or a named wrapper around one) goes out as a binary
+// frame where the transport has one, and as the JSON $blob envelope where it
+// does not, matching what a Blob result does on the response path.
+func (c *Conn) pushEvent(p *pushPayload) error {
+	err := c.pushFrame(p)
 	if errors.Is(err, ErrPushDropped) {
 		if o := c.observer(); o != nil {
-			o.PushDropped(c, d.name)
+			o.PushDropped(c, p.delivery.name)
 		}
 	}
 	return err
 }
 
-// pushFrame marshals and sends one push frame. Split out so pushEvent owns the
-// observer reporting for every return path.
-func (c *Conn) pushFrame(d pushEventDelivery, data any) error {
-	blob, isBlob := asBlob(data)
-	if isBlob && c.transport.SupportsBinary() {
-		frame, err := encodeBinaryFrame(binaryFrameHeader{
-			Type:        "push",
-			Event:       d.name,
-			ContentType: blob.ContentType,
-		}, blob.Data)
+// pushFrame picks this connection's encoding and sends it. Split out so
+// pushEvent owns the observer reporting for every return path.
+func (c *Conn) pushFrame(p *pushPayload) error {
+	if p.isBlob && c.transport.SupportsBinary() {
+		frame, err := p.binaryFrame()
 		if err != nil {
 			return err
 		}
-		return c.sendRawBinary(frame, d.droppable)
+		return c.sendRawBinary(frame, p.delivery.droppable)
 	}
-
-	msg := PushMessage{
-		Type:  TypePush,
-		Event: d.name,
-		Data:  data,
-	}
-	if isBlob {
-		// No binary channel: carry the bytes in the same $blob envelope the
-		// response path uses, so the client rebuilds the identical Blob.
-		msg.Data = blobFallbackResult{Blob: blob}
-	}
-	payload, err := marshalJSON(msg)
+	payload, err := p.textFrame()
 	if err != nil {
 		return err
 	}
-	return c.sendRawMaybeDroppable(payload, d.droppable)
+	return c.sendRawMaybeDroppable(payload, p.delivery.droppable)
 }
 
 // observer returns the server's observer, or nil when there is none.
@@ -448,15 +488,15 @@ func (c *Conn) sendResponse(id, method string, result any) {
 }
 
 // asBlob reports whether a value opts into binary delivery, and yields it as a
-// Blob. Blob, *Blob, and types defined from Blob qualify (see isBlobLike); a
-// plain []byte keeps its JSON base64 encoding so existing handlers are
-// unaffected. A nil pointer is not a blob — it falls through to the JSON path
-// and reaches the client as a null result, matching every other nil pointer
-// result.
+// Blob. Blob, *Blob, and named wrappers embedding Blob qualify (see
+// isBlobLike); a plain []byte keeps its JSON base64 encoding so existing
+// handlers are unaffected. A nil pointer is not a blob — it falls through to
+// the JSON path and reaches the client as a null result, matching every other
+// nil pointer result.
 //
 // The two common types are a type switch so the ordinary response path stays
 // allocation-free; the reflect fallback runs only for a value that is not one
-// of them, and returns on a field-count mismatch for all but a structural Blob.
+// of them, and stops at the field count for anything but a wrapper.
 func asBlob(result any) (Blob, bool) {
 	switch v := result.(type) {
 	case Blob:
@@ -467,11 +507,11 @@ func asBlob(result any) (Blob, bool) {
 		}
 		return *v, true
 	}
-	return definedBlob(result)
+	return wrappedBlob(result)
 }
 
-// definedBlob converts a value of a type defined from Blob into a Blob.
-func definedBlob(result any) (Blob, bool) {
+// wrappedBlob extracts the Blob a named wrapper embeds.
+func wrappedBlob(result any) (Blob, bool) {
 	if result == nil {
 		return Blob{}, false
 	}
@@ -482,10 +522,11 @@ func definedBlob(result any) (Blob, bool) {
 		}
 		v = v.Elem()
 	}
-	if v.Kind() != reflect.Struct || !v.Type().ConvertibleTo(blobType) {
+	i := blobWrapperField(v.Type())
+	if i < 0 {
 		return Blob{}, false
 	}
-	b, ok := v.Convert(blobType).Interface().(Blob)
+	b, ok := v.Field(i).Interface().(Blob)
 	return b, ok
 }
 

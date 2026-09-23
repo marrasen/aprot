@@ -140,7 +140,18 @@ func (t *wsTransport) sendDroppableFrame(frame outboundFrame) error {
 	}
 }
 
-// releaseDroppable gives back the allowance slot a dequeued frame held.
+// releaseDroppable gives back the allowance slot a droppable frame held.
+//
+// Called after the write completes, not when the frame is dequeued: the
+// allowance is "frames not yet on the wire", so a frame still being written
+// holds its slot. Releasing at dequeue would let a second frame be accepted
+// while the first was still going out, making the real bar two frames rather
+// than the one this promises.
+//
+// The trade is a brief gap: when a write finishes the queue is empty, so the
+// pump waits for the producer's next frame instead of starting one that was
+// already stale. That is the intended bias — a droppable event wants the
+// freshest frame at write time, not the deepest pipeline.
 func (t *wsTransport) releaseDroppable(frame outboundFrame) {
 	if frame.droppable {
 		t.queuedDroppable.Add(-1)
@@ -260,8 +271,9 @@ func (t *wsTransport) writePump() {
 				return
 			}
 		case frame := <-t.send:
+			err := t.writeMessage(frame.messageType, frame.data)
 			t.releaseDroppable(frame)
-			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
+			if err != nil {
 				return
 			}
 		}
@@ -275,8 +287,9 @@ func (t *wsTransport) drainSend() {
 	for {
 		select {
 		case frame := <-t.send:
+			err := t.writeMessage(frame.messageType, frame.data)
 			t.releaseDroppable(frame)
-			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
+			if err != nil {
 				return
 			}
 		default:

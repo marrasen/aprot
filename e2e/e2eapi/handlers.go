@@ -137,11 +137,11 @@ func (h *BlobHandlers) SetBlob(ctx context.Context, data string) error {
 // every connected test client would add.
 type PushHandlers struct{}
 
-// PreviewFrame is a binary push event: a type defined from aprot.Blob, which
-// is how a push carries raw bytes. Its data reaches a binary-capable client as
-// one binary frame and a binary=0 client as the $blob JSON envelope; the
-// generated handler is typed to receive a DOM Blob either way.
-type PreviewFrame aprot.Blob
+// PreviewFrame is a binary push event: a named wrapper embedding aprot.Blob,
+// which is how a push carries raw bytes. Its data reaches a binary-capable
+// client as one binary frame and a binary=0 client as the $blob JSON envelope;
+// the generated handler is typed to receive a DOM Blob either way.
+type PreviewFrame struct{ aprot.Blob }
 
 // TickEvent is an ordinary JSON push event, registered droppable alongside
 // PreviewFrame so the tests cover both encodings of the droppable path.
@@ -158,7 +158,7 @@ func (h *PushHandlers) EmitPreview(ctx context.Context, marker string) error {
 	// A dropped frame is the documented outcome under backpressure, not a
 	// handler error: report success either way and let the test assert on
 	// what arrived.
-	_ = conn.Push(&PreviewFrame{ContentType: "application/x-e2e", Data: []byte(marker)})
+	_ = conn.Push(&PreviewFrame{Blob: aprot.Blob{ContentType: "application/x-e2e", Data: []byte(marker)}})
 	return nil
 }
 

@@ -160,10 +160,14 @@ func (t *streamTransport) writePump() {
 		case <-t.done:
 			return
 		case line := <-t.send:
+			// Released after the write, not at dequeue: a frame still going
+			// out holds its slot, so the allowance really is "frames not yet
+			// on the wire". Same discipline as the WebSocket transport.
+			_, err := t.rw.Write(append(line.data, '\n'))
 			if line.droppable {
 				t.queuedDroppable.Add(-1)
 			}
-			if _, err := t.rw.Write(append(line.data, '\n')); err != nil {
+			if err != nil {
 				return
 			}
 		}

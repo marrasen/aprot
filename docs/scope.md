@@ -194,6 +194,19 @@ consistent with them.
   itself the mitigation — it is the unbounded queue, not the frame size, that
   turns 300 KB into minutes of delay. Revisit only with a measurement.
 
+  **Opt-in is explicit, never inferred from shape.** A binary push event is a
+  named type embedding `Blob` and nothing else, and that is checked exactly.
+  The first attempt matched structurally, by reflect convertibility, on the
+  reasoning that a struct with Blob's fields *is* a Blob. That was wrong, and
+  wrong in the direction the rule cares about: struct conversion ignores tags
+  and methods, so a consumer's own `{ContentType string; Data []byte}` with its
+  own JSON tags would have been reinterpreted as binary — new wire encoding,
+  new generated type, its `MarshalJSON` bypassed — without anyone asking.
+  aprot may decide how a frame travels; it may not decide that somebody's type
+  means something other than what they wrote. When a feature needs to know an
+  intent that the type system cannot express, take the declaration, do not
+  infer it from a shape that can coincide.
+
   What stays **out**: conflation (replace the queued frame with the newer one)
   and per-event allowances. Both decide which value supersedes which, which is
   the consumer's model of its own data, and neither is needed once the queue

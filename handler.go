@@ -133,9 +133,10 @@ type PushEventOption func(*PushEventInfo)
 // guarantee: the send blocks until the frame is queued or the connection is
 // gone, so nothing is silently lost.
 //
-// The threshold is deliberately tight. A droppable frame is sent only when
-// the connection has at most [maxQueuedDroppable] droppable frames still
-// unwritten; beyond that it is dropped and [Observer.PushDropped] fires.
+// The threshold is deliberately tight. A frame holds its slot until it is on
+// the wire, so a droppable frame is sent only when the connection has fewer
+// than [maxQueuedDroppable] droppable frames still unwritten — queued or mid
+// write. Beyond that it is dropped and [Observer.PushDropped] fires.
 // Waiting for the 256-slot outbound buffer to fill instead would mean
 // queueing megabytes of expired frames — for 300 KB video frames, ~76 MB and
 // minutes of backlog — before dropping the first one, which is the opposite

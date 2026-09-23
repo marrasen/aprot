@@ -694,13 +694,13 @@ Binary delivery is opt-in via the `Blob` type and applies to top-level values on
 
 ### Binary push events
 
-A push event whose data is a `Blob` travels as a binary frame too. A push event's wire name is its Go type name, so define a type from `Blob` rather than registering `Blob` itself — that also lets one registry carry several binary events:
+A push event whose data is a `Blob` travels as a binary frame too. A push event's wire name is its Go type name, so wrap `Blob` in a named type rather than registering `Blob` itself — that also lets one registry carry several binary events:
 
 ```go
-type PreviewFrame aprot.Blob
+type PreviewFrame struct{ aprot.Blob }
 
 registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
-server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: jpeg})
+server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
 ```
 
 ```ts
@@ -709,7 +709,9 @@ onPreviewFrame(client, (frame: Blob) => {
 });
 ```
 
-Such an event carries bytes and a content type and nothing else; a push that also needs sibling fields (a sequence number, a timestamp) travels as ordinary JSON. Types defined from `Blob` work as handler results as well, so "a top-level `Blob` is binary" stays one rule.
+The wrapper must **embed `Blob` and hold no other field**. Embedding is the opt-in because it cannot be tripped by accident: a struct that merely has a `string` and a `[]byte` is somebody else's type — with its own JSON tags and possibly its own `MarshalJSON` — and aprot leaves it alone. A wrapper that adds a second field is likewise left alone and travels as ordinary JSON, since the frame has nowhere to put it.
+
+So such an event carries bytes and a content type and nothing else; a push that also needs sibling fields (a sequence number, a timestamp) travels as ordinary JSON. Wrappers work as handler results too, so "a top-level `Blob` is binary" stays one rule.
 
 ## Droppable Push Events
 
@@ -721,7 +723,7 @@ Every frame aprot sends is delivered or the connection dies trying: a send waits
 registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
 ```
 
-A droppable frame is sent only when the connection has already written the previous one; otherwise it is skipped. The effect is delivery at whatever rate each connection sustains, with one frame of latency instead of a growing backlog — and a producer that never blocks on its slowest consumer.
+A droppable frame is sent only once the connection has finished writing the previous one. A frame produced while that write is still in progress is skipped, and whatever comes after it is newer anyway. The effect is delivery at whatever rate each connection sustains, always with the freshest frame available rather than a growing backlog — and a producer that never blocks on its slowest consumer.
 
 - **The bar is the previous frame, not a full buffer.** Waiting for the 256-slot outbound buffer to fill would queue megabytes of expired frames first — for 300 KB video frames, roughly 76 MB — which is the opposite of what a droppable event asks for.
 - **Declared per event type, not per call.** Staleness is a property of the payload, so the flag applies on `Conn.Push`, `Server.Broadcast` and `Server.PushToUser` alike with no second API.

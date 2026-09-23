@@ -43,15 +43,15 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   delivered as a WebSocket binary frame, the same way a `Blob` result is, so
   pushing a 300 KB image no longer costs a third again in base64.
 
-  A push event's wire name is its Go type name, so define a type from `Blob`
+  A push event's wire name is its Go type name, so wrap `Blob` in a named type
   rather than registering `Blob` itself — which would produce an event called
   `Blob` and allow only one per registry:
 
   ```go
-  type PreviewFrame aprot.Blob
+  type PreviewFrame struct{ aprot.Blob }
 
   registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
-  server.Broadcast(&PreviewFrame{ContentType: "image/jpeg", Data: jpeg})
+  server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
   ```
 
   The generated handler receives a DOM `Blob`. A connection that declined
@@ -61,9 +61,23 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   carries bytes and a content type and nothing else; a push that also needs
   sibling fields travels as ordinary JSON.
 
-  Types defined from `Blob` are recognized everywhere aprot looks at one,
-  handler results included, so "a top-level `Blob` is binary" stays one rule
-  rather than becoming a push-only special case.
+  **Behaviour change, narrow but worth stating:** "a top-level `Blob` is
+  binary" now also covers a named type embedding `Blob`, on the response path
+  as well as the push path — one rule rather than a push-only special case. A
+  handler already returning such a wrapper (or a subscription to one) switches
+  from a JSON result to a binary frame, and its generated signature from an
+  interface to `Promise<Blob>`.
+
+  The wrapper must embed `Blob` and hold no other field, and that is the whole
+  test: sole field, anonymous, type `aprot.Blob`. Embedding is the opt-in
+  because it cannot happen by accident. Matching on structure instead would
+  have been silently wrong — Go converts between struct types whose underlying
+  types match, and that match ignores struct tags and methods, so a consumer's
+  own `struct { ContentType string \`json:"mime"\`; Data []byte \`json:"payload"\` }`
+  would have become a `Blob`: delivered as a binary frame, typed `Blob` in the
+  generated client, its tags and any `MarshalJSON` bypassed. A wrapper that
+  adds a second field is also left alone, since the frame has nowhere to carry
+  it.
 
   **Wire format:** the binary frame header gains `event` and makes `id`
   optional — a push frame carries `event` where a response carries `id`. Both
@@ -74,6 +88,14 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   registers a `Blob`-typed push event on the server it talks to.
 
 ### Changed
+
+- **Push fan-out encodes each frame once** (#387): `Server.Broadcast` and
+  `Server.PushToUser` marshal (or binary-encode) a push once and share the
+  bytes with every recipient, instead of re-encoding per connection. The frame
+  never depended on the connection — only the choice between the binary and
+  JSON encodings does — so the old behaviour copied the whole payload per
+  client: roughly 30 MB for a 300 KB frame to 100 clients. Both encodings are
+  produced lazily and at most once per fan-out.
 
 - **`Observer` gained `PushDropped`** (#387). Observers that embed
   `aprot.NoopObserver`, as the documentation has always instructed, are

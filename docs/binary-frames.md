@@ -23,17 +23,23 @@ That covers three cases:
   and
 - a push event whose data is a `Blob`.
 
-"A top-level `aprot.Blob`" means `aprot.Blob`, `*aprot.Blob`, or a type defined
-from it:
+"A top-level `aprot.Blob`" means `aprot.Blob`, `*aprot.Blob`, or a named type
+that embeds `aprot.Blob` as its only field:
 
 ```go
-type PreviewFrame aprot.Blob
+type PreviewFrame struct{ aprot.Blob }
 ```
 
-A push event needs that defined type, because a push event's wire name is its
-Go type name: registering `aprot.Blob` itself would produce an event called
-`Blob` and allow only one per registry. Results accept the same spellings, so
-the rule is one rule.
+A push event needs that wrapper, because a push event's wire name is its Go
+type name: registering `aprot.Blob` itself would produce an event called `Blob`
+and allow only one per registry. Results accept the same spellings, so the rule
+is one rule.
+
+The wrapper must embed `Blob` and hold no other field, and that is checked
+exactly — sole field, anonymous, type `aprot.Blob`. A struct that merely has a
+`string` and a `[]byte` is never treated as a `Blob`, however closely it
+resembles one; nor is a wrapper that adds a field, since the frame has nowhere
+to carry it.
 
 Everything else stays text JSON — including a `Blob` nested inside another
 struct, streamed as an item, or passed as a parameter, and including a plain
