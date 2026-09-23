@@ -174,7 +174,7 @@ and do not coin a synonym for variety.
 | push event | a broadcast that is not a query result | message, notification |
 | handler | a Go method the registry serves | endpoint, action, RPC |
 | group | the struct a handler hangs on | service, controller |
-| transport | WebSocket, SSE+HTTP, REST, MCP | protocol, channel |
+| transport | WebSocket, byte stream, REST, MCP | protocol, channel |
 
 When a new thing needs a name, name it once in `docs/scope.md`, then
 use that name everywhere, including in the generated TypeScript.

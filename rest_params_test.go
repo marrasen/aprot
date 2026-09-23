@@ -130,7 +130,7 @@ func TestRESTInvalidIntPathParam(t *testing.T) {
 }
 
 // REST responses must use the same sql.Null-aware marshaling as the
-// WebSocket/SSE path, so the wire format is identical across transports.
+// socket path, so the wire format is identical across transports.
 func TestRESTSQLNullResponse(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterREST(&NullRESTHandlers{})

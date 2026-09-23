@@ -14,9 +14,7 @@ import (
 //
 // handleAuth runs in the WebSocket read-loop goroutine, which has no recover
 // above it, so before #341 a hook panic killed the whole server — this test
-// would take the test binary with it rather than fail. Over SSE the same panic
-// ran under net/http and only dropped the connection, so the policy was also
-// asymmetric across transports.
+// would take the test binary with it rather than fail.
 //
 // The client sees the same redacted message as any other non-ProtocolError from
 // the hook: a panic value can embed a token or a DSN, and the caller is
@@ -55,31 +53,6 @@ func TestAuth_HookPanicDoesNotCrashOverWebSocket(t *testing.T) {
 	}
 	if !strings.Contains(logged, "stack") {
 		t.Errorf("stack missing from the log; got %q", logged)
-	}
-}
-
-// The same panic over SSE produces the same auth_error, so the policy no longer
-// depends on which transport the auth frame arrived on.
-func TestAuth_HookPanicIsSymmetricOverSSE(t *testing.T) {
-	hook := func(ctx context.Context, conn *Conn, token string) error {
-		panic("boom")
-	}
-	ts := newAuthServer(t, ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(&syncBuffer{}, nil)),
-	}, hook)
-	resp, reader, connID := connectSSE(t, ts)
-	defer resp.Body.Close()
-
-	postAuthSSE(t, ts, connID, "whatever")
-	ev, err := reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeAuthError) {
-		t.Fatalf("expected auth_error event after a hook panic, got %q data=%q", ev.Event, ev.Data)
-	}
-	if !strings.Contains(ev.Data, "authentication failed") {
-		t.Errorf("event data = %q, want the redacted message", ev.Data)
 	}
 }
 

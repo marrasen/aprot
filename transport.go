@@ -6,7 +6,7 @@ import (
 )
 
 // transport is the internal interface for connection I/O.
-// Both WebSocket and SSE transports implement this.
+// Both the WebSocket and byte-stream transports implement this.
 type transport interface {
 	// Send sends data to the client. Must be safe for concurrent use.
 	// Send blocks until the data is accepted into the transport's outbound

@@ -2,7 +2,7 @@
 
 **A**PI **P**rotocol for **R**eal-time **O**perations with **T**ypeScript
 
-A Go library for building type-safe real-time APIs with automatic TypeScript client generation. Supports both WebSocket and SSE+HTTP transports.
+A Go library for building type-safe real-time APIs with automatic TypeScript client generation. WebSocket is the transport, with REST, MCP, and byte-stream adapters onto the same handlers.
 
 > **Warning**
 > This library is currently unstable and under active development. Breaking changes will occur between versions until v1.0.0 is released.
@@ -136,7 +136,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
 - **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
 - **Streaming handlers** — return `iter.Seq[T]` / `iter.Seq2[K, V]` from Go and the generated client exposes `AsyncIterable<T>`, so UIs can populate lists item-by-item as results arrive
-- **Binary Blob responses** — return `aprot.Blob` from a handler and the client receives a DOM `Blob`; delivered as a raw WebSocket binary frame (no base64 overhead), with an automatic JSON fallback on SSE and stream transports
+- **Binary Blob responses** — return `aprot.Blob` from a handler and the client receives a DOM `Blob`; delivered as a raw WebSocket binary frame (no base64 overhead), with an automatic JSON fallback for clients that decline binary and on the byte-stream transport
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
 - **Subscription patches** — mutations push O(patch) partial updates to subscribed queries instead of re-sending the full result; clients apply them to the shared query cache via an `applyPatch` reducer, with automatic full-refresh fallback for clients that don't opt in
 - **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
@@ -148,10 +148,9 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Progress reporting** — built-in support for long-running operations
 - **Request cancellation** — clients cancel via AbortController; handlers see cancel cause
 - **Connection lifecycle** — hooks for connect/disconnect, connection-scoped state, user targeting, user eviction (`DisconnectUser`)
-- **Dual transport** — WebSocket and SSE+HTTP with identical API
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
-- **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the SSE and REST HTTP transports
-- **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs; works over WebSocket and SSE
+- **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the REST and MCP HTTP endpoints
+- **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs
 - **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot and an `InFlightRequests()` dump that names a handler that never returned, with zero hot-path cost when unset
 - **Automatic reconnection** — page visibility + network-aware, with linear backoff (1s, 2s, 3s, … capped at 10s by default) and a `connectTimeout` (default 10s) that fails a hung handshake instead of waiting out the browser's TCP timeout; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
@@ -249,9 +248,7 @@ func main() {
     server := aprot.NewServer(registry)
     handlers.Broadcaster = server
 
-    http.Handle("/ws", server)                    // WebSocket
-    http.Handle("/sse", server.HTTPTransport())   // SSE+HTTP
-    http.Handle("/sse/", server.HTTPTransport())
+    http.Handle("/ws", server) // WebSocket
     http.ListenAndServe(":8080", nil)
 }
 ```
@@ -593,7 +590,7 @@ function UserList() {
 
 Cancellation works exactly like any other request: break out of the `for await` loop, pass an `AbortSignal`, or unmount the React component, and the handler's `ctx` is canceled — the next `yield` returns `false` and the iterator stops. Streaming handlers also support `iter.Seq2[K, V]`, which surfaces as `AsyncIterable<[K, V]>` on the TypeScript side.
 
-Streaming handlers are WebSocket/SSE only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
+Streaming handlers are WebSocket and byte-stream only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
 
 ### Chunked delivery for large streams
 
@@ -681,7 +678,7 @@ const avatar = await getAvatar(client, userId);
 imgEl.src = URL.createObjectURL(avatar); // avatar.type === 'image/png'
 ```
 
-Over WebSocket the payload travels as a binary frame (a 4-byte header length, a small JSON header, then the raw bytes). Transports without binary frames (SSE, byte-stream) fall back to a JSON envelope carrying base64 data, which the client converts back into a `Blob` automatically — the resolved type never depends on the transport. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) deliver `Blob`s the same way.
+Over WebSocket the payload travels as a binary frame (a 4-byte header length, a small JSON header, then the raw bytes). A client that declines binary frames, and the byte-stream transport, fall back to a JSON envelope carrying base64 data, which the client converts back into a `Blob` automatically — the resolved type never depends on the transport. Subscription refreshes (`subscribeGetAvatar`, `useGetAvatar`) deliver `Blob`s the same way.
 
 If you are writing your own WebSocket client rather than using the generated one, see **[docs/binary-frames.md](docs/binary-frames.md)** for the frame format and a reference decoder. A client that handles only text frames silently drops `Blob` responses: the call never settles and there is no server-side trace, which is easily mistaken for a server deadlock.
 
@@ -691,7 +688,7 @@ A client that would rather not decode binary at all can decline it for the lifet
 const ws = new WebSocket('wss://example.com/ws?binary=0');
 ```
 
-`Blob` results then arrive as the same JSON `$blob` envelope SSE and stream use, at the cost of base64 inflation. The `config` frame the server sends immediately after the upgrade reports the mode in effect as `binaryFrames`, so a client can confirm what it negotiated before making its first call rather than discovering it by hanging. An unrecognized value fails the upgrade with `400 Bad Request` — a typo that silently re-enabled binary frames would reinstate the very hang the parameter prevents.
+`Blob` results then arrive as the same JSON `$blob` envelope the byte-stream transport uses, at the cost of base64 inflation. The `config` frame the server sends immediately after the upgrade reports the mode in effect as `binaryFrames`, so a client can confirm what it negotiated before making its first call rather than discovering it by hanging. An unrecognized value fails the upgrade with `400 Bad Request` — a typo that silently re-enabled binary frames would reinstate the very hang the parameter prevents.
 
 Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
 
@@ -890,7 +887,7 @@ The server protects itself from misbehaving clients out of the box, and every li
 
 ```go
 server := aprot.NewServer(registry, aprot.ServerOptions{
-    MaxMessageSize: 1 << 20,          // max inbound WS frame / SSE body size (default 4 MiB)
+    MaxMessageSize: 1 << 20,          // max inbound WS frame size (default 4 MiB)
     WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
     PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
     PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
@@ -906,7 +903,7 @@ Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 - **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error. One buggy handler cannot take down the process, and the guarantee holds on every transport and dispatch path: a socket request gets an error frame, a stream gets a terminal `stream_end` frame, a server-driven subscription refresh gets an error frame on the subscription id, a REST request gets a 500 JSON error, and an MCP tool call gets a tool result with `isError` set — never a dropped connection. Clients receive a generic `handler panicked` message on all of these paths; a panic value can embed internal state (a token, a DSN), so the value and stack go only to `ServerOptions.Logger`. The one exception is `http.ErrAbortHandler`: the REST and MCP adapters re-panic it into `net/http`, preserving the stdlib's abort-the-response-quietly convention. A panicking `OnAuth` hook is recovered the same way and reported to the client as a plain `authentication failed` — the auth boundary's redaction rule applies to a panic value like it does to any other non-`ProtocolError` — and anything the hook set before panicking stays set, so set the address and the principal provider last.
 
   The guarantee covers handlers and request-path middleware. **Task middleware that panics *after* calling `next()`** is the one case outside it: by then the task entry point has already returned, so there is no caller to receive the panic and no client to send an error to. It is re-raised on the task's goroutine rather than swallowed, so a bug there is loud instead of silent. A task middleware panic *before* `next()` is handed back to the caller and behaves like any other.
-- **Message size limits** — oversized WebSocket frames close the connection; oversized SSE RPC bodies get HTTP 413.
+- **Message size limits** — oversized WebSocket frames close the connection.
 - **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
 - **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
 - **Concurrency caps** — a single connection can otherwise pin unbounded work: every inbound frame runs on its own goroutine and a connection can register unlimited subscriptions (each amplifying server-side `TriggerRefresh` fan-out). `MaxConcurrentRequests` bounds in-flight requests per connection, `MaxServerConcurrentRequests` bounds them across the whole server, and `MaxSubscriptions` bounds active subscriptions per connection. A frame over a cap is rejected with `CodeTooManyRequests` (`-32004`; the TS client exposes `err.isTooManyRequests()`) rather than spawning more goroutines. A streaming handler holds its request slot until the stream ends.
@@ -933,9 +930,9 @@ server.SetCheckOrigin(func(r *http.Request) bool {
 
 Token-based auth (e.g. a token passed via the connection URL) is not affected by this, but setting an origin check is still good hygiene for browser-facing deployments.
 
-### CORS for SSE & REST (cross-origin browser clients)
+### CORS for REST & MCP (cross-origin browser clients)
 
-The SSE and REST endpoints are plain HTTP, so a cross-origin browser app calling them needs CORS response headers and `OPTIONS` preflight handling — the HTTP-transport counterpart to WebSocket origin checking. `aprot.CORS` returns a standard `func(http.Handler) http.Handler` wrapper you can put in front of any transport:
+The REST and MCP endpoints are plain HTTP, so a cross-origin browser app calling them needs CORS response headers and `OPTIONS` preflight handling — the HTTP-transport counterpart to WebSocket origin checking. `aprot.CORS` returns a standard `func(http.Handler) http.Handler` wrapper you can put in front of any transport:
 
 ```go
 cors := aprot.CORS(aprot.CORSOptions{
@@ -945,7 +942,7 @@ cors := aprot.CORS(aprot.CORSOptions{
 })
 
 http.Handle("/api/", http.StripPrefix("/api", cors(rest)))   // REST adapter
-http.Handle("/sse", cors(server.HTTPTransport()))            // SSE handler
+http.Handle("/mcp", cors(mcpHandler))                        // MCP adapter
 ```
 
 - **Closed by default** — construct the wrapper only where you want cross-origin access; nothing is loosened otherwise. An `Origin` that isn't allowed receives no CORS headers, so the browser blocks the response while same-origin and non-browser clients are unaffected.
@@ -978,7 +975,6 @@ await client.refreshAuth(freshToken);
 - **Pending-auth state** — with a hook registered, a new connection must authenticate before any request/subscribe runs; earlier frames are rejected with `auth_error`, and a connection that doesn't authenticate within `ServerOptions.AuthTimeout` (default 10s, `-1` disables) is closed.
 - **Mid-session refresh** — the same `auth` frame on a live connection updates the token/identity without reconnecting. A *failed* refresh keeps the existing session (a live connection is never downgraded).
 - **Set the address and the provider last.** Run every check first, then call `conn.SetUserID` / `conn.SetPrincipalProvider` once success is certain. A hook that fails keeps whatever it already set — aprot does not undo those calls, because your hook made them. A hook that sets either and *then* fails leaves the connection resolving the new principal and `PushToUser` delivering to the new address, after the client was sent `auth_error`. The same holds for a panic: it is recovered, not rewound. Verify first, set last, and that state cannot arise.
-- **Both transports** — WebSocket sends the `auth` frame directly; SSE sends it in the first `POST /rpc` body (the `EventSource` GET can't set headers). `auth_ok`/`auth_error` arrive over the stream either way.
 - **Backward compatible** — with no `OnAuth` hook, connections behave exactly as before (URL-token via `OnConnect` still works). `ErrAuthFailed` uses code `-32005`; the TS client exposes `err.isAuthFailed()`.
 - **Anonymous-friendly mode** — `ServerOptions.AllowAnonymous` keeps the hook but admits unauthenticated connections, for apps that mix public and protected APIs on one endpoint. Anonymous connections run immediately with `conn.UserID() == ""` and no auth timeout; a client that authenticates later upgrades the live session in place, and a token that *is* offered and rejected still closes the connection. Gate protected handlers on the principal (`aprot.PrincipalFrom(ctx)`) in the handler or in middleware — admitting the connection is not authorizing the call, and neither the address nor connection presence is an authorization input.
 
@@ -1143,7 +1139,7 @@ Example: `func (h *Users) UpdateUser(ctx context.Context, id string, req *Update
 
 Access the HTTP request in middleware via `aprot.HTTPRequestFromContext(ctx)`.
 
-REST requests run through the same request pipeline as WebSocket/SSE, via the transport-agnostic `Server.Invoke` entry point: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, server middleware registered with `server.Use(...)` applies to REST requests too, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket/SSE clients. All of this requires a `Server` built from the same registry; without one, REST falls back to adapter + group middleware only (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
+REST requests run through the same request pipeline as WebSocket, via the transport-agnostic `Server.Invoke` entry point: middleware sees `aprot.HandlerInfoFromContext(ctx)` and `aprot.RequestFromContext(ctx)`, server middleware registered with `server.Use(...)` applies to REST requests too, and refresh triggers work — a handler that calls `aprot.TriggerRefresh(ctx, ...)` during a REST mutation refreshes subscribed WebSocket clients. All of this requires a `Server` built from the same registry; without one, REST falls back to adapter + group middleware only (`RegisterRefreshTrigger` remains subscribe-only, and REST itself cannot subscribe).
 
 On request-scoped transports `aprot.Connection(ctx)` is **nil** — connection presence means "there is a socket here", never "the caller authenticated", so don't gate auth on it. A wrapper that authenticates the request itself can still hand middleware a **detached connection**: `server.NewDetachedConn()` returns a `*Conn` bound to no socket — the per-connection value store and `SetUserID`/`UserID` work, push fan-out never sees it — and `aprot.WithConnection(ctx, conn)` attaches it to the request context (e.g. in a wrapping `http.Handler` after validating a token).
 
@@ -1182,7 +1178,7 @@ server := aprot.NewServer(registry)
 http.Handle("/mcp", mcp.NewAdapter(server, mcp.Options{ServerName: "todos", ServerVersion: "1.0.0"}))
 ```
 
-The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket/SSE clients like any other mutation. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless your own wrapper installed one via `aprot.WithConnection` — gate protected tools on your own auth, e.g. a wrapping `http.Handler` that validates the `Authorization` header and attaches the resolved identity with `aprot.WithPrincipal`.
+The adapter (`github.com/marrasen/aprot/mcp`) is a stateless `http.Handler` implementing the MCP Streamable HTTP transport for tool serving: `initialize`, `ping`, `tools/list`, and `tools/call`. Tool calls dispatch through `Server.Invoke`, so `TriggerRefresh` from a tool call refreshes subscribed WebSocket clients like any other mutation. Tool calls carry no connection (`aprot.Connection(ctx)` is nil, as on REST) unless your own wrapper installed one via `aprot.WithConnection` — gate protected tools on your own auth, e.g. a wrapping `http.Handler` that validates the `Authorization` header and attaches the resolved identity with `aprot.WithPrincipal`.
 
 - **Tool names** default to snake_case of the wire method (`TodoHandlers.CreateTodo` → `todo_handlers_create_todo`); override per tool.
 - **Descriptions** come from handler godoc (the same comments that feed OpenAPI and the generated TS client), overridable per tool. Struct field godoc and `validate` tags flow into the input schema via `Registry.SchemaFor`.
@@ -1256,7 +1252,7 @@ for {
 
 `ServeStream` blocks until the connection ends: it returns `nil` on a normal close (peer EOF, `ctx` canceled, server `Stop`), or the rejection error when a connect hook refused the connection. `MaxMessageSize` bounds inbound line length, but the WebSocket keepalive/write-timeout options don't apply — a raw byte stream has no ping frames or deadlines, so liveness is the stream's own lifetime (manage the peer process or socket, and cancel `ctx` to end the connection).
 
-On the client side, the generated `ApiClientOptions.transport` accepts a custom `ClientTransport` instance in addition to the `'websocket' | 'sse'` strings, so the same protocol can ride any message channel:
+On the client side, the generated `ApiClientOptions.transport` accepts a custom `ClientTransport` instance in addition to the `'websocket'` string, so the same protocol can ride any message channel:
 
 ```ts
 import { ApiClient, type ClientTransport } from './api/client';
@@ -1330,7 +1326,7 @@ go test ./...
 
 ### E2E Integration Tests
 
-The `e2e/` directory contains end-to-end tests that run the generated TypeScript client against a live Go server, covering both WebSocket and SSE transports.
+The `e2e/` directory contains end-to-end tests that run the generated TypeScript client against a live Go server over WebSocket and REST.
 
 ```bash
 cd e2e/generate && go run main.go       # Generate client

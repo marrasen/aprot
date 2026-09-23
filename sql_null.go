@@ -320,7 +320,7 @@ func marshalJSON(v any) ([]byte, error) {
 // and `format:` struct tag support — the exact encoding every transport uses
 // for responses. Adapters outside the aprot package (aprot/mcp, custom
 // transports built on [Server.Invoke]) use it so their payloads match the
-// WebSocket/SSE/REST wire format.
+// WebSocket/REST wire format.
 func MarshalWire(v any) ([]byte, error) {
 	return marshalJSON(v)
 }

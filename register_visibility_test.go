@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"net"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -69,51 +68,6 @@ func TestRegisterBeforeClientVisible_WebSocket(t *testing.T) {
 		}
 		ws.Close()
 		// Let the unregister drain so each run starts from an empty set.
-		waitForConnCount(t, server, 0, 5*time.Second)
-	}
-}
-
-// SSE: the connected and config events are the client's first evidence.
-func TestRegisterBeforeClientVisible_SSE(t *testing.T) {
-	server := NewServer(NewRegistry())
-	sseH := newSSEHandler(server)
-	mux := http.NewServeMux()
-	mux.Handle("/sse", sseH)
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-	t.Cleanup(func() { stopBounded(t, server) })
-
-	for i := range registerVisibilityRuns {
-		// The body is closed unconditionally: an SSE request stays open until
-		// the client hangs up, and httptest.Server.Close blocks on outstanding
-		// requests — so a bare t.Fatalf here would wedge the run instead of
-		// reporting it.
-		func() {
-			req, _ := http.NewRequest("GET", ts.URL+"/sse", nil)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("run %d: GET /sse: %v", i, err)
-			}
-			defer resp.Body.Close()
-
-			// Read up to and including the connected event.
-			br := bufio.NewReader(resp.Body)
-			for {
-				line, err := br.ReadString('\n')
-				if err != nil {
-					t.Fatalf("run %d: read SSE stream: %v", i, err)
-				}
-				if strings.HasPrefix(line, "event: connected") {
-					break
-				}
-			}
-			if n := visibleToBroadcast(server); n != 1 {
-				t.Errorf("run %d: client holds the connected event but ForEachConn sees %d connections, want 1", i, n)
-			}
-		}()
-		if t.Failed() {
-			return
-		}
 		waitForConnCount(t, server, 0, 5*time.Second)
 	}
 }

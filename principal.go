@@ -9,7 +9,7 @@ import "context"
 //
 // Population per transport:
 //
-//   - Socket (WebSocket/SSE): register a [PrincipalProvider] on the
+//   - Socket (WebSocket, byte stream): register a [PrincipalProvider] on the
 //     connection (typically from the [Server.OnAuth] hook). The provider
 //     runs once per execution — requests, subscribes, and server-driven
 //     subscription refreshes — so identity changes take effect without a

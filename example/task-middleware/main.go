@@ -11,12 +11,11 @@
 // failed) through the middleware, with task_id / task_title / parent_id
 // attached to ctx so any log emitted inside the task body picks them up.
 //
-// To drive it by hand instead, the HTTP transport needs a connection ID
-// from the SSE stream first (see README.md).
+// To drive it by hand instead, connect a WebSocket client to /ws and send one
+// request frame (see README.md).
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,9 +25,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/marrasen/aprot"
 	"github.com/marrasen/aprot/tasks"
 )
@@ -120,16 +119,8 @@ func main() {
 	tasks.Enable(registry, tasks.WithTaskMiddleware(taskLoggingMiddleware(logger)))
 
 	server := aprot.NewServer(registry)
-	// HTTPTransport() returns a fresh handler with its own connection table,
-	// so the GET /sse stream and the POST /rpc that references its connection
-	// ID must share one instance — otherwise /rpc reports "unknown connection
-	// ID". Reuse a single handler across all HTTP routes.
-	httpTransport := server.HTTPTransport()
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server)            // WebSocket transport
-	mux.Handle("/sse", httpTransport)    // GET: open the SSE event stream
-	mux.Handle("/rpc", httpTransport)    // POST: JSON-RPC request
-	mux.Handle("/cancel", httpTransport) // POST: cancel an in-flight request
+	mux.Handle("/ws", server) // WebSocket transport
 
 	const addr = "127.0.0.1:8080"
 	httpServer := &http.Server{Addr: addr, Handler: mux}
@@ -140,7 +131,7 @@ func main() {
 	}()
 	defer httpServer.Close() //nolint:errcheck
 
-	base := "http://" + addr
+	base := "ws://" + addr + "/ws"
 	if err := waitForServer(addr); err != nil {
 		log.Fatal(err)
 	}
@@ -168,64 +159,49 @@ func waitForServer(addr string) error {
 	return errors.New("server did not start in time")
 }
 
-// driveDemo exercises the server end to end: it opens an SSE stream to obtain
-// a connection ID, POSTs an RPC referencing that ID, and waits for the
-// handler to run so its middleware log lines flush. This client plumbing is
-// only here to make `go run .` self-contained — it is not part of the
-// middleware lesson.
-func driveDemo(logger *slog.Logger, base, filename string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/sse", nil)
-	resp, err := http.DefaultClient.Do(req)
+// driveDemo exercises the server end to end: it opens a WebSocket connection,
+// sends one request frame, and waits for the response so the handler's
+// middleware log lines have flushed before the next demo runs. This client
+// plumbing is only here to make `go run .` self-contained — it is not part of
+// the middleware lesson.
+func driveDemo(logger *slog.Logger, wsURL, filename string) {
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		logger.Error("sse connect failed", "err", err)
+		logger.Error("websocket connect failed", "err", err)
 		return
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer ws.Close() //nolint:errcheck
 
-	connID := make(chan string, 1)
-	go func() {
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			data, ok := strings.CutPrefix(scanner.Text(), "data: ")
-			if !ok {
-				continue
-			}
-			var msg struct {
-				Type         string `json:"type"`
-				ConnectionID string `json:"connectionId"`
-			}
-			if json.Unmarshal([]byte(data), &msg) == nil && msg.Type == "connected" {
-				select {
-				case connID <- msg.ConnectionID:
-				default:
-				}
-			}
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	// The server sends a config frame on connect; discard it.
+	if _, _, err := ws.ReadMessage(); err != nil {
+		logger.Error("read config frame failed", "err", err)
+		return
+	}
+
+	req := fmt.Sprintf(`{"type":"request","id":"1","method":"Demo.Import","params":[%q]}`, filename)
+	if err := ws.WriteMessage(websocket.TextMessage, []byte(req)); err != nil {
+		logger.Error("send request failed", "err", err)
+		return
+	}
+
+	// Read until the request settles. Progress and task frames arrive first;
+	// waiting for the response (or error) is what keeps the demos ordered.
+	for {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			logger.Error("read frame failed", "err", err)
+			return
 		}
-	}()
-
-	var id string
-	select {
-	case id = <-connID:
-	case <-ctx.Done():
-		logger.Error("never received connection id from SSE stream")
-		return
+		var frame struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		}
+		if json.Unmarshal(data, &frame) != nil || frame.ID != "1" {
+			continue
+		}
+		if frame.Type == "response" || frame.Type == "error" {
+			return
+		}
 	}
-
-	body := fmt.Sprintf(`{"connectionId":%q,"id":"1","method":"Demo.Import","params":[%q]}`, id, filename)
-	post, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/rpc", strings.NewReader(body))
-	post.Header.Set("Content-Type", "application/json")
-	pr, err := http.DefaultClient.Do(post)
-	if err != nil {
-		logger.Error("rpc post failed", "err", err)
-		return
-	}
-	_ = pr.Body.Close()
-
-	// The RPC is dispatched asynchronously; give the handler time to run all
-	// three subtasks (~250ms) so the middleware log lines flush before we
-	// move on to the next demo.
-	time.Sleep(500 * time.Millisecond)
 }

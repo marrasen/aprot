@@ -2,7 +2,10 @@ module github.com/marrasen/aprot/example/task-middleware
 
 go 1.27
 
-require github.com/marrasen/aprot v0.0.0
+require (
+	github.com/gorilla/websocket v1.5.3
+	github.com/marrasen/aprot v0.0.0
+)
 
 require (
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
@@ -10,7 +13,6 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.4 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect

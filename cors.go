@@ -46,7 +46,7 @@ var defaultCORSMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTI
 // CORS returns middleware that adds CORS response headers and answers OPTIONS
 // preflight requests. It is a standard func(http.Handler) http.Handler wrapper,
 // so it composes with any of the three transports — the REST adapter
-// ([RESTAdapter]), the SSE handler ([Server.HTTPTransport]), or the WebSocket
+// ([RESTAdapter]), the MCP adapter, or the WebSocket
 // handler ([Server.WebSocket]):
 //
 //	cors := aprot.CORS(aprot.CORSOptions{
@@ -54,7 +54,7 @@ var defaultCORSMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTI
 //	    AllowCredentials: true, // needed for cookie-authenticated browsers
 //	})
 //	http.Handle("/api/", http.StripPrefix("/api", cors(rest)))
-//	http.Handle("/sse", cors(server.HTTPTransport()))
+//	http.Handle("/mcp", cors(mcpHandler))
 //
 // It is closed by default: a request whose Origin is not allowed receives no
 // CORS headers, so the browser blocks the cross-origin response. Same-origin
@@ -70,7 +70,7 @@ var defaultCORSMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTI
 //
 // Wrapping [Server.WebSocket] is harmless but usually unnecessary: a WS upgrade
 // isn't subject to CORS, and its origin control is [Server.SetCheckOrigin]. CORS
-// belongs on the SSE and REST HTTP transports.
+// belongs on the REST and MCP HTTP endpoints.
 func CORS(opts CORSOptions) func(http.Handler) http.Handler {
 	methods := opts.AllowedMethods
 	if len(methods) == 0 {

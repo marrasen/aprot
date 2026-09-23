@@ -55,8 +55,7 @@ type ServerOptions struct {
 	// ReconnectMaxAttempts is the maximum number of reconnect attempts. 0 = unlimited. Default: 0
 	ReconnectMaxAttempts int
 	// MaxMessageSize is the maximum size in bytes of an inbound WebSocket
-	// frame or SSE RPC request body. Larger messages close the connection
-	// (WebSocket) or are rejected with 413 (SSE). Set to -1 to disable the
+	// frame. Larger messages close the connection. Set to -1 to disable the
 	// limit. Default: 4 MiB.
 	MaxMessageSize int64
 	// WriteTimeout is the maximum time to write a single outbound WebSocket
@@ -482,7 +481,7 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 // Invoke executes a registered unary method through the full server request
 // pipeline — handler info and request context, refresh queue, server and
 // handler-group middleware — exactly as a request arriving over WebSocket or
-// SSE. It is the transport-agnostic entry point (#316): request-scoped
+// the socket. It is the transport-agnostic entry point (#316): request-scoped
 // transports (REST, MCP, custom HTTP surfaces) call Invoke instead of
 // re-assembling the pipeline, so aprot.TriggerRefresh, HandlerInfoFromContext
 // and RequestFromContext behave identically on every transport.
@@ -711,15 +710,6 @@ func (s *Server) WebSocket() http.Handler {
 	return http.HandlerFunc(s.ServeHTTP)
 }
 
-// HTTPTransport returns an http.Handler for SSE+HTTP transport.
-// Routes:
-//   - GET  / — SSE event stream
-//   - POST /rpc — RPC calls
-//   - POST /cancel — Request cancellation
-func (s *Server) HTTPTransport() http.Handler {
-	return newSSEHandler(s)
-}
-
 // ServeHTTP implements http.Handler for WebSocket upgrades.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.stopping.Load() {
@@ -803,7 +793,7 @@ func (s *Server) Broadcast(data any) {
 
 // registerConn adds conn to the server's fan-out set, so [Server.Broadcast],
 // [Server.ForEachConn] and [Server.PushToUser] reach it. Every accept path
-// calls it — WebSocket, byte-stream, SSE — so the ordering cannot drift per
+// calls it — WebSocket and byte-stream — so the ordering cannot drift per
 // transport.
 //
 // It must be called before the connection becomes visible to the client:
@@ -1048,8 +1038,8 @@ func configMessage(opts ServerOptions, binaryFrames bool) ConfigMessage {
 // Absent means yes, which keeps every existing client on the efficient path.
 //
 // A client that only decodes text frames passes binary=0 and gets Blob results
-// as the JSON $blob envelope instead — the same representation SSE and stream
-// already use. An unrecognized value is an error rather than a silent default:
+// as the JSON $blob envelope instead — the same representation the
+// byte-stream transport already uses. An unrecognized value is an error rather than a silent default:
 // the whole point of the parameter is avoiding a silent hang, and a typo that
 // quietly re-enabled binary frames would reinstate exactly that.
 func wsBinaryFromRequest(r *http.Request) (bool, error) {

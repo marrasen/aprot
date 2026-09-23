@@ -182,7 +182,7 @@ func (g *OpenAPIGenerator) Generate() (*OpenAPISpec, error) {
 
 		for _, methodName := range methodNames {
 			info := group.Handlers[methodName]
-			// Streaming handlers are websocket/SSE only; OpenAPI describes
+			// Streaming handlers are socket-only; OpenAPI describes
 			// request/response HTTP operations with single response bodies.
 			if info.Kind != HandlerKindUnary {
 				continue

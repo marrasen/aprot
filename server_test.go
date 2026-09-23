@@ -206,6 +206,23 @@ func connectWS(t *testing.T, ts *httptest.Server) *websocket.Conn {
 	return ws
 }
 
+// connectWSPath is connectWS for a server that mounts the WebSocket handler
+// under a path rather than at the root.
+func connectWSPath(t *testing.T, ts *httptest.Server, path string) *websocket.Conn {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + path
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect WS: %v", err)
+	}
+	// Read and discard config message
+	_, _, err = ws.ReadMessage()
+	if err != nil {
+		t.Fatalf("Failed to read config: %v", err)
+	}
+	return ws
+}
+
 func TestServerEcho(t *testing.T) {
 	ts, _, _ := setupTestServer(t)
 	defer ts.Close()

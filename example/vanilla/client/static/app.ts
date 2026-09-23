@@ -1,4 +1,4 @@
-import { ApiClient, getWebSocketUrl, getSSEUrl } from './api/client';
+import { ApiClient, getWebSocketUrl } from './api/client';
 import { TaskStatus, TaskStatusType, ListUsersResponse, createUser, getTask, processBatch, subscribeListUsers, onUserCreatedEvent, onUserUpdatedEvent, onSystemNotificationEvent } from './api/public-handlers';
 import { numbers } from './api/streaming-handlers';
 
@@ -189,10 +189,8 @@ function cancelBatch(): void {
     }
 }
 
-function createClient(transport: 'websocket' | 'sse'): ApiClient {
-    const url = transport === 'sse' ? getSSEUrl() : getWebSocketUrl();
-    const opts = transport === 'sse' ? { transport: 'sse' as const } : undefined;
-    const c = new ApiClient(url, opts);
+function createClient(): ApiClient {
+    const c = new ApiClient(getWebSocketUrl());
 
     c.onStateChange((state) => {
         updateStatus(state === 'connected');
@@ -288,10 +286,9 @@ function cancelNumbersStream(): void {
 
 async function connectAndSubscribe(): Promise<void> {
     if (!client) return;
-    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
     try {
         await client.connect();
-        log(`Connected via ${transport}`, 'response');
+        log('Connected over WebSocket', 'response');
         // Server-driven subscription: the callback fires on initial load and
         // again whenever any handler calls aprot.TriggerRefresh(ctx, "users").
         subscribeListUsers(client, renderUsers, (err) => {
@@ -306,14 +303,12 @@ async function reconnect(): Promise<void> {
     if (client) {
         client.disconnect();
     }
-    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
-    client = createClient(transport);
+    client = createClient();
     await connectAndSubscribe();
 }
 
 async function init(): Promise<void> {
-    const transport = (document.getElementById('transportSelect') as HTMLSelectElement).value as 'websocket' | 'sse';
-    client = createClient(transport);
+    client = createClient();
     await connectAndSubscribe();
 }
 

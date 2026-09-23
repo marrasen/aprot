@@ -15,7 +15,6 @@ const (
 	TypeProgress    MessageType = "progress"
 	TypePush        MessageType = "push"
 	TypeConfig      MessageType = "config"
-	TypeConnected   MessageType = "connected"
 	TypeSubscribe   MessageType = "subscribe"
 	TypeUnsubscribe MessageType = "unsubscribe"
 	// TypeSubscriptionPatch is a server->client frame carrying a partial
@@ -32,12 +31,6 @@ const (
 	TypeAuthOK    MessageType = "auth_ok"
 	TypeAuthError MessageType = "auth_error"
 )
-
-// ConnectedMessage is sent as the first SSE event to provide the connection ID.
-type ConnectedMessage struct {
-	Type         MessageType `json:"type"`
-	ConnectionID string      `json:"connectionId"`
-}
 
 // IncomingMessage represents a message from client to server.
 // Method uses qualified "Group.Method" format (e.g., "PublicHandlers.CreateUser").

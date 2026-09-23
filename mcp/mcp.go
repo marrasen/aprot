@@ -5,7 +5,7 @@
 //
 // Only methods opted in via [aprot.Registry.EnableMCP] are exposed. Dispatch
 // goes through [aprot.Server.Invoke], so refresh triggers fired by a tool
-// call refresh subscribed WebSocket/SSE clients like any other mutation.
+// call refresh subscribed WebSocket clients like any other mutation.
 //
 //	registry.Register(&TodoHandlers{})
 //	registry.EnableMCP(&TodoHandlers{}, aprot.MCPOptions{Tools: map[string]aprot.MCPTool{

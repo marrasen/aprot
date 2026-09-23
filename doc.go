@@ -1,6 +1,6 @@
 // Package aprot is a Go library for building type-safe real-time APIs with
-// automatic TypeScript client generation. It supports both WebSocket and
-// SSE+HTTP transports.
+// automatic TypeScript client generation. WebSocket is the transport, with
+// REST, MCP, and byte-stream adapters onto the same handlers.
 //
 // # Overview
 //
@@ -60,7 +60,7 @@
 // breaking out of the loop (or calling the hook's cancel function) cancels
 // the handler's context immediately, and the next `yield` returns false.
 //
-// Streaming is WebSocket/SSE only. [Registry.RegisterREST] and
+// Streaming is WebSocket and byte-stream only. [Registry.RegisterREST] and
 // [Registry.EnableREST] panic at registration time for streaming handlers
 // because REST cannot deliver multi-message responses over a single HTTP
 // request. See [OnStreamComplete] in the Middleware section for observing
@@ -83,9 +83,10 @@
 //
 // The generated client method is typed Promise<Blob> and resolves a DOM Blob.
 // Over WebSocket the payload is sent as a binary frame (4-byte big-endian
-// header length, JSON header, raw payload — no base64 inflation). Transports
-// without binary frames (SSE, byte-stream) fall back to a JSON envelope whose
-// result is {"$blob": {contentType, data}} with base64 data; the generated
+// header length, JSON header, raw payload — no base64 inflation). A client
+// that declines binary frames, and the byte-stream transport, fall back to a
+// JSON envelope whose result is {"$blob": {contentType, data}} with base64
+// data; the generated
 // client converts it back into a DOM Blob, so the resolved type is identical
 // on every transport. Server-driven subscription refreshes deliver Blobs the
 // same way.
@@ -106,7 +107,7 @@
 // values are 1/true/yes/on and 0/false/no/off; an unrecognized value fails
 // the upgrade with 400 rather than silently defaulting. The config frame the
 // server sends immediately after the upgrade reports the negotiated mode as
-// "binaryFrames" (always false on SSE and stream), so a client can verify it
+// "binaryFrames" (always false on the byte-stream transport), so a client can verify it
 // before making its first call.
 //
 // # Input Transformation
@@ -269,18 +270,14 @@
 //
 // # Server
 //
-// A [Server] handles WebSocket upgrades, SSE streams, and HTTP POST dispatch.
-// Mount it directly for WebSocket, or use [Server.HTTPTransport] for SSE+HTTP:
+// A [Server] handles WebSocket upgrades. Mount it directly:
 //
 //	server := aprot.NewServer(registry)
-//	http.Handle("/ws", server)                   // WebSocket
-//	http.Handle("/sse", server.HTTPTransport())  // SSE+HTTP
-//	http.Handle("/sse/", server.HTTPTransport())
+//	http.Handle("/ws", server) // WebSocket
 //
-// Both transports can run simultaneously and share connection tracking —
-// [Server.Broadcast], [Server.PushToUser], [Server.DisconnectUser], and
-// [Server.ConnectionCount] work across all connections regardless of
-// transport.
+// Every transport shares connection tracking — [Server.Broadcast],
+// [Server.PushToUser], [Server.DisconnectUser], and [Server.ConnectionCount]
+// work across all connections regardless of transport.
 //
 // For byte streams HTTP can't reach, [Server.ServeStream] serves one
 // connection over any io.ReadWriteCloser using newline-delimited JSON
@@ -326,9 +323,9 @@
 // convention (e.g. CreateUser → POST /users/create-user), and path
 // parameters are mapped from the Go parameter list. Streaming handlers
 // cannot be exposed via REST and will panic at registration — use
-// WebSocket or SSE for those.
+// WebSocket for those.
 //
-// REST requests run through the same request pipeline as WebSocket and SSE.
+// REST requests run through the same request pipeline as WebSocket.
 // The pipeline has a single transport-agnostic entry point, [Server.Invoke]:
 // it installs the request context (handler info, request, refresh queue),
 // runs server and group middleware, and flushes refresh triggers on success.
@@ -338,7 +335,7 @@
 // [RequestFromContext] on every transport, server middleware registered with
 // [Server.Use] applies to REST and MCP requests too (when a [Server] has been
 // built from the same [Registry]), and a mutation handler that calls
-// [TriggerRefresh] over any transport refreshes subscribed WebSocket/SSE
+// [TriggerRefresh] over any transport refreshes subscribed WebSocket
 // clients.
 //
 // On request-scoped transports (REST, MCP) there is no socket, and
@@ -390,7 +387,7 @@
 // settings protect the server from misbehaving clients:
 //
 //	server := aprot.NewServer(registry, aprot.ServerOptions{
-//	    MaxMessageSize: 1 << 20,          // max inbound WS frame / SSE body size (default 4 MiB)
+//	    MaxMessageSize: 1 << 20,          // max inbound WS frame size (default 4 MiB)
 //	    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
 //	    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
 //	    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
@@ -450,7 +447,7 @@
 // browser-facing deployments; keep a custom func for deployments that mix
 // browser and non-browser clients on one endpoint.
 //
-// The SSE and REST transports are plain HTTP, so cross-origin browser clients
+// The REST and MCP endpoints are plain HTTP, so cross-origin browser clients
 // need CORS response headers and OPTIONS preflight handling instead. [CORS]
 // returns a standard func(http.Handler) http.Handler wrapper for that, closed
 // by default and mirroring the SetCheckOrigin guidance above — list exact
@@ -461,7 +458,7 @@
 //	    AllowCredentials: true,
 //	})
 //	http.Handle("/api/", http.StripPrefix("/api", cors(rest)))
-//	http.Handle("/sse", cors(server.HTTPTransport()))
+//	http.Handle("/mcp", cors(mcpHandler))
 //
 // # Authentication
 //
@@ -473,7 +470,7 @@
 // request or subscribe runs; frames sent earlier get an auth_error, and a
 // connection that does not authenticate within [ServerOptions.AuthTimeout]
 // (default 10s) is closed. The same auth frame on a live connection refreshes
-// the token without reconnecting. Works over both WebSocket and SSE.
+// the token without reconnecting.
 //
 //	server.OnAuth(func(ctx context.Context, conn *aprot.Conn, token string) error {
 //	    claims, err := verify(token)
@@ -720,7 +717,7 @@
 // deduplicated. [TriggerRefreshNow] flushes the queue immediately — use it in
 // long-running handlers that make observable state transitions over time.
 // TriggerRefresh works on every transport: a mutation arriving over REST
-// refreshes subscribed WebSocket/SSE clients just like one arriving over a
+// refreshes subscribed WebSocket clients just like one arriving over a
 // socket (the [RESTAdapter] must share its [Registry] with a [Server]).
 //
 // From background goroutines, cron jobs, webhook fan-in, or any other code
@@ -1186,7 +1183,7 @@
 //
 // Messages are JSON objects with a "type" field. Client-to-server: request,
 // cancel, subscribe, unsubscribe. Server-to-client: response, error, progress,
-// push, config, subscription_patch, connected (SSE only). Streaming adds
+// push, config, subscription_patch. Streaming adds
 // stream_item / stream_chunk / stream_end.
 //
 // # Design Scope

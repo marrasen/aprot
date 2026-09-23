@@ -489,7 +489,7 @@ func TestEnableREST(t *testing.T) {
 
 // restRefreshHandlers exposes a subscribable query (WS) and a mutation
 // (REST via EnableREST) sharing a trigger key, to verify the REST request
-// path drives subscription refreshes like the WS/SSE path does.
+// path drives subscription refreshes like the socket path does.
 type restRefreshHandlers struct{}
 
 type restRefreshList struct {

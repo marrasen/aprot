@@ -345,7 +345,7 @@ func (r *Registry) IsMCPOnly(groupName string) bool {
 }
 
 // assertNoStreamHandlers panics if the named handler group contains any
-// streaming handlers. Streaming is websocket/SSE only — the REST adapter
+// streaming handlers. Streaming is socket-only — the REST adapter
 // cannot deliver multi-message responses through a single HTTP request.
 func (r *Registry) assertNoStreamHandlers(groupName, call string) {
 	group, ok := r.groups[groupName]
@@ -355,7 +355,7 @@ func (r *Registry) assertNoStreamHandlers(groupName, call string) {
 	for _, info := range group.Handlers {
 		if info.Kind != HandlerKindUnary {
 			panic(fmt.Sprintf(
-				"aprot: streaming handler %s.%s cannot be exposed via REST; use WebSocket or SSE (%s)",
+				"aprot: streaming handler %s.%s cannot be exposed via REST; use WebSocket (%s)",
 				groupName, info.Name, call,
 			))
 		}

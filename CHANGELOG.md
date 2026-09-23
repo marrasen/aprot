@@ -10,6 +10,33 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking: the SSE transport is gone** (#280). `Server.HTTPTransport`,
+  `ConnectedMessage`, `TypeConnected`, and the generated client's
+  `SSETransport` / `getSSEUrl` / `transport: 'sse'` option are all removed.
+  WebSocket is the socket transport; REST, MCP, and the byte-stream transport
+  are the adapters.
+
+  No consumer ever used SSE, and it was never a free mirror of the WebSocket
+  path. Being half-duplex, requests arrived on a separate `POST /rpc` keyed by
+  a connection ID the stream issued — a second copy of the accept path, of
+  first-message auth, and of the inbound size limit. Every protocol feature
+  had to answer "and how does this behave on SSE?" before it could ship. That
+  tax, not the lack of users, is what decided it. Ruling recorded in
+  `docs/scope.md`.
+
+  **Migration:** drop the `/sse` routes and construct the client without the
+  `transport` option (or with `transport: 'websocket'`, which is the default).
+  Nothing else changes — the wire protocol, handlers, hooks, and generated
+  client API are identical over WebSocket.
+
+  What stays is everything that was never SSE-specific: the internal
+  `transport` interface, `SupportsBinary`, the `$blob` JSON fallback, the
+  byte-stream transport, and `ApiClientOptions.transport` accepting a custom
+  `ClientTransport` instance. The WebSocket binary opt-out (`?binary=0`, #279)
+  is now what exercises the `$blob` fallback, in unit tests and e2e alike.
+
 ## [0.64.0] - 2026-09-22
 
 A panicking `OnAuth` hook no longer takes the process down, closing the

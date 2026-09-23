@@ -207,7 +207,6 @@ Before `AllowAnonymous`, the workaround was an empty-token dance — `getAuthTok
 | Freshness | Per connection attempt | Per connection attempt |
 | Mid-session refresh | Reconnect required | `refreshAuth()`, no reconnect |
 | Anonymous connections | Open by default; gate in the hook | `ServerOptions.AllowAnonymous` |
-| SSE | Query on the `EventSource` GET | First `POST /rpc` body |
 | Rejection surfaces as | `ConnectionRejected` | `auth_error` (`-32005`) |
 
 Both are retryable with `reconnectOnRejected` and both report through `getLastRejection()`. If you have no reason to prefer one, first-message auth is the better default — it keeps credentials out of logs and refreshes in place.

@@ -339,8 +339,8 @@ func RegisterRefreshTrigger(ctx context.Context, keys ...string) {
 // TriggerRefresh queues a refresh for all subscriptions matching the given keys.
 // Called from mutation handlers to notify subscribed clients of data changes.
 // Triggers are batched per-request and deduplicated by subscription when the
-// request handler completes. It works on every transport — WebSocket, SSE,
-// byte streams, and REST (a mutation over REST refreshes subscribed WS/SSE
+// request handler completes. It works on every transport — WebSocket, byte
+// streams, and REST (a mutation over REST refreshes subscribed socket
 // clients, provided the [RESTAdapter] shares its [Registry] with a [Server]).
 // This is a no-op outside a request context — for background goroutines, cron
 // jobs, or other out-of-request callers, use [Server.TriggerRefresh] instead.
