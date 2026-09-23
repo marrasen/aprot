@@ -158,6 +158,59 @@ consistent with them.
   fields before the hook and restore them on failure. Ruling recorded for
   #384.
 
+- **Delivery semantics are in; what makes a payload stale is out.**
+  `Droppable()` lets a push event opt out of aprot's delivery guarantee, and a
+  `Blob` push event goes out as a binary frame (#387). Both are transport: how
+  a frame travels, and whether the queue is allowed to grow on its behalf.
+  aprot never inspects the payload to decide — the consumer declares it once,
+  at registration.
+
+  The **threshold** is the part worth recording, because it is where this
+  nearly became policy. #387 proposed "take the non-blocking path", which on
+  the existing 256-slot buffer means dropping only once the buffer is full —
+  roughly 76 MB and minutes of backlog for the 300 KB video frames that
+  motivated it. That is not a droppable event, it is a queue with a late
+  panic. The allowance is therefore one unwritten frame per connection, and a
+  **constant rather than a `ServerOptions` knob**: the number is the
+  semantics, not a tuning parameter. Raising it buys smoothness by adding
+  exactly that many stale frames of latency, which is the opposite of what a
+  live preview wants. This is the same shape as the #374 ruling — ship the
+  mechanism, not the threshold — except that here there is no consumer-side
+  comparison to leave out, so aprot must pick, and picking means picking the
+  one value that matches the meaning of the word.
+
+  Declared **per event type, not per call**. Staleness is a property of the
+  payload, so the same frame is as expendable on a broadcast as on a targeted
+  push; one registry lookup serves `Conn.Push`, `Server.Broadcast` and
+  `Server.PushToUser`, which is the one-helper rule applied to a fan-out
+  invariant rather than a dispatch path. A per-call flag would have needed
+  three new methods and could have disagreed with itself across them.
+
+  The paired **no** is head-of-line priority. #387 also asked whether a 300 KB
+  frame ahead of a control message is worth designing for. It is not, and a
+  priority lane is refused: aprot's protocol is one ordered queue per
+  connection, and a second lane means no defined order between a control frame
+  and a data frame, on every transport, forever. The droppable allowance is
+  itself the mitigation — it is the unbounded queue, not the frame size, that
+  turns 300 KB into minutes of delay. Revisit only with a measurement.
+
+  **Opt-in is explicit, never inferred from shape.** A binary push event is a
+  named type embedding `Blob` and nothing else, and that is checked exactly.
+  The first attempt matched structurally, by reflect convertibility, on the
+  reasoning that a struct with Blob's fields *is* a Blob. That was wrong, and
+  wrong in the direction the rule cares about: struct conversion ignores tags
+  and methods, so a consumer's own `{ContentType string; Data []byte}` with its
+  own JSON tags would have been reinterpreted as binary — new wire encoding,
+  new generated type, its `MarshalJSON` bypassed — without anyone asking.
+  aprot may decide how a frame travels; it may not decide that somebody's type
+  means something other than what they wrote. When a feature needs to know an
+  intent that the type system cannot express, take the declaration, do not
+  infer it from a shape that can coincide.
+
+  What stays **out**: conflation (replace the queued frame with the newer one)
+  and per-event allowances. Both decide which value supersedes which, which is
+  the consumer's model of its own data, and neither is needed once the queue
+  is bounded at one. Ruling recorded for #387.
 - **Reporting what the connection is doing is in; deciding when that is
   wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
   `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the

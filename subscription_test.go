@@ -306,5 +306,8 @@ func (m *mockTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
 	}
 	return m.SendBinary(data)
 }
+func (m *mockTransport) SendDroppable(data []byte) error       { return m.Send(data) }
+func (m *mockTransport) SendBinaryDroppable(data []byte) error { return m.Send(data) }
+
 func (m *mockTransport) Close() error           { return nil }
 func (m *mockTransport) CloseGracefully() error { return nil }

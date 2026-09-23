@@ -130,6 +130,48 @@ func (h *BlobHandlers) SetBlob(ctx context.Context, data string) error {
 	return nil
 }
 
+// PushHandlers exercises droppable and binary push events (#387).
+//
+// It pushes to the calling connection rather than broadcasting, so the test
+// asserts on its own socket without the fan-out timing that a broadcast to
+// every connected test client would add.
+type PushHandlers struct{}
+
+// PreviewFrame is a binary push event: a named wrapper embedding aprot.Blob,
+// which is how a push carries raw bytes. Its data reaches a binary-capable
+// client as one binary frame and a binary=0 client as the $blob JSON envelope;
+// the generated handler is typed to receive a DOM Blob either way.
+type PreviewFrame struct{ aprot.Blob }
+
+// TickEvent is an ordinary JSON push event, registered droppable alongside
+// PreviewFrame so the tests cover both encodings of the droppable path.
+type TickEvent struct {
+	Seq int `json:"seq"`
+}
+
+// EmitPreview pushes one PreviewFrame carrying marker's bytes to the caller.
+func (h *PushHandlers) EmitPreview(ctx context.Context, marker string) error {
+	conn := aprot.Connection(ctx)
+	if conn == nil {
+		return nil
+	}
+	// A dropped frame is the documented outcome under backpressure, not a
+	// handler error: report success either way and let the test assert on
+	// what arrived.
+	_ = conn.Push(&PreviewFrame{Blob: aprot.Blob{ContentType: "application/x-e2e", Data: []byte(marker)}})
+	return nil
+}
+
+// EmitTick pushes one TickEvent to the caller.
+func (h *PushHandlers) EmitTick(ctx context.Context, seq int) error {
+	conn := aprot.Connection(ctx)
+	if conn == nil {
+		return nil
+	}
+	_ = conn.Push(&TickEvent{Seq: seq})
+	return nil
+}
+
 // PatchHandlers exercises subscription patches (#237): a mutation pushes a
 // small typed patch to subscribers that declared patch support instead of
 // re-running the subscribed query, and falls back to a full refresh for
@@ -203,5 +245,9 @@ func Register(registry *aprot.Registry) {
 	registry.Register(&FixedArrayHandlers{})
 	registry.Register(NewBlobHandlers())
 	registry.Register(NewPatchHandlers())
+	pushHandlers := &PushHandlers{}
+	registry.Register(pushHandlers)
+	registry.RegisterPushEventFor(pushHandlers, PreviewFrame{}, aprot.Droppable())
+	registry.RegisterPushEventFor(pushHandlers, TickEvent{}, aprot.Droppable())
 	registry.SetValidator(aprot.NewPlaygroundValidator())
 }

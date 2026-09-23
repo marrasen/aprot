@@ -318,8 +318,10 @@ func (f *failAfterN) SendBinary(data []byte) error                   { return f.
 func (f *failAfterN) SendBinaryCtx(ctx context.Context, data []byte) error {
 	return f.SendBinary(data)
 }
-func (f *failAfterN) Close() error           { return nil }
-func (f *failAfterN) CloseGracefully() error { return nil }
+func (f *failAfterN) SendDroppable(data []byte) error       { return f.Send(data) }
+func (f *failAfterN) SendBinaryDroppable(data []byte) error { return f.Send(data) }
+func (f *failAfterN) Close() error                          { return nil }
+func (f *failAfterN) CloseGracefully() error                { return nil }
 
 func TestStreamIterator_TransportCloseDuringSend(t *testing.T) {
 	r := NewRegistry()

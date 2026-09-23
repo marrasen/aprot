@@ -141,7 +141,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Subscription patches** — mutations push O(patch) partial updates to subscribed queries instead of re-sending the full result; clients apply them to the shared query cache via an `applyPatch` reducer, with automatic full-refresh fallback for clients that don't opt in
 - **Query cache** — multiple React components using the same hook share a single server subscription and receive data from a shared cache; configurable per-hook or globally via `setQueryCacheEnabled`
 - **Middleware** — server-level and per-handler middleware chains
-- **Push events** — broadcast to all clients or target specific users
+- **Push events** — broadcast to all clients or target specific users; opt one event into best-effort delivery with `aprot.Droppable()` so a stale frame is skipped rather than queued behind a slow client, and push an `aprot.Blob` to send it as a binary frame instead of base64
 - **Hierarchical tasks** — nested task trees with progress tracking, streamed to clients (see [`tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks) subpackage)
 - **Shared tasks** — server-wide tasks visible to all clients with typed metadata, startable from any transport (a task started by an MCP tool or a REST call broadcasts to socket watchers); each client is told whether it owns the task (`isOwner`, per user) and whether it made the call (`startedHere`, per connection)
 - **Task middleware** — opt-in `WithTaskMiddleware` wraps every task with a single `func(ctx, info, next) error` callback (mirrors `aprot.Middleware`); decorate ctx with your logger of choice (slog, zerolog, zap), observe start/completion/failure in one place
@@ -151,7 +151,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 - **Connection hardening** — per-request panic recovery, inbound message size limits, write timeouts that drop stalled clients, WebSocket keepalive pings, and per-connection / server-wide concurrency and subscription caps — all configurable via `ServerOptions`
 - **Cross-origin control** — WebSocket origin checking (`SetCheckOrigin`) plus a closed-by-default `CORS` middleware for the REST and MCP HTTP endpoints
 - **First-message auth** — authenticate with a token sent over the connection (`OnAuth`) instead of in the URL, with a pending-auth timeout, mid-session token refresh, and an `AllowAnonymous` mode for apps mixing public and protected APIs
-- **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure) plus a pull-based `Stats()` snapshot and an `InFlightRequests()` dump that names a handler that never returned, with zero hot-path cost when unset
+- **Observability** — opt-in `Observer` hooks (connections, request latency/errors, subscriptions, refresh fan-out, send-buffer pressure, dropped droppable pushes) plus a pull-based `Stats()` snapshot and an `InFlightRequests()` dump that names a handler that never returned, with zero hot-path cost when unset
 - **Automatic reconnection** — page visibility + network-aware, with linear backoff (1s, 2s, 3s, … capped at 10s by default) and a `connectTimeout` (default 10s) that fails a hung handshake instead of waiting out the browser's TCP timeout; `getConnectParams` (or a dynamic URL function) mints a fresh token on every attempt, `reconnectOnRejected` opts into retrying a rejected connection, and `connect()` / `reconnectNow()` cut a pending backoff short
 - **Struct validation** — opt-in server-side validation via `go-playground/validator` struct tags, automatically enforced before handler dispatch
 - **Input transformation** — declarative `transform` struct tags (`trim`, `trimleft`, `trimright`, `uppercase`, `lowercase`, `removeempty`) normalize fields before validation runs
@@ -690,7 +690,70 @@ const ws = new WebSocket('wss://example.com/ws?binary=0');
 
 `Blob` results then arrive as the same JSON `$blob` envelope the byte-stream transport uses, at the cost of base64 inflation. The `config` frame the server sends immediately after the upgrade reports the mode in effect as `binaryFrames`, so a client can confirm what it negotiated before making its first call rather than discovering it by hanging. An unrecognized value fails the upgrade with `400 Bad Request` — a typo that silently re-enabled binary frames would reinstate the very hang the parameter prevents.
 
-Binary delivery is opt-in via the `Blob` type and applies to top-level results only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
+Binary delivery is opt-in via the `Blob` type and applies to top-level values only. A plain `[]byte` result keeps its base64 string encoding, and a `Blob` nested inside another struct, streamed as an item, or passed as a parameter travels as ordinary JSON (`{contentType?, data}` with base64 `data`).
+
+### Binary push events
+
+A push event whose data is a `Blob` travels as a binary frame too. A push event's wire name is its Go type name, so wrap `Blob` in a named type rather than registering `Blob` itself — that also lets one registry carry several binary events:
+
+```go
+type PreviewFrame struct{ aprot.Blob }
+
+registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
+```
+
+```ts
+onPreviewFrame(client, (frame: Blob) => {
+    img.src = URL.createObjectURL(frame);
+});
+```
+
+The wrapper must **embed `Blob` and hold no other field**. Embedding is the opt-in because it cannot be tripped by accident: a struct that merely has a `string` and a `[]byte` is somebody else's type — with its own JSON tags and possibly its own `MarshalJSON` — and aprot leaves it alone. A wrapper that adds a second field is likewise left alone and travels as ordinary JSON, since the frame has nowhere to put it.
+
+So such an event carries bytes and a content type and nothing else; a push that also needs sibling fields (a sequence number, a timestamp) travels as ordinary JSON. Wrappers work as handler results too, so "a top-level `Blob` is binary" stays one rule.
+
+## Droppable Push Events
+
+Every frame aprot sends is delivered or the connection dies trying: a send waits for room in the connection's outbound queue instead of discarding the frame. That is right for responses, progress, and stream items. It is wrong for data whose value expires, where a fan-out to one slow client makes every other client wait.
+
+`aprot.Droppable()` opts one event out:
+
+```go
+registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+```
+
+A droppable frame is sent only once the connection has finished writing the previous one. A frame produced while that write is still in progress is skipped, and whatever comes after it is newer anyway. The effect is delivery at whatever rate each connection sustains, always with the freshest frame available rather than a growing backlog — and a producer that never blocks on its slowest consumer.
+
+- **The bar is the previous frame, not a full buffer.** Waiting for the 256-slot outbound buffer to fill would queue megabytes of expired frames first — for 300 KB video frames, roughly 76 MB — which is the opposite of what a droppable event asks for.
+- **Declared per event type, not per call.** Staleness is a property of the payload, so the flag applies on `Conn.Push`, `Server.Broadcast` and `Server.PushToUser` alike with no second API.
+- **One allowance per connection.** Every droppable event on a connection shares it, because they share one write pump and one wire.
+- **Nothing else changes.** Every event without the flag keeps the delivery guarantee, on the same connection.
+
+### Knowing what happened
+
+`Conn.Push` reports the outcome of its own send: it returns `aprot.ErrPushDropped` when the frame was skipped, distinct from `ErrConnectionClosed` and `ErrDetachedConn`.
+
+`Server.Broadcast` and `Server.PushToUser` return nothing and discard per-connection errors, so a fan-out does not report a sent/dropped split. For monitoring, `Observer.PushDropped(conn, event)` fires once per dropped frame — the aggregate rate is what you usually want, and a rate near the production rate means that client is receiving almost nothing.
+
+If a producer needs the split for one specific fan-out — say to back off when most clients are behind — do the fan-out yourself:
+
+```go
+var sent, dropped int
+server.ForEachConn(func(c *aprot.Conn) {
+    if errors.Is(c.Push(frame), aprot.ErrPushDropped) {
+        dropped++
+    } else {
+        sent++
+    }
+})
+```
+
+Two costs to know about before reaching for that. It **encodes the frame once per connection**, where `Broadcast` encodes once and shares the bytes — for a 300 KB frame to 100 clients that is the difference between 300 KB and ~30 MB per push. And if you are replicating `PushToUser` rather than `Broadcast`, you lose its re-check of `conn.UserID()`, which is what stops a push landing on a connection that re-authenticated as a different user mid-fan-out.
+
+In all cases "sent" means *accepted into the connection's outbound queue*, not acknowledged by the client. A frame that was not dropped can still be lost if the connection dies before the write completes; the protocol has no delivery receipt.
+
+One timing note if you drive the producer from client feedback rather than a clock: the connection gives its slot back just after the write returns, so pushing the next frame the instant a client acknowledges the previous one can meet a slot not yet released and report a drop. Nothing is lost — the frame was refused, not swallowed — and sending it again works. A producer on a fixed cadence never sees this.
 
 ## Subscription Patches
 
@@ -1063,7 +1126,9 @@ func (metrics) SendBufferFull(*aprot.Conn) { sendBufferFull.Inc() } // early bac
 server := aprot.NewServer(registry, aprot.ServerOptions{Observer: metrics{}})
 ```
 
-Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), and `WriteTimedOut`.
+Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), `WriteTimedOut`, and `PushDropped` (connection + event name, for a [droppable](#droppable-push-events) push that was skipped).
+
+`SendBufferFull` and `PushDropped` both report backpressure but mean different things: `SendBufferFull` promises the frame was kept and the sender waited, while `PushDropped` reports a frame that really was discarded — which is the contract that event opted into.
 
 - **Embed `NoopObserver`** so you implement only the events you care about and stay forward-compatible as new ones are added.
 - **Hot-path discipline** — callbacks run synchronously on the server's hot paths and may fire concurrently, so keep them fast and non-blocking; offload heavy work to a goroutine.

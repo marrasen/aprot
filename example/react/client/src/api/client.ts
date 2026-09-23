@@ -1317,12 +1317,10 @@ export class ApiClient {
                 break;
             }
             case 'push': {
-                const handlers = this.pushHandlers.get(msg.event);
-                if (handlers) {
-                    for (const handler of handlers) {
-                        handler(msg.data);
-                    }
-                }
+                // decodeBlobResult unwraps the $blob envelope a blob push takes
+                // when the connection has no binary channel, so the handler
+                // receives the same DOM Blob the binary frame delivers.
+                this.dispatchPush(msg.event, decodeBlobResult(msg.data));
                 break;
             }
             case 'stream_item': {
@@ -1378,6 +1376,20 @@ export class ApiClient {
         }
     }
 
+    /**
+     * Delivers push data to every handler registered for the event. Both the
+     * JSON `push` envelope and binary push frames end here, so the two paths
+     * cannot drift apart.
+     */
+    private dispatchPush(event: string, data: unknown): void {
+        const handlers = this.pushHandlers.get(event);
+        if (handlers) {
+            for (const handler of handlers) {
+                handler(data);
+            }
+        }
+    }
+
     private rejectResponse(id: string, error: Error): void {
         const p = this.pending.get(id);
         if (p) {
@@ -1399,18 +1411,27 @@ export class ApiClient {
         const headerLen = view.getUint32(0, false);
         const headerBytes = new Uint8Array(buffer, 4, headerLen);
         const header = JSON.parse(binaryHeaderDecoder.decode(headerBytes));
-        if (header.version !== 1 || header.type !== 'response') {
-            // Unknown frame: reject rather than drop, so the awaiting caller
-            // fails fast instead of hanging until the connection closes.
-            this.rejectResponse(header.id, new ApiError(
-                ErrorCode.InternalError,
-                `unsupported binary frame (version ${header.version}, type ${header.type})`,
-            ));
+        const known = header.version === 1 && (header.type === 'response' || header.type === 'push');
+        if (!known) {
+            // Unknown frame. A response has an awaiting caller, so reject it
+            // rather than drop it: failing fast beats hanging until the
+            // connection closes. A push has nobody waiting and no id to fail,
+            // so there is nothing to do but ignore it.
+            if (header.id) {
+                this.rejectResponse(header.id, new ApiError(
+                    ErrorCode.InternalError,
+                    `unsupported binary frame (version ${header.version}, type ${header.type})`,
+                ));
+            }
             return;
         }
         // Zero-copy view into the received buffer; Blob copies on read.
         const payload = new Uint8Array(buffer, 4 + headerLen);
         const blob = new Blob([payload], header.contentType ? { type: header.contentType } : undefined);
+        if (header.type === 'push') {
+            this.dispatchPush(header.event, blob);
+            return;
+        }
         this.settleResponse(header.id, blob);
     }
 

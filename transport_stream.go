@@ -18,7 +18,7 @@ import (
 type streamTransport struct {
 	noBinary
 	rw   io.ReadWriteCloser
-	send chan []byte
+	send chan outboundLine
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 	// closeOnce guards done/rw teardown: Close may be called by the server
 	// (Stop, run loop) and by the ctx watcher in ServeStream concurrently.
@@ -27,12 +27,23 @@ type streamTransport struct {
 	// conn is a back-reference used only to report send-buffer pressure to
 	// the server's observer. Set after construction, before the pumps start.
 	conn *Conn
+	// queuedDroppable counts droppable lines handed to send but not yet
+	// dequeued by the write pump, bounded by maxQueuedDroppable. Same
+	// increment-before-enqueue discipline as the WebSocket transport.
+	queuedDroppable atomic.Int64
+}
+
+// outboundLine is one queued frame. The droppable flag lets the write pump
+// release the sender's allowance slot as it dequeues.
+type outboundLine struct {
+	data      []byte
+	droppable bool
 }
 
 func newStreamTransport(rw io.ReadWriteCloser, opts ServerOptions) *streamTransport {
 	return &streamTransport{
 		rw:   rw,
-		send: make(chan []byte, 256),
+		send: make(chan outboundLine, 256),
 		done: make(chan struct{}),
 		opts: opts,
 	}
@@ -57,7 +68,7 @@ func (t *streamTransport) Send(data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- outboundLine{data: data}:
 		return nil
 	default:
 		t.reportBufferFull()
@@ -65,8 +76,33 @@ func (t *streamTransport) Send(data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- outboundLine{data: data}:
 		return nil
+	}
+}
+
+// SendDroppable enqueues data if the connection is keeping up, and drops it
+// otherwise. Same contract and same allowance as the WebSocket transport, so a
+// droppable push event behaves the same way on both — see maxQueuedDroppable.
+func (t *streamTransport) SendDroppable(data []byte) error {
+	for {
+		n := t.queuedDroppable.Load()
+		if n >= maxQueuedDroppable {
+			return ErrPushDropped
+		}
+		if t.queuedDroppable.CompareAndSwap(n, n+1) {
+			break
+		}
+	}
+	select {
+	case <-t.done:
+		t.queuedDroppable.Add(-1)
+		return ErrConnectionClosed
+	case t.send <- outboundLine{data: data, droppable: true}:
+		return nil
+	default:
+		t.queuedDroppable.Add(-1)
+		return ErrPushDropped
 	}
 }
 
@@ -74,7 +110,7 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- outboundLine{data: data}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -84,7 +120,7 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	case t.send <- data:
+	case t.send <- outboundLine{data: data}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -123,8 +159,15 @@ func (t *streamTransport) writePump() {
 		select {
 		case <-t.done:
 			return
-		case data := <-t.send:
-			if _, err := t.rw.Write(append(data, '\n')); err != nil {
+		case line := <-t.send:
+			// Released after the write, not at dequeue: a frame still going
+			// out holds its slot, so the allowance really is "frames not yet
+			// on the wire". Same discipline as the WebSocket transport.
+			_, err := t.rw.Write(append(line.data, '\n'))
+			if line.droppable {
+				t.queuedDroppable.Add(-1)
+			}
+			if err != nil {
 				return
 			}
 		}

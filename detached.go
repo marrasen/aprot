@@ -19,6 +19,7 @@ type detachedTransport struct {
 
 func (detachedTransport) Send([]byte) error                     { return ErrDetachedConn }
 func (detachedTransport) SendCtx(context.Context, []byte) error { return ErrDetachedConn }
+func (detachedTransport) SendDroppable([]byte) error            { return ErrDetachedConn }
 func (detachedTransport) Close() error                          { return nil }
 func (detachedTransport) CloseGracefully() error                { return nil }
 

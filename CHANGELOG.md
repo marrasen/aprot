@@ -10,6 +10,103 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **Droppable push events** (#387): `registry.RegisterPushEventFor(h, ev,
+  aprot.Droppable())` opts one push event out of aprot's delivery guarantee. A
+  droppable frame is sent only when the connection has already written the
+  previous one; otherwise it is skipped. Use it for data whose value expires — a
+  live video frame, a sensor reading, a cursor position — where the next value
+  is along shortly and a stale one is worse than none.
+
+  It exists because a fan-out sends to each connection in turn, so one client
+  that reads slowly made every other client wait. The producer now never blocks
+  on its slowest consumer, and each connection receives at whatever rate it
+  sustains.
+
+  The bar is "has the previous frame gone out", not "is the 256-slot buffer
+  full". Waiting for the buffer would queue megabytes of expired frames before
+  dropping the first one — for the 300 KB video frames that motivated this,
+  roughly 76 MB and minutes of backlog. The allowance is one unwritten frame
+  per connection, shared by all of that connection's droppable events because
+  they share one write pump and one wire.
+
+  `Conn.Push` returns the new `aprot.ErrPushDropped` when it skips a frame.
+  `Server.Broadcast` and `Server.PushToUser` keep their existing signatures and
+  discard per-connection errors, so a fan-out reports no per-call sent/dropped
+  split; fan-out drops are counted through the new
+  `Observer.PushDropped(conn, event)`. A producer that needs the split for one
+  specific fan-out can loop `Server.ForEachConn` calling `Conn.Push` itself —
+  the README documents that recipe along with its cost, namely one encoding per
+  connection instead of one per push.
+  Declared per event type rather than per call, because staleness is a property
+  of the payload — one registry lookup serves all three fan-out paths, so they
+  cannot disagree. Every event without the flag keeps the delivery guarantee,
+  on the same connection.
+
+- **Binary push events** (#387): a push event whose data is a `Blob` is
+  delivered as a WebSocket binary frame, the same way a `Blob` result is, so
+  pushing a 300 KB image no longer costs a third again in base64.
+
+  A push event's wire name is its Go type name, so wrap `Blob` in a named type
+  rather than registering `Blob` itself — which would produce an event called
+  `Blob` and allow only one per registry:
+
+  ```go
+  type PreviewFrame struct{ aprot.Blob }
+
+  registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+  server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
+  ```
+
+  The generated handler receives a DOM `Blob`. A connection that declined
+  binary frames (`?binary=0`) and the byte-stream transport get the same push
+  as the JSON `$blob` envelope and rebuild the identical `Blob`, so the
+  client-visible type still does not depend on the transport. Such an event
+  carries bytes and a content type and nothing else; a push that also needs
+  sibling fields travels as ordinary JSON.
+
+  **Behaviour change, narrow but worth stating:** "a top-level `Blob` is
+  binary" now also covers a named type embedding `Blob`, on the response path
+  as well as the push path — one rule rather than a push-only special case. A
+  handler already returning such a wrapper (or a subscription to one) switches
+  from a JSON result to a binary frame, and its generated signature from an
+  interface to `Promise<Blob>`.
+
+  The wrapper must embed `Blob` and hold no other field, and that is the whole
+  test: sole field, anonymous, type `aprot.Blob`. Embedding is the opt-in
+  because it cannot happen by accident. Matching on structure instead would
+  have been silently wrong — Go converts between struct types whose underlying
+  types match, and that match ignores struct tags and methods, so a consumer's
+  own `struct { ContentType string \`json:"mime"\`; Data []byte \`json:"payload"\` }`
+  would have become a `Blob`: delivered as a binary frame, typed `Blob` in the
+  generated client, its tags and any `MarshalJSON` bypassed. A wrapper that
+  adds a second field is also left alone, since the frame has nowhere to carry
+  it.
+
+  **Wire format:** the binary frame header gains `event` and makes `id`
+  optional — a push frame carries `event` where a response carries `id`. Both
+  are omitted when empty, so a response frame's bytes are unchanged. Clients
+  should treat an unrecognized frame type with no `id` as ignorable rather than
+  failing a request that does not exist; see `docs/binary-frames.md`. An
+  existing hand-written client cannot receive a push frame until someone
+  registers a `Blob`-typed push event on the server it talks to.
+
+### Changed
+
+- **Push fan-out encodes each frame once** (#387): `Server.Broadcast` and
+  `Server.PushToUser` marshal (or binary-encode) a push once and share the
+  bytes with every recipient, instead of re-encoding per connection. The frame
+  never depended on the connection — only the choice between the binary and
+  JSON encodings does — so the old behaviour copied the whole payload per
+  client: roughly 30 MB for a 300 KB frame to 100 clients. Both encodings are
+  produced lazily and at most once per fan-out.
+
+- **`Observer` gained `PushDropped`** (#387). Observers that embed
+  `aprot.NoopObserver`, as the documentation has always instructed, are
+  unaffected. An observer that implements the interface method-by-method needs
+  the new method added.
+
 ### Removed
 
 - **Breaking: the SSE transport is gone** (#280). `Server.HTTPTransport`,

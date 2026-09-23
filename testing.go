@@ -46,6 +46,13 @@ func (t *recordingTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
+// SendDroppable records like Send: a recording transport has no write pump to
+// fall behind, so nothing is ever dropped. Tests that need a real drop drive a
+// live WebSocket connection instead.
+func (t *recordingTransport) SendDroppable(data []byte) error {
+	return t.Send(data)
+}
+
 func (t *recordingTransport) SupportsBinary() bool { return true }
 
 func (t *recordingTransport) SendBinary(data []byte) error {
@@ -57,6 +64,10 @@ func (t *recordingTransport) SendBinaryCtx(ctx context.Context, data []byte) err
 		return err
 	}
 	return t.SendBinary(data)
+}
+
+func (t *recordingTransport) SendBinaryDroppable(data []byte) error {
+	return t.Send(data)
 }
 
 func (t *recordingTransport) Close() error           { return nil }

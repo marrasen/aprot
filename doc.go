@@ -690,6 +690,63 @@
 // Push event types must be registered with [Registry.RegisterPushEventFor].
 // The event name on the wire is derived from the Go type name.
 //
+// # Droppable Push Events
+//
+// Every frame aprot sends is delivered or the connection dies trying: a send
+// waits for room in the connection's outbound queue rather than discarding the
+// frame. [Droppable] opts one push event out of that guarantee:
+//
+//	registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+//
+// A droppable frame is sent only once the connection has finished writing the
+// previous one; a frame produced while that write is still in progress is
+// skipped. Use it for data whose value expires — a live
+// video frame, a sensor reading, a cursor position — where the next value is
+// along shortly and a stale one is worse than none. Without it, one client that
+// reads slowly makes every other client wait, because a fan-out sends to each
+// connection in turn.
+//
+// The bar is deliberately "has the previous frame gone out", not "is the
+// 256-slot buffer full": waiting for the buffer would queue megabytes of
+// expired frames before dropping the first one.
+//
+// [Conn.Push] reports its own outcome, returning [ErrPushDropped] when the
+// frame was skipped. [Server.Broadcast] and [Server.PushToUser] return nothing
+// and discard per-connection errors, so a fan-out does not report a
+// sent/dropped split; [Observer.PushDropped] is how fan-out drops are counted,
+// and the aggregate rate is usually the useful number. A producer that needs
+// the split for one fan-out can loop [Server.ForEachConn] and call
+// [Conn.Push] itself, at the cost of encoding the frame once per connection
+// rather than once per push — see the README. Either way "sent" means accepted
+// into the connection's outbound queue, not acknowledged by the client: the
+// protocol has no delivery receipt.
+//
+// Droppability is declared on the event type, not the call, because staleness
+// is a property of the payload — so it applies on all three fan-out paths
+// without a second API.
+//
+// # Binary Push Events
+//
+// A push event whose data is a [Blob] is delivered as a binary frame, the same
+// way a Blob result is, so pushing an image costs no base64 inflation. A push
+// event's wire name is its Go type name, so wrap Blob in a named type rather
+// than registering Blob itself:
+//
+//	type PreviewFrame struct{ aprot.Blob }
+//
+//	registry.RegisterPushEventFor(&CameraHandlers{}, PreviewFrame{}, aprot.Droppable())
+//	server.Broadcast(&PreviewFrame{Blob: aprot.Blob{ContentType: "image/jpeg", Data: jpeg}})
+//
+// The wrapper must embed Blob and hold no other field. Embedding is the opt-in
+// precisely because it cannot happen by accident: a struct that merely has a
+// string and a []byte is somebody else's type, and aprot leaves it alone.
+//
+// The generated handler receives a DOM Blob. On a connection with no binary
+// channel the same push arrives as the JSON $blob envelope and the client
+// rebuilds the identical Blob, so the client-visible type never depends on the
+// transport. Such an event carries bytes and a content type and nothing else —
+// a push that also needs sibling fields travels as ordinary JSON.
+//
 // # Subscription Refresh
 //
 // Subscription refresh automatically pushes updated query results to clients

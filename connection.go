@@ -293,19 +293,111 @@ func (c *Conn) ServerBroadcaster() Broadcaster {
 // Push sends a push message to this connection.
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
+//
+// It returns [ErrPushDropped] when the event was registered with [Droppable]
+// and this connection had not finished writing the previous one, and
+// [ErrDetachedConn] on a connection with no transport.
 func (c *Conn) Push(data any) error {
-	event := c.server.registry.eventName(data)
-	return c.push(event, data)
+	return c.pushEvent(newPushPayload(c.server.registry.pushEvent(data), data))
 }
 
-// push sends a push message with an explicit event name (internal use).
-func (c *Conn) push(event string, data any) error {
-	msg := PushMessage{
-		Type:  TypePush,
-		Event: event,
-		Data:  data,
+// pushPayload holds one push event's encoded frames for the length of a
+// fan-out. Both encodings are produced at most once and then shared by every
+// recipient: the frame bytes do not depend on the connection, only the choice
+// between them does, so encoding per connection copied the whole payload per
+// client — 30 MB for a 300 KB frame to 100 clients.
+//
+// Not safe for concurrent use, and it does not need to be: the fan-out loops
+// in Server.Broadcast and Server.PushToUser are sequential.
+type pushPayload struct {
+	delivery pushEventDelivery
+	data     any
+	blob     Blob
+	isBlob   bool
+
+	binary    []byte // encoded binary frame, nil until first needed
+	binaryErr error
+	text      []byte // encoded JSON frame, nil until first needed
+	textErr   error
+}
+
+func newPushPayload(d pushEventDelivery, data any) *pushPayload {
+	p := &pushPayload{delivery: d, data: data}
+	p.blob, p.isBlob = asBlob(data)
+	return p
+}
+
+// binaryFrame returns the encoded binary frame for a blob push.
+func (p *pushPayload) binaryFrame() ([]byte, error) {
+	if p.binary == nil && p.binaryErr == nil {
+		p.binary, p.binaryErr = encodeBinaryFrame(binaryFrameHeader{
+			Type:        "push",
+			Event:       p.delivery.name,
+			ContentType: p.blob.ContentType,
+		}, p.blob.Data)
 	}
-	return c.sendJSON(msg)
+	return p.binary, p.binaryErr
+}
+
+// textFrame returns the encoded JSON push frame. A blob push takes the same
+// $blob envelope the response path uses, so a client with no binary channel
+// rebuilds the identical Blob.
+func (p *pushPayload) textFrame() ([]byte, error) {
+	if p.text == nil && p.textErr == nil {
+		msg := PushMessage{
+			Type:  TypePush,
+			Event: p.delivery.name,
+			Data:  p.data,
+		}
+		if p.isBlob {
+			msg.Data = blobFallbackResult{Blob: p.blob}
+		}
+		p.text, p.textErr = marshalJSON(msg)
+	}
+	return p.text, p.textErr
+}
+
+// pushEvent sends one push frame using the delivery mode its event registered.
+// Every fan-out path funnels through here — Conn.Push, Server.Broadcast and
+// Server.PushToUser — so the droppable and binary decisions cannot differ per
+// path.
+//
+// Data that is a Blob (or a named wrapper around one) goes out as a binary
+// frame where the transport has one, and as the JSON $blob envelope where it
+// does not, matching what a Blob result does on the response path.
+func (c *Conn) pushEvent(p *pushPayload) error {
+	err := c.pushFrame(p)
+	if errors.Is(err, ErrPushDropped) {
+		if o := c.observer(); o != nil {
+			o.PushDropped(c, p.delivery.name)
+		}
+	}
+	return err
+}
+
+// pushFrame picks this connection's encoding and sends it. Split out so
+// pushEvent owns the observer reporting for every return path.
+func (c *Conn) pushFrame(p *pushPayload) error {
+	if p.isBlob && c.transport.SupportsBinary() {
+		frame, err := p.binaryFrame()
+		if err != nil {
+			return err
+		}
+		return c.sendRawBinary(frame, p.delivery.droppable)
+	}
+	payload, err := p.textFrame()
+	if err != nil {
+		return err
+	}
+	return c.sendRawMaybeDroppable(payload, p.delivery.droppable)
+}
+
+// observer returns the server's observer, or nil when there is none.
+func (c *Conn) observer() Observer {
+	if c.server == nil {
+		return nil
+	}
+	return c.server.observer
 }
 
 func (c *Conn) sendJSON(v any) error {
@@ -316,15 +408,45 @@ func (c *Conn) sendJSON(v any) error {
 	return c.sendRaw(data)
 }
 
-// sendRaw sends pre-marshaled bytes on the transport.
-func (c *Conn) sendRaw(data []byte) error {
+// sendRawMaybeDroppable sends pre-marshaled bytes, taking the best-effort path
+// when the frame's event opted into it.
+func (c *Conn) sendRawMaybeDroppable(data []byte, droppable bool) error {
+	if !droppable {
+		return c.sendRaw(data)
+	}
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
+	return c.transport.SendDroppable(data)
+}
+
+// sendRawBinary sends a pre-encoded binary frame, droppable or guaranteed.
+func (c *Conn) sendRawBinary(frame []byte, droppable bool) error {
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
+	if droppable {
+		return c.transport.SendBinaryDroppable(frame)
+	}
+	return c.transport.SendBinary(frame)
+}
+
+// checkOpen reports ErrConnectionClosed once the connection has been closed,
+// so no send path writes to a torn-down transport.
+func (c *Conn) checkOpen() error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
 		return ErrConnectionClosed
 	}
-	c.mu.Unlock()
+	return nil
+}
 
+// sendRaw sends pre-marshaled bytes on the transport.
+func (c *Conn) sendRaw(data []byte) error {
+	if err := c.checkOpen(); err != nil {
+		return err
+	}
 	return c.transport.Send(data)
 }
 
@@ -336,13 +458,9 @@ func (c *Conn) sendJSONCtx(ctx context.Context, v any) error {
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return ErrConnectionClosed
+	if err := c.checkOpen(); err != nil {
+		return err
 	}
-	c.mu.Unlock()
-
 	return c.transport.SendCtx(ctx, data)
 }
 
@@ -369,11 +487,16 @@ func (c *Conn) sendResponse(id, method string, result any) {
 	_ = c.sendRaw(data)
 }
 
-// asBlob reports whether a handler result opts into binary delivery. Only the
-// explicit Blob type does; a plain []byte keeps its JSON base64 encoding so
-// existing handlers are unaffected. A nil *Blob is not a blob — it falls
-// through to the JSON path and reaches the client as a null result, matching
-// every other nil pointer result.
+// asBlob reports whether a value opts into binary delivery, and yields it as a
+// Blob. Blob, *Blob, and named wrappers embedding Blob qualify (see
+// isBlobLike); a plain []byte keeps its JSON base64 encoding so existing
+// handlers are unaffected. A nil pointer is not a blob — it falls through to
+// the JSON path and reaches the client as a null result, matching every other
+// nil pointer result.
+//
+// The two common types are a type switch so the ordinary response path stays
+// allocation-free; the reflect fallback runs only for a value that is not one
+// of them, and stops at the field count for anything but a wrapper.
 func asBlob(result any) (Blob, bool) {
 	switch v := result.(type) {
 	case Blob:
@@ -384,7 +507,27 @@ func asBlob(result any) (Blob, bool) {
 		}
 		return *v, true
 	}
-	return Blob{}, false
+	return wrappedBlob(result)
+}
+
+// wrappedBlob extracts the Blob a named wrapper embeds.
+func wrappedBlob(result any) (Blob, bool) {
+	if result == nil {
+		return Blob{}, false
+	}
+	v := reflect.ValueOf(result)
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return Blob{}, false
+		}
+		v = v.Elem()
+	}
+	i := blobWrapperField(v.Type())
+	if i < 0 {
+		return Blob{}, false
+	}
+	b, ok := v.Field(i).Interface().(Blob)
+	return b, ok
 }
 
 // blobFallbackResult is the JSON representation of a Blob result on transports

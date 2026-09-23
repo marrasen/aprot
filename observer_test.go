@@ -25,10 +25,27 @@ type recordingObserver struct {
 	fanouts      map[string]int
 	bufferFull   int
 	writeTimeout int
+	pushDropped  map[string]int
 }
 
 func newRecordingObserver() *recordingObserver {
-	return &recordingObserver{fanouts: make(map[string]int)}
+	return &recordingObserver{
+		fanouts:     make(map[string]int),
+		pushDropped: make(map[string]int),
+	}
+}
+
+func (o *recordingObserver) PushDropped(_ *Conn, event string) {
+	o.mu.Lock()
+	o.pushDropped[event]++
+	o.mu.Unlock()
+}
+
+// droppedCount returns how many droppable pushes were skipped for event.
+func (o *recordingObserver) droppedCount(event string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.pushDropped[event]
 }
 
 func (o *recordingObserver) ConnectionOpened(*Conn) {
