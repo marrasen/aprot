@@ -88,7 +88,7 @@ func TestWSBlobDefaultsToBinaryFrame(t *testing.T) {
 }
 
 // A client that declines binary gets the JSON $blob envelope on a text frame —
-// the same representation SSE and stream already use — instead of a binary
+// the same representation the byte-stream transport already uses — instead of a binary
 // frame it would silently drop.
 func TestWSBinaryOptOutDeliversJSONBlobEnvelope(t *testing.T) {
 	ws, cfg := dialBlobNegotiation(t, "?binary=0")

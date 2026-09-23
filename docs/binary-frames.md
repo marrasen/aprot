@@ -135,7 +135,7 @@ const ws = new WebSocket('wss://example.com/ws?binary=0');
 ```
 
 `Blob` results then arrive as ordinary text frames carrying the JSON `$blob`
-envelope below, exactly as they do on SSE and byte-stream. Nothing else about
+envelope below, exactly as they do on the byte-stream transport. Nothing else about
 the connection changes. Accepted values are `1`/`true`/`yes`/`on` and
 `0`/`false`/`no`/`off`, case-insensitive; omitting the parameter means binary
 frames. **An unrecognized value fails the upgrade with `400 Bad Request`** —
@@ -157,7 +157,7 @@ request can be made — reports the mode in effect:
 
 Read it rather than assuming. `binaryFrames` is always present on a server that
 supports negotiation, so a missing field means an older server, i.e. binary
-frames on WebSocket. On SSE and byte-stream it is always `false`.
+frames on WebSocket. On the byte-stream transport it is always `false`.
 
 This is the one signal available before a `Blob` response can hang you: a
 client that cannot decode binary frames should check `binaryFrames` at connect
@@ -166,7 +166,7 @@ there is no server-side equivalent.
 
 ## JSON fallback
 
-Transports without a native binary channel (SSE, byte-stream) — and WebSocket
+Transports without a native binary channel (byte-stream) — and WebSocket
 connections that passed `binary=0` — deliver the same value as an ordinary
 text `response` frame whose result is a one-key envelope:
 

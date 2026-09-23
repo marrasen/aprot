@@ -249,7 +249,7 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'rec
 /**
  * TransportCloseInfo carries WebSocket CloseEvent diagnostics from the
  * transport up to the client's classification logic. Transports without an
- * equivalent (SSE, custom transports) may pass an empty object or nothing.
+ * equivalent (a custom ClientTransport) may pass an empty object or nothing.
  */
 export interface TransportCloseInfo {
     /** WebSocket CloseEvent.code, when available. 1006 = abnormal (pre-upgrade) closure. */
@@ -263,12 +263,12 @@ export interface TransportCloseInfo {
 }
 
 /**
- * ClientTransport is the connection layer under ApiClient. Two built-in
- * implementations exist (WebSocket and SSE, selected via
- * ApiClientOptions.transport as a string), but an instance implementing this
- * interface can be passed instead to carry the protocol over any message
- * channel — for example an Electron preload/MessagePort bridge to a Go
- * child process, where the renderer cannot open pipes itself.
+ * ClientTransport is the connection layer under ApiClient. One built-in
+ * implementation exists (WebSocket, selected via ApiClientOptions.transport
+ * as a string), but an instance implementing this interface can be passed
+ * instead to carry the protocol over any message channel — for example an
+ * Electron preload/MessagePort bridge to a Go child process, where the
+ * renderer cannot open pipes itself.
  *
  * Contract:
  * - connect() resolves once the channel is ready; deliver every inbound
@@ -292,10 +292,10 @@ export interface ClientTransport {
 
 export interface ApiClientOptions {
     /**
-     * Transport: 'websocket', 'sse', or a custom ClientTransport instance
-     * (e.g. an Electron IPC/MessagePort bridge). Default: 'websocket'
+     * Transport: 'websocket', or a custom ClientTransport instance (e.g. an
+     * Electron IPC/MessagePort bridge). Default: 'websocket'
      */
-    transport?: 'websocket' | 'sse' | ClientTransport;
+    transport?: 'websocket' | ClientTransport;
     /** Enable auto-reconnect on connection loss. Default: true */
     reconnect?: boolean;
     /** Reconnect delay step in ms: attempt n waits n × this (linear backoff). Default: 1000 */
@@ -306,7 +306,7 @@ export interface ApiClientOptions {
     reconnectMaxAttempts?: number;
     /**
      * Milliseconds to wait for the transport handshake before giving up on
-     * the attempt. Applies to the built-in WebSocket and SSE transports; a
+     * the attempt. Applies to the built-in WebSocket transport; a
      * custom ClientTransport enforces its own bound. Without one, a
      * handshake that black-holes (e.g. into a dead network path right after
      * wake) pins the client in 'connecting' for the browser's own TCP
@@ -415,21 +415,12 @@ export function getWebSocketUrl(path: string = '/ws'): string {
     return `${protocol}//${window.location.host}${path}`;
 }
 
-/**
- * Returns an SSE base URL based on the current page location.
- * @param path - The SSE endpoint base path (default: '/sse')
- */
-export function getSSEUrl(path: string = '/sse'): string {
-    return `${window.location.protocol}//${window.location.host}${path}`;
-}
-
 
 
 // TransportCloseInfo and ClientTransport are defined in the "types" section
-// above. SSE note: the EventSource error event exposes nothing structured,
-// so the SSE transport synthesizes an empty close info — it lands as
-// 'network-error' after offline/manual checks, which is the most accurate
-// bucket browsers will let us name.
+// above. A custom ClientTransport with no CloseEvent equivalent may pass an
+// empty close info — it lands as 'network-error' after the offline and
+// manual-disconnect checks, the most accurate bucket available without one.
 
 class WebSocketTransport implements ClientTransport {
     private ws: WebSocket | null = null;
@@ -509,196 +500,6 @@ class WebSocketTransport implements ClientTransport {
 
     isConnected(): boolean {
         return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
-    }
-}
-
-type ClientMessage =
-    | { type: 'request'; id: string; method: string; params: unknown[] }
-    | { type: 'subscribe'; id: string; method: string; params: unknown[] }
-    | { type: 'unsubscribe'; id: string }
-    | { type: 'cancel'; id: string }
-    | { type: 'auth'; token: string };
-
-class SSETransport implements ClientTransport {
-    private eventSource: EventSource | null = null;
-    private connectionId: string | null = null;
-    private baseUrl: string = '';
-    private onMessage: ((data: string) => void) | null = null;
-    private connectTimeout: number;
-
-    constructor(connectTimeoutMs: number = 10000) {
-        this.connectTimeout = connectTimeoutMs;
-    }
-
-    connect(url: string, onMessage: (data: string | Blob | ArrayBuffer) => void, onClose: (info?: TransportCloseInfo) => void): Promise<void> {
-        this.baseUrl = url;
-        this.onMessage = onMessage;
-
-        return new Promise((resolve, reject) => {
-            let connected = false;
-            const es = new EventSource(url);
-            this.eventSource = es;
-            // Bound the handshake, mirroring WebSocketTransport: without it a
-            // stream that never delivers 'connected' leaves this promise
-            // pending forever and wedges the client's attempt serialization.
-            let timer: ReturnType<typeof setTimeout> | null = null;
-            if (this.connectTimeout > 0) {
-                timer = setTimeout(() => {
-                    es.close();
-                    if (this.eventSource === es) {
-                        this.eventSource = null;
-                        this.connectionId = null;
-                    }
-                    reject(new Error('SSE connect timed out'));
-                }, this.connectTimeout);
-            }
-
-            es.addEventListener('connected', (e: MessageEvent) => {
-                // Parse before clearing the timer or marking connected: a
-                // malformed frame must leave the timeout armed so the attempt
-                // fails instead of the promise never settling.
-                const msg = JSON.parse(e.data);
-                if (timer) clearTimeout(timer);
-                connected = true;
-                this.connectionId = msg.connectionId;
-                resolve();
-            });
-
-            es.addEventListener('config', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('auth_ok', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('auth_error', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('response', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('error', (e: MessageEvent) => {
-                if (e.data) {
-                    onMessage(e.data);
-                } else {
-                    // EventSource connection error (no data = connectivity issue).
-                    // EventSource exposes nothing structured here, so the
-                    // ApiClient classifier falls through to 'network-error'
-                    // after offline/manual checks.
-                    if (timer) clearTimeout(timer);
-                    es.close();
-                    if (this.eventSource === es) {
-                        this.eventSource = null;
-                        this.connectionId = null;
-                    }
-                    // Settle the connect promise on a pre-'connected' failure,
-                    // like the WebSocket transport: leaving it pending would
-                    // hold the client's in-flight attempt forever.
-                    if (!connected) reject(new Error('SSE closed before connected'));
-                    onClose({ wasClean: false });
-                }
-            });
-
-            es.addEventListener('progress', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('push', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('stream_item', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('stream_chunk', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-            es.addEventListener('stream_end', (e: MessageEvent) => {
-                onMessage(e.data);
-            });
-
-        });
-    }
-
-    send(message: object): void {
-        if (!this.connectionId) return;
-        const msg = message as ClientMessage;
-
-        if (msg.type === 'auth') {
-            // First-message auth rides the POST body (EventSource GET can't set
-            // headers). The auth_ok / auth_error result arrives over the stream.
-            fetch(this.baseUrl + '/rpc', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'auth',
-                    connectionId: this.connectionId,
-                    token: msg.token,
-                }),
-            }).catch(() => {});
-            return;
-        }
-
-        if (msg.type === 'request' || msg.type === 'subscribe') {
-            fetch(this.baseUrl + '/rpc', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: msg.type,
-                    connectionId: this.connectionId,
-                    id: msg.id,
-                    method: msg.method,
-                    params: msg.params,
-                }),
-            }).then((resp) => {
-                if (resp.status !== 202) {
-                    this.synthesizeError(msg.id, `Server returned unexpected response (status ${resp.status})`);
-                }
-            }).catch(() => {
-                this.synthesizeError(msg.id, 'Network error: failed to send request');
-            });
-        } else if (msg.type === 'unsubscribe') {
-            fetch(this.baseUrl + '/rpc', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'unsubscribe',
-                    connectionId: this.connectionId,
-                    id: msg.id,
-                }),
-            }).catch(() => {});
-        } else if (msg.type === 'cancel') {
-            fetch(this.baseUrl + '/cancel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    connectionId: this.connectionId,
-                    id: msg.id,
-                }),
-            }).catch(() => {});
-        }
-    }
-
-    private synthesizeError(id: string, message: string): void {
-        if (this.onMessage) {
-            this.onMessage(JSON.stringify({ type: 'error', id, code: -32603, message }));
-        }
-    }
-
-    disconnect(): void {
-        this.eventSource?.close();
-        this.eventSource = null;
-        this.connectionId = null;
-        this.onMessage = null;
-    }
-
-    isConnected(): boolean {
-        return this.eventSource !== null && this.connectionId !== null;
     }
 }
 
@@ -815,9 +616,7 @@ export class ApiClient {
         this.options = { ...defaultOptions, ...options };
         this.transport = typeof this.options.transport === 'object'
             ? this.options.transport
-            : this.options.transport === 'sse'
-                ? new SSETransport(this.options.connectTimeout)
-                : new WebSocketTransport(this.options.connectTimeout);
+            : new WebSocketTransport(this.options.connectTimeout);
 
         const retry = this.options.reconnectOnRejected;
         if (retry) {

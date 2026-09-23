@@ -41,24 +41,18 @@ ERROR task failed task_id=t1 task_title="Import " parent_id=root err="empty file
 
 ## Driving it by hand
 
-aprot's HTTP transport is connection-oriented: a `POST /rpc` must reference a
-connection ID issued on the SSE stream, and the SSE and RPC routes must be
-served by the **same** `HTTPTransport()` handler instance (see the wiring in
-`main.go`). To drive it manually:
+The server exposes the WebSocket transport at `/ws`. Connect any WebSocket
+client, discard the config frame the server sends on connect, then send one
+request frame:
 
-```bash
-# Terminal 1 — open the stream and copy the connectionId it prints first:
-curl -N http://localhost:8080/sse
-
-# Terminal 2 — POST referencing that id (results stream back on terminal 1):
-curl -sX POST http://localhost:8080/rpc \
-    -H 'Content-Type: application/json' \
-    -d '{"connectionId":"<paste-id>","id":"1","method":"Demo.Import","params":["accounts.csv"]}'
+```json
+{ "type": "request", "id": "1", "method": "Demo.Import", "params": ["accounts.csv"] }
 ```
 
-(For a real client, the WebSocket transport at `/ws` or the generated
-TypeScript client are friendlier than raw curl — see the `vanilla` and `react`
-examples.)
+Results, progress, and task frames all arrive on the same socket. `driveDemo`
+in `main.go` does exactly this in about 30 lines. For a real client, the
+generated TypeScript client is friendlier — see the `vanilla` and `react`
+examples.
 
 ## Swap the logger
 

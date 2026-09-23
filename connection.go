@@ -12,7 +12,7 @@ import (
 )
 
 // ConnInfo contains connection metadata captured at connection time. For the
-// HTTP transports (WebSocket, SSE) it is populated from the HTTP request; for
+// HTTP transports (WebSocket) it is populated from the HTTP request; for
 // [Server.ServeStream] connections the caller supplies it, and any or all
 // fields may be zero.
 type ConnInfo struct {
@@ -144,7 +144,7 @@ func (c *Conn) Info() ConnInfo {
 }
 
 // Context returns the connection's base context: the HTTP request context
-// for WebSocket/SSE connections, or the context passed to
+// for WebSocket connections, or the context passed to
 // [Server.ServeStream]. This is useful for accessing request-scoped values
 // like zerolog loggers.
 func (c *Conn) Context() context.Context {
@@ -388,7 +388,8 @@ func asBlob(result any) (Blob, bool) {
 }
 
 // blobFallbackResult is the JSON representation of a Blob result on transports
-// without binary frames (SSE, stream). The $blob marker lets the client
+// without binary frames (a client that declined them, the byte-stream
+// transport). The $blob marker lets the client
 // convert it back into the same Blob value the binary path delivers, so the
 // client-visible result type does not depend on the transport.
 type blobFallbackResult struct {
@@ -718,7 +719,7 @@ func (c *Conn) handleAuth(token string) {
 //
 // Without this the policy was asymmetric across transports: handleAuth runs in
 // the WebSocket read-loop goroutine, which has no recover above it, so a hook
-// panic killed the process; over SSE the same panic ran under net/http and only
+// panic killed the process; the same panic under net/http only
 // dropped the connection. The hook is also where the principal provider is
 // registered, so consumer code in it has grown (#332). Recovering here — the
 // one place both transports call the hook — keeps it a single policy point

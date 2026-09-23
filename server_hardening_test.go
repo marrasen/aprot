@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
@@ -334,26 +333,6 @@ func TestStalledClientDoesNotBlockServer(t *testing.T) {
 	resp := readMessageOfType(t, wsC, TypeResponse, 5*time.Second)
 	if resp.ID != "1" {
 		t.Errorf("expected echo response, got id %q", resp.ID)
-	}
-}
-
-// SSE RPC bodies above MaxMessageSize must be rejected with 413.
-func TestSSEBodyLimit(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&PanicHandlers{})
-	server := NewServer(registry, ServerOptions{MaxMessageSize: 1024})
-
-	ts := httptest.NewServer(server.HTTPTransport())
-	t.Cleanup(ts.Close)
-
-	body := `{"connectionId":"x","id":"1","method":"PanicHandlers.Safe","params":[{"message":"` + strings.Repeat("a", 8192) + `"}]}`
-	resp, err := http.Post(ts.URL+"/rpc", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("post failed: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusRequestEntityTooLarge {
-		t.Errorf("expected 413, got %d", resp.StatusCode)
 	}
 }
 

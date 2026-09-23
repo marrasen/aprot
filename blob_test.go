@@ -54,7 +54,7 @@ func TestSendResponseNilBlobPointerIsJSONNull(t *testing.T) {
 }
 
 // noBinaryRecordingTransport records sends but reports no binary support,
-// mirroring the SSE and stream transports.
+// mirroring the byte-stream transport.
 type noBinaryRecordingTransport struct {
 	recordingTransport
 }

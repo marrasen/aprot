@@ -2,9 +2,7 @@ package aprot
 
 import (
 	"context"
-	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,11 +43,8 @@ func newAuthServer(t *testing.T, opts ServerOptions, hook AuthHook) *httptest.Se
 	if hook != nil {
 		server.OnAuth(hook)
 	}
-	sseH := newSSEHandler(server)
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server)
-	mux.Handle("/sse", http.StripPrefix("/sse", sseH))
-	mux.Handle("/sse/", http.StripPrefix("/sse", sseH))
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts
@@ -445,140 +440,5 @@ func TestAuthAnonymous_NoHook(t *testing.T) {
 	sendAuth(t, ws, "anything")
 	if f := readFrame(t, ws, 3*time.Second); f.Type != string(TypeAuthOK) {
 		t.Fatalf("expected the no-op auth_ok with no hook registered, got type=%q", f.Type)
-	}
-}
-
-// --- SSE ---
-
-func postAuthSSE(t *testing.T, ts *httptest.Server, connectionID, token string) *http.Response {
-	t.Helper()
-	body := fmt.Sprintf(`{"type":"auth","connectionId":%q,"token":%q}`, connectionID, token)
-	resp, err := http.Post(ts.URL+"/sse/rpc", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /rpc auth failed: %v", err)
-	}
-	return resp
-}
-
-// SSE: a valid token (in the first POST /rpc body) yields an auth_ok stream
-// event and unlocks requests; a pre-auth request is rejected with auth_error.
-func TestAuthSSE_Flow(t *testing.T) {
-	ts := newAuthServer(t, ServerOptions{}, tokenHook)
-	resp, reader, connID := connectSSE(t, ts)
-	defer resp.Body.Close()
-
-	// Pre-auth request is rejected over the stream.
-	postRPC(t, ts, connID, "1", "authHandlers.Ping", "[]")
-	ev, err := reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeAuthError) {
-		t.Fatalf("expected auth_error for pre-auth SSE request, got %q", ev.Event)
-	}
-
-	// Authenticate.
-	postAuthSSE(t, ts, connID, "good:alice")
-	ev, err = reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeAuthOK) {
-		t.Fatalf("expected auth_ok event, got %q data=%q", ev.Event, ev.Data)
-	}
-
-	// Now a request works and sees the authenticated identity.
-	postRPC(t, ts, connID, "2", "authHandlers.WhoAmI", "[]")
-	ev, err = reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeResponse) {
-		t.Fatalf("expected response event, got %q", ev.Event)
-	}
-	var msg ResponseMessage
-	if err := json.Unmarshal([]byte(ev.Data), &msg); err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	if m, _ := msg.Result.(map[string]any); m == nil || m["message"] != "alice" {
-		t.Fatalf("expected WhoAmI=alice, got %v", msg.Result)
-	}
-
-	// Mid-session refresh over SSE updates the identity.
-	postAuthSSE(t, ts, connID, "good:bob")
-	if ev, err = reader.readEvent(); err != nil || ev.Event != string(TypeAuthOK) {
-		t.Fatalf("expected auth_ok on SSE refresh, got %q err=%v", ev.Event, err)
-	}
-	postRPC(t, ts, connID, "3", "authHandlers.WhoAmI", "[]")
-	if ev, err = reader.readEvent(); err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	var msg2 ResponseMessage
-	if err := json.Unmarshal([]byte(ev.Data), &msg2); err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	if m, _ := msg2.Result.(map[string]any); m == nil || m["message"] != "bob" {
-		t.Fatalf("expected identity refreshed to bob over SSE, got %v", msg2.Result)
-	}
-}
-
-// SSE: with AllowAnonymous, a request before any auth frame succeeds as an
-// anonymous caller, the stream outlives AuthTimeout, and a later auth frame
-// upgrades the identity.
-func TestAuthSSE_Anonymous_Flow(t *testing.T) {
-	ts := newAuthServer(t, anonymousOptions(), tokenHook)
-	resp, reader, connID := connectSSE(t, ts)
-	defer resp.Body.Close()
-
-	// Past the auth timeout window, an unauthenticated request still works.
-	time.Sleep(450 * time.Millisecond) // 3x AuthTimeout
-
-	postRPC(t, ts, connID, "1", "authHandlers.WhoAmI", "[]")
-	ev, err := reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeResponse) {
-		t.Fatalf("expected an anonymous SSE request to succeed, got %q data=%q", ev.Event, ev.Data)
-	}
-	var msg ResponseMessage
-	if err := json.Unmarshal([]byte(ev.Data), &msg); err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	if m, _ := msg.Result.(map[string]any); m == nil || m["message"] != "" {
-		t.Fatalf("expected an empty user ID for an anonymous SSE caller, got %v", msg.Result)
-	}
-
-	// A later auth frame upgrades the identity on the live stream.
-	postAuthSSE(t, ts, connID, "good:bob")
-	if ev, err = reader.readEvent(); err != nil || ev.Event != string(TypeAuthOK) {
-		t.Fatalf("expected auth_ok on late SSE auth, got %q err=%v", ev.Event, err)
-	}
-	postRPC(t, ts, connID, "2", "authHandlers.WhoAmI", "[]")
-	if ev, err = reader.readEvent(); err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	var msg2 ResponseMessage
-	if err := json.Unmarshal([]byte(ev.Data), &msg2); err != nil {
-		t.Fatalf("parse response: %v", err)
-	}
-	if m, _ := msg2.Result.(map[string]any); m == nil || m["message"] != "bob" {
-		t.Fatalf("expected identity upgraded to bob over SSE, got %v", msg2.Result)
-	}
-}
-
-// SSE: a connection that never authenticates is closed after AuthTimeout, with
-// an auth_error delivered over the stream first.
-func TestAuthSSE_Timeout(t *testing.T) {
-	ts := newAuthServer(t, ServerOptions{AuthTimeout: 150 * time.Millisecond}, tokenHook)
-	resp, reader, _ := connectSSE(t, ts)
-	defer resp.Body.Close()
-
-	ev, err := reader.readEvent()
-	if err != nil {
-		t.Fatalf("read event: %v", err)
-	}
-	if ev.Event != string(TypeAuthError) {
-		t.Fatalf("expected auth_error on SSE timeout, got %q", ev.Event)
 	}
 }

@@ -8,7 +8,7 @@ that (#330).
 
 ## The product
 
-aprot is typed Go↔TypeScript RPC with live subscriptions. WebSocket/SSE
+aprot is typed Go↔TypeScript RPC with live subscriptions. WebSocket
 with subscription hooks is the product; REST, MCP, and the byte-stream
 transport are adapters onto the same handlers. Adapters get full
 correctness — the same pipeline, middleware, error mapping, and panic
@@ -59,7 +59,7 @@ consistent with them.
   fan-out set.** The inverse of the presence rule below: presence is a
   transport fact, so the server's own view of it must not lag the client's.
   Registration therefore completes in the accepting goroutine, before the
-  config frame reaches the wire and before the pumps start, on all three
+  config frame reaches the wire and before the pumps start, on both
   accept paths (#347). It used to be a handoff to `run()` over a channel, so
   a client holding the config frame could complete request round-trips while
   `Broadcast` could not see it.
@@ -102,8 +102,30 @@ consistent with them.
   (#316, #330). An adapter nobody uses is still the canary for the uniformity
   guarantee, but **only while CI exercises it**: the invariant matrix (#339)
   is the standing keep-condition. If that coverage lapses, deletion becomes
-  the right call, on the same "unused in practice" standard as the SSE
-  proposal (#280). Ruling recorded for #340.
+  the right call, on the same "unused in practice" standard that removed the
+  SSE transport (#280). Ruling recorded for #340.
+- **The SSE transport is out; the transport abstraction stays.** SSE was
+  removed in full — `transport_sse.go`, `sse_handler.go`,
+  `Server.HTTPTransport`, `ConnectedMessage`/`TypeConnected`, and the
+  client's `SSETransport` (#280). No consumer ever used it, and being
+  half-duplex it was never a free mirror of the WebSocket path: requests
+  arrived on a separate `POST /rpc` keyed by a connection ID the stream
+  issued, which meant a second copy of the accept path, of first-message
+  auth, and of the inbound size limit. Every protocol feature had to answer
+  "and how does this behave on SSE?" before it could ship.
+
+  What stays is everything that was never SSE-specific: the internal
+  `transport` interface, `SupportsBinary`, the `$blob` JSON fallback, and the
+  byte-stream transport. Those carry the multi-transport guarantee that a
+  client-visible result type never depends on the transport, and they are
+  load-bearing for the WebSocket binary opt-out (#279) — which is now what
+  keeps the fallback path exercised, in unit tests and e2e alike. Deleting an
+  unused transport is not deleting the seam that made it cheap; the seam
+  earns its keep with two live users.
+
+  The deciding test was the one #280 named: not "has it been used" but "do we
+  pay a tax when adding features?" We did, on every feature. Ruling recorded
+  for #280.
 - **A connection-scoped fact may be reported to the client, but never
   becomes an authorization input.** `SharedTaskState.startedHere` says which
   connection carried the call (#370). That is transport, so carrying it is
@@ -162,8 +184,8 @@ consistent with them.
   from becoming the auth signal #326 was about. The paired ruling is a
   **no**: `NewDetachedConn` does not take the authenticated state, and
   aprot exports no `Conn.Authenticated()`. The `authenticated` flag has one
-  job — the first-message gate in `Conn.handleIncomingMessage` and its SSE
-  equivalent — and both run only when a frame arrives off a transport. A
+  job — the first-message gate in `Conn.handleIncomingMessage` — and it
+  runs only when a frame arrives off a transport. A
   detached conn has no read loop and is never registered with the server,
   so nothing reads the flag; a constructor argument would advertise a
   control that controls nothing. Exporting a reader would make it real,

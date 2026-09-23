@@ -122,18 +122,19 @@ func Example_generate() {
 	// Output: Generated
 }
 
-// This example shows how to set up a server with both WebSocket and SSE
-// transports running simultaneously.
+// This example shows how to serve the same handlers over WebSocket and REST
+// from one mux. Both adapters share the registry, so a mutation over REST
+// refreshes the subscribed WebSocket clients.
 func Example_dualTransport() {
 	registry := aprot.NewRegistry()
 	registry.Register(&MyHandlers{})
+	registry.EnableREST(&MyHandlers{})
 
 	server := aprot.NewServer(registry)
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", server)                   // WebSocket
-	mux.Handle("/sse", server.HTTPTransport())  // SSE+HTTP
-	mux.Handle("/sse/", server.HTTPTransport()) // SSE sub-routes (rpc, cancel)
+	mux.Handle("/ws", server) // WebSocket
+	mux.Handle("/api/", http.StripPrefix("/api", aprot.NewRESTAdapter(registry)))
 
 	fmt.Println("Dual transport ready")
 	// Output: Dual transport ready

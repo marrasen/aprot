@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
-import { wsUrl, sseUrl } from './helpers';
+import { wsUrl, wsTextOnlyUrl } from './helpers';
 import { ApiClient } from '../api/client';
 import { getBlob, setBlob, subscribeGetBlob } from '../api/blob-handlers';
 
@@ -55,11 +55,14 @@ describe('Blob responses over WebSocket (binary frames)', () => {
     });
 });
 
-describe('Blob responses over SSE ($blob JSON fallback)', () => {
+// A client that declines binary frames (binary=0 on the upgrade URL, #279)
+// gets Blob results as the JSON $blob envelope instead. Same assertions as the
+// binary suite above: the client-visible type must not depend on the encoding.
+describe('Blob responses with binary frames declined ($blob JSON fallback)', () => {
     let client: ApiClient;
 
     beforeEach(async () => {
-        client = new ApiClient(sseUrl(), { transport: 'sse', reconnect: false });
+        client = new ApiClient(wsTextOnlyUrl(), { reconnect: false });
         await client.connect();
     });
 
@@ -68,7 +71,7 @@ describe('Blob responses over SSE ($blob JSON fallback)', () => {
     });
 
     test('getBlob resolves a DOM Blob with contentType and exact bytes', async () => {
-        const marker = `sse-bytes-${Date.now()}`;
+        const marker = `text-only-bytes-${Date.now()}`;
         await setBlob(client, marker);
         const blob = await getBlob(client);
         expect(blob).toBeInstanceOf(Blob);
@@ -82,7 +85,7 @@ describe('Blob responses over SSE ($blob JSON fallback)', () => {
         });
         expect(initial).toBeInstanceOf(Blob);
 
-        const marker = `sse-refresh-${Date.now()}`;
+        const marker = `text-only-refresh-${Date.now()}`;
         const refreshed = await new Promise<Blob>((resolve) => {
             subscribeGetBlob(client, (data) => {
                 void (async () => {

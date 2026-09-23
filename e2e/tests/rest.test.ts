@@ -33,7 +33,7 @@ describe('REST adapter', () => {
         const res = await fetch(apiUrl('/echo-handlers/get-echo/1/true/zed'));
         const body = await res.json();
         // Unwrapped string, not the {"String":"hi-zed","Valid":true} object —
-        // the REST transport uses the same sql.Null-aware marshaler as WS/SSE.
+        // the REST transport uses the same sql.Null-aware marshaler as the socket.
         expect(body.note).toBe('hi-zed');
         expect(typeof body.note).toBe('string');
     });

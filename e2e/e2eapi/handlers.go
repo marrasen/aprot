@@ -19,7 +19,7 @@ type EchoHandlers struct{}
 
 // EchoResult is the REST response. Note is a sql.NullString so the test can
 // confirm the REST transport unwraps it to a bare string / null (matching
-// WS/SSE), not the {"String":…,"Valid":…} object.
+// WS), not the {"String":…,"Valid":…} object.
 type EchoResult struct {
 	Count int            `json:"count"`
 	Flag  bool           `json:"flag"`
@@ -96,7 +96,7 @@ func (h *FixedArrayHandlers) EchoArrays(ctx context.Context, req *FixedArrayPayl
 
 // BlobHandlers exercises binary Blob responses (#238). A top-level Blob
 // result crosses the wire as a WebSocket binary frame, or as the $blob JSON
-// fallback on transports without binary frames (SSE); generated clients must
+// fallback when a client declines them (binary=0); generated clients must
 // resolve a DOM Blob either way — including for subscription refreshes.
 type BlobHandlers struct {
 	mu   sync.Mutex

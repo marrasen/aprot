@@ -8,7 +8,7 @@ Demonstrates aprot with plain TypeScript (no framework). Covers:
 - **Global loading indicator** — the dot next to the header title uses `client.onLoadingChange()` to reflect pending request count.
 - **Cancel cause reporting** — `ProcessBatch` inspects `aprot.CancelCause(ctx)` and logs whether the cancel came from the client, a dropped connection, or server shutdown. Hit *Cancel* during a batch and check the server stdout.
 - **Page visibility reconnection** — the client reconnects immediately when the tab becomes visible or the network comes back online (no heartbeat needed).
-- Progress tracking, sub-tasks, AbortController cancellation, and both WebSocket and SSE transports.
+- Progress tracking, sub-tasks, and AbortController cancellation over the WebSocket transport.
 
 ## Prerequisites
 
@@ -49,12 +49,9 @@ Demonstrates aprot with plain TypeScript (no framework). Covers:
 
 5. **Open** `http://localhost:8080`
 
-## Transports
+## Transport
 
-The server exposes two transports:
-
-- **WebSocket** at `/ws`
-- **SSE** at `/sse`
+The server exposes the WebSocket transport at `/ws`.
 
 ## Project Structure
 

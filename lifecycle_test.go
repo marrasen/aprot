@@ -156,31 +156,6 @@ func TestConnectHookRejectionAfterSetUserIDDisassociates(t *testing.T) {
 	waitForUserConnCount(t, server, "u1", 0, 2*time.Second)
 }
 
-// Same guarantee for the SSE transport.
-func TestSSEConnectHookRejectionAfterSetUserIDDisassociates(t *testing.T) {
-	registry := NewRegistry()
-	registry.Register(&IntegrationHandlers{})
-	server := NewServer(registry)
-	server.OnConnect(func(ctx context.Context, conn *Conn) error {
-		conn.SetUserID("u1")
-		return nil
-	})
-	server.OnConnect(func(ctx context.Context, conn *Conn) error {
-		return errors.New("rejected by policy")
-	})
-	ts := httptest.NewServer(server.HTTPTransport())
-	defer ts.Close()
-	defer server.Stop(context.Background())
-
-	resp, err := ts.Client().Get(ts.URL + "/")
-	if err != nil {
-		t.Fatalf("GET SSE: %v", err)
-	}
-	defer resp.Body.Close()
-
-	waitForUserConnCount(t, server, "u1", 0, 2*time.Second)
-}
-
 // --- Server.DisconnectUser ---
 
 // DisconnectUser must close every connection of the target user — sending a

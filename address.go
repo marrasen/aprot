@@ -15,7 +15,7 @@ import "context"
 //
 // Population per transport:
 //
-//   - Socket (WebSocket/SSE): [Conn.SetUserID], typically from the
+//   - Socket (WebSocket, byte stream): [Conn.SetUserID], typically from the
 //     [Server.OnAuth] hook or auth middleware. [UserID] reads it back
 //     through the connection.
 //   - REST / MCP: a wrapping http.Handler that authenticates the request

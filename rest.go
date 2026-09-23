@@ -262,7 +262,7 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 		Params: params,
 	}
 
-	// Install the same request context the WS/SSE dispatch path builds
+	// Install the same request context the socket dispatch path builds
 	// (connection.go), so middleware and handlers behave identically across
 	// transports: HandlerInfoFromContext, RequestFromContext, and the refresh
 	// queue behind TriggerRefresh / TriggerRefreshNow.
@@ -320,7 +320,7 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 	}()
 
 	// Flush queued refresh triggers once the response has been written,
-	// mirroring the WS/SSE path: triggers are dropped when the handler
+	// mirroring the socket path: triggers are dropped when the handler
 	// errors, and flushed on any success path (the mutation happened even
 	// if marshaling its response later fails).
 	if err == nil && rq != nil {
@@ -347,7 +347,7 @@ func (a *RESTAdapter) handleRequest(w http.ResponseWriter, r *http.Request, rout
 
 	w.Header().Set("Content-Type", "application/json")
 	// Use the shared sql.Null-aware marshaler so the REST wire format
-	// matches the WebSocket/SSE transports.
+	// matches the WebSocket transport.
 	data, err := marshalJSON(result)
 	if err != nil {
 		wroteResponse = true

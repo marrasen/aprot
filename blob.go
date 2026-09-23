@@ -28,7 +28,8 @@ const blobTSWireShape = "{ contentType?: string; data: string }"
 //
 // Return Blob (or *Blob) from a handler to opt into binary delivery. On
 // transports with a native binary channel (WebSocket) the payload is sent as
-// a binary frame; on other transports (SSE, stream) it falls back to a JSON
+// a binary frame; when a client declines binary and on the byte-stream
+// transport it falls back to a JSON
 // envelope carrying base64 data under a "$blob" marker. Generated TypeScript
 // clients convert both encodings into a DOM Blob, so the client-visible
 // result type does not depend on the transport.

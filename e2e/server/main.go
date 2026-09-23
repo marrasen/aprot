@@ -33,7 +33,6 @@ func main() {
 	state.Broadcaster = server
 	state.UserPusher = server
 
-	sseHandler := server.HTTPTransport()
 	restAdapter := aprot.NewRESTAdapter(registry)
 
 	// Rejection server — always rejects connections for e2e testing.
@@ -61,8 +60,6 @@ func main() {
 	mux.Handle("/ws", server)
 	mux.Handle("/ws-reject", rejectServer)
 	mux.Handle("/ws-token", tokenServer)
-	mux.Handle("/sse", http.StripPrefix("/sse", sseHandler))
-	mux.Handle("/sse/", http.StripPrefix("/sse", sseHandler))
 	mux.Handle("/api/", http.StripPrefix("/api", restAdapter))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

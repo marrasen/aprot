@@ -20,7 +20,7 @@ func main() {
 	// Add REST + validation handlers so the generated client includes them.
 	e2eapi.Register(registry)
 
-	// Vanilla client — used by the WS / SSE / REST tests.
+	// Vanilla client — used by the WS and REST tests.
 	vanilla := aprot.NewGenerator(registry).WithOptions(aprot.GeneratorOptions{
 		OutputDir: "../api",
 		Mode:      aprot.OutputVanilla,

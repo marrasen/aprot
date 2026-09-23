@@ -1,9 +1,7 @@
 import { WebSocket } from 'ws';
-import { EventSource } from 'eventsource';
 
 // Polyfill browser APIs for Node.js test environment
 (globalThis as unknown as Record<string, unknown>).WebSocket = WebSocket;
-(globalThis as unknown as Record<string, unknown>).EventSource = EventSource;
 
 // Per-worker server address, populated by setup-per-file.ts's beforeAll
 // hook (issue #180). Reading from a worker-local global keeps every test
@@ -31,6 +29,8 @@ export function wsTokenUrl(): string {
     return `ws://${getServerAddr()}/ws-token`;
 }
 
-export function sseUrl(): string {
-    return `http://${getServerAddr()}/sse`;
+// wsTextOnlyUrl declines binary frames, so Blob results arrive as the JSON
+// $blob envelope (#279).
+export function wsTextOnlyUrl(): string {
+    return `ws://${getServerAddr()}/ws?binary=0`;
 }
