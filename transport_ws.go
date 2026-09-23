@@ -152,6 +152,13 @@ func (t *wsTransport) sendDroppableFrame(frame outboundFrame) error {
 // pump waits for the producer's next frame instead of starting one that was
 // already stale. That is the intended bias — a droppable event wants the
 // freshest frame at write time, not the deepest pipeline.
+//
+// The release happens just after the write returns, so a producer that reacts
+// to the client receiving a frame can send the next one into a slot not yet
+// given back, and see a drop. That window is inherent to any non-blocking
+// bounded scheme and is not loss: the frame was refused, not swallowed, so
+// sending it again works. Producers on a clock rather than on client feedback
+// never meet it.
 func (t *wsTransport) releaseDroppable(frame outboundFrame) {
 	if frame.droppable {
 		t.queuedDroppable.Add(-1)

@@ -32,8 +32,13 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   they share one write pump and one wire.
 
   `Conn.Push` returns the new `aprot.ErrPushDropped` when it skips a frame.
-  `Server.Broadcast` and `Server.PushToUser` discard per-connection errors, so
-  fan-out drops are counted through the new `Observer.PushDropped(conn, event)`.
+  `Server.Broadcast` and `Server.PushToUser` keep their existing signatures and
+  discard per-connection errors, so a fan-out reports no per-call sent/dropped
+  split; fan-out drops are counted through the new
+  `Observer.PushDropped(conn, event)`. A producer that needs the split for one
+  specific fan-out can loop `Server.ForEachConn` calling `Conn.Push` itself —
+  the README documents that recipe along with its cost, namely one encoding per
+  connection instead of one per push.
   Declared per event type rather than per call, because staleness is a property
   of the payload — one registry lookup serves all three fan-out paths, so they
   cannot disagree. Every event without the flag keeps the delivery guarantee,

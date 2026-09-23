@@ -708,10 +708,18 @@
 //
 // The bar is deliberately "has the previous frame gone out", not "is the
 // 256-slot buffer full": waiting for the buffer would queue megabytes of
-// expired frames before dropping the first one. [Conn.Push] returns
-// [ErrPushDropped] when it skips a frame; [Server.Broadcast] and
-// [Server.PushToUser] discard per-connection errors, so
-// [Observer.PushDropped] is how fan-out drops are counted.
+// expired frames before dropping the first one.
+//
+// [Conn.Push] reports its own outcome, returning [ErrPushDropped] when the
+// frame was skipped. [Server.Broadcast] and [Server.PushToUser] return nothing
+// and discard per-connection errors, so a fan-out does not report a
+// sent/dropped split; [Observer.PushDropped] is how fan-out drops are counted,
+// and the aggregate rate is usually the useful number. A producer that needs
+// the split for one fan-out can loop [Server.ForEachConn] and call
+// [Conn.Push] itself, at the cost of encoding the frame once per connection
+// rather than once per push — see the README. Either way "sent" means accepted
+// into the connection's outbound queue, not acknowledged by the client: the
+// protocol has no delivery receipt.
 //
 // Droppability is declared on the event type, not the call, because staleness
 // is a property of the payload — so it applies on all three fan-out paths

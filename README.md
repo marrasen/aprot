@@ -728,8 +728,32 @@ A droppable frame is sent only once the connection has finished writing the prev
 - **The bar is the previous frame, not a full buffer.** Waiting for the 256-slot outbound buffer to fill would queue megabytes of expired frames first — for 300 KB video frames, roughly 76 MB — which is the opposite of what a droppable event asks for.
 - **Declared per event type, not per call.** Staleness is a property of the payload, so the flag applies on `Conn.Push`, `Server.Broadcast` and `Server.PushToUser` alike with no second API.
 - **One allowance per connection.** Every droppable event on a connection shares it, because they share one write pump and one wire.
-- **Counting drops.** `Conn.Push` returns `aprot.ErrPushDropped`; `Broadcast` and `PushToUser` discard per-connection errors, so use `Observer.PushDropped(conn, event)` for fan-out.
 - **Nothing else changes.** Every event without the flag keeps the delivery guarantee, on the same connection.
+
+### Knowing what happened
+
+`Conn.Push` reports the outcome of its own send: it returns `aprot.ErrPushDropped` when the frame was skipped, distinct from `ErrConnectionClosed` and `ErrDetachedConn`.
+
+`Server.Broadcast` and `Server.PushToUser` return nothing and discard per-connection errors, so a fan-out does not report a sent/dropped split. For monitoring, `Observer.PushDropped(conn, event)` fires once per dropped frame — the aggregate rate is what you usually want, and a rate near the production rate means that client is receiving almost nothing.
+
+If a producer needs the split for one specific fan-out — say to back off when most clients are behind — do the fan-out yourself:
+
+```go
+var sent, dropped int
+server.ForEachConn(func(c *aprot.Conn) {
+    if errors.Is(c.Push(frame), aprot.ErrPushDropped) {
+        dropped++
+    } else {
+        sent++
+    }
+})
+```
+
+Two costs to know about before reaching for that. It **encodes the frame once per connection**, where `Broadcast` encodes once and shares the bytes — for a 300 KB frame to 100 clients that is the difference between 300 KB and ~30 MB per push. And if you are replicating `PushToUser` rather than `Broadcast`, you lose its re-check of `conn.UserID()`, which is what stops a push landing on a connection that re-authenticated as a different user mid-fan-out.
+
+In all cases "sent" means *accepted into the connection's outbound queue*, not acknowledged by the client. A frame that was not dropped can still be lost if the connection dies before the write completes; the protocol has no delivery receipt.
+
+One timing note if you drive the producer from client feedback rather than a clock: the connection gives its slot back just after the write returns, so pushing the next frame the instant a client acknowledges the previous one can meet a slot not yet released and report a drop. Nothing is lost — the frame was refused, not swallowed — and sending it again works. A producer on a fixed cadence never sees this.
 
 ## Subscription Patches
 
