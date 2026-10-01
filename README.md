@@ -697,7 +697,9 @@ Binary delivery is opt-in via the `Blob` type and applies to top-level results o
 `TriggerRefresh` re-runs the subscribed query and re-sends the **entire result** — on a several-thousand-row list, every small mutation costs a full re-serialization and a megabyte-scale frame. `PatchSubscription` pushes just the change instead:
 
 ```go
-// Query handler — declares the trigger key as usual.
+// Query handler — declares the trigger key as usual. The keys of one call form
+// one composite key, so only TriggerRefresh(ctx, "photos", folderID) refreshes
+// this query; TriggerRefresh(ctx, "photos") does not.
 func (h *PhotoHandlers) ListPhotos(ctx context.Context, folderID string) ([]Photo, error) {
     aprot.RegisterRefreshTrigger(ctx, "photos", folderID)
     return h.store.ListPhotos(folderID)
