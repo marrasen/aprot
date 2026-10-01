@@ -713,9 +713,15 @@
 //	    return user, nil
 //	}
 //
+// The keys passed to one call form one composite key: a subscription that
+// registered ("photos", folderID) is refreshed by TriggerRefresh(ctx, "photos",
+// folderID), and one that registered "photos" alone is not. Distinct keys
+// take one call each.
+//
 // Multiple TriggerRefresh calls within a single request are batched and
-// deduplicated. [TriggerRefreshNow] flushes the queue immediately — use it in
-// long-running handlers that make observable state transitions over time.
+// deduplicated, so a subscription matched by several of them re-runs once.
+// [TriggerRefreshNow] flushes the queue immediately — use it in long-running
+// handlers that make observable state transitions over time.
 // TriggerRefresh works on every transport: a mutation arriving over REST
 // refreshes subscribed WebSocket clients just like one arriving over a
 // socket (the [RESTAdapter] must share its [Registry] with a [Server]).

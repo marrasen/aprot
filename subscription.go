@@ -324,7 +324,9 @@ func withTriggerCollector(ctx context.Context, tc *triggerCollector) context.Con
 
 // RegisterRefreshTrigger registers trigger keys that this subscription depends on.
 // When called from a regular (non-subscribe) request, this is a no-op.
-// Keys are variadic strings that form a composite trigger key.
+// Keys are variadic strings that form a composite trigger key. A subscription
+// that depends on several distinct keys calls RegisterRefreshTrigger once per
+// key.
 func RegisterRefreshTrigger(ctx context.Context, keys ...string) {
 	tc, ok := ctx.Value(triggerCollectorKey).(*triggerCollector)
 	if !ok || tc == nil {
@@ -336,8 +338,14 @@ func RegisterRefreshTrigger(ctx context.Context, keys ...string) {
 	tc.mu.Unlock()
 }
 
-// TriggerRefresh queues a refresh for all subscriptions matching the given keys.
-// Called from mutation handlers to notify subscribed clients of data changes.
+// TriggerRefresh queues a refresh for all subscriptions registered with the
+// given trigger key. Called from mutation handlers to notify subscribed
+// clients of data changes.
+//
+// The keys form one composite key, as with [RegisterRefreshTrigger]:
+// TriggerRefresh(ctx, "photos", folderID) refreshes subscriptions that
+// registered ("photos", folderID), and none that registered "photos" alone.
+// Distinct keys take one call each.
 // Triggers are batched per-request and deduplicated by subscription when the
 // request handler completes. It works on every transport — WebSocket, byte
 // streams, and REST (a mutation over REST refreshes subscribed socket
@@ -356,9 +364,10 @@ func TriggerRefresh(ctx context.Context, keys ...string) {
 }
 
 // TriggerRefreshNow is like TriggerRefresh but flushes the refresh queue
-// immediately instead of deferring until the handler returns. Use this in
-// long-running handlers when you want subscribers to observe intermediate
-// state transitions before the handler completes.
+// immediately instead of deferring until the handler returns. Its keys form
+// one composite key, as with TriggerRefresh. Use this in long-running handlers
+// when you want subscribers to observe intermediate state transitions before
+// the handler completes.
 //
 // TriggerRefreshNow flushes every key queued so far (including keys passed to
 // prior TriggerRefresh calls), not just the keys in this call. Subsequent

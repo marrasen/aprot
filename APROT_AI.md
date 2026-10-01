@@ -286,7 +286,8 @@ func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
 }
 ```
 
-- `TriggerRefresh` batches and dedupes within a request.
+- Keys passed to one call form one composite key: `TriggerRefresh(ctx, "photos", folderID)` refreshes subscriptions that registered `("photos", folderID)`, not those that registered `"photos"` alone. Fire distinct keys with one call each.
+- `TriggerRefresh` batches and dedupes within a request, so a subscription matched by several calls re-runs once.
 - `TriggerRefreshNow` flushes immediately (use in long-running handlers between observable state transitions).
 - `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
 - `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
