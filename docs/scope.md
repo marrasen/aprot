@@ -158,6 +158,31 @@ consistent with them.
   fields before the hook and restore them on failure. Ruling recorded for
   #384.
 
+- **Droppable push events and binary blob pushes are out.** #387 asked for
+  a push that aprot may drop when the client cannot keep up, so a live
+  preview sends its newest frame instead of building a backlog. #389 built
+  it: a `Droppable()` registration option with a one-frame allowance per
+  connection, and a `Blob` push event sent as a binary frame. It was closed
+  without merging.
+
+  The mechanism did not deliver what its name promises. A droppable frame
+  still holds the connection's write pump while it is written, so a slow
+  client still delays every guaranteed frame behind it. The one-frame
+  allowance is shared by the connection, so two droppable streams starve
+  each other. And the `Blob` push left the metadata question open: a
+  wrapper with extra fields either travels as JSON, or changes encoding
+  later and breaks whoever relied on that. Each fix would add more queueing
+  rules to a path that every push goes through, and each rule is another
+  way for frames to race or wait on each other.
+
+  A consumer that wants latest-value-wins delivery can build it on what
+  aprot already has: the client asks for the next frame once it has drawn
+  the last one. That keeps one frame in flight with no new wire behaviour.
+  The refusal of a priority lane, argued in #389, stands on its own: aprot
+  keeps one ordered queue per connection. Revisit only with a consumer that
+  cannot use the pull pattern and a measurement of what it costs them.
+  Ruling recorded for #387 and #389.
+
 - **Reporting what the connection is doing is in; deciding when that is
   wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
   `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the
