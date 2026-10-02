@@ -10,6 +10,28 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **Go client** (#399). Go programs can now call an aprot server with typed
+  calls, streams, push events, and live subscriptions, the same features the
+  React hooks get. It has two parts:
+  - `github.com/marrasen/aprot/client`, the runtime. It connects over a
+    WebSocket (`client.Dial`) or a byte stream (`client.DialStream`, the
+    `ServeStream` framing), does first-message auth, and reconnects on its
+    own. It does not import the aprot server package.
+  - `aprot.NewGoGenerator`, which generates a typed client package
+    (`client.gen.go`) from a `Registry`. The generated types copy the wire
+    shape of the server's types, so a client program never imports server
+    code.
+
+  A subscription delivers each result on a channel that holds one value,
+  where the newest wins. It survives reconnects. Close it with
+  `defer sub.Close()`, or the server keeps re-running the handler.
+
+  The client speaks the existing JSON protocol, so the server is unchanged.
+  Gob was considered and ruled out; the reasons are in `docs/scope.md`.
+  Smaller payloads are tracked as WebSocket compression (#398).
+
 ### Removed
 
 - **Breaking: the SSE transport is gone** (#280). `Server.HTTPTransport`,
