@@ -32,6 +32,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   Gob was considered and ruled out; the reasons are in `docs/scope.md`.
   Smaller payloads are tracked as WebSocket compression (#398).
 
+### Fixed
+
+- **An unsubscribe or cancel right behind its subscribe or request is no
+  longer lost.** The server registered a request inside the goroutine that
+  runs it, but handled `unsubscribe` and `cancel` straight away on the read
+  loop. A frame that arrived in that window found nothing to cancel. A
+  cancelled request then ran to completion, and an unsubscribed subscription
+  was registered anyway and re-ran on every refresh until the connection
+  closed. A React component that mounts and unmounts quickly could trigger
+  it. The request is now registered before its goroutine starts. Found by the
+  Go client's tests (#399).
+
 ### Removed
 
 - **Breaking: the SSE transport is gone** (#280). `Server.HTTPTransport`,

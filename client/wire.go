@@ -78,14 +78,15 @@ func decodeBinaryFrame(data []byte) (binaryFrameHeader, []byte, error) {
 	if len(data) < 4 {
 		return h, nil, errors.New("binary frame shorter than its length prefix")
 	}
-	n := binary.BigEndian.Uint32(data[:4])
-	if uint64(n) > uint64(len(data)-4) {
+	n := int64(binary.BigEndian.Uint32(data[:4]))
+	rest := data[4:]
+	if n > int64(len(rest)) {
 		return h, nil, errors.New("binary frame header length exceeds frame")
 	}
-	if err := json.Unmarshal(data[4:4+n], &h); err != nil {
+	if err := json.Unmarshal(rest[:n], &h); err != nil {
 		return h, nil, fmt.Errorf("binary frame header: %w", err)
 	}
-	return h, data[4+n:], nil
+	return h, rest[n:], nil
 }
 
 // wireConn is one live connection to the server.

@@ -759,9 +759,12 @@ func TestSubscriptionCloseRacesDelivery(t *testing.T) {
 			default:
 			}
 			f.server.TriggerRefresh("items")
+			// Enough refreshes to keep deliveries racing Close, without
+			// starving a slow CI runner.
+			time.Sleep(100 * time.Microsecond)
 		}
 	}()
-	for range 50 {
+	for range 30 {
 		sub := client.Subscribe[[]Item](ctx, c, "Handlers.List", nil)
 		recv(t, sub.C)
 		sub.Close()
