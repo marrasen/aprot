@@ -53,8 +53,11 @@
 // sees the latest result, never a backlog, and never holds up the connection.
 // Every result is a full snapshot, so a skipped one loses nothing. The
 // subscription survives reconnects; the fresh result after a reconnect
-// arrives on the same C. An error from the server for the subscription
-// closes C, and [Subscription.Err] returns it.
+// arrives on the same C. An error answering the subscribe closes C, and
+// [Subscription.Err] returns it; an error from a later refresh does not (see
+// [OnError]). A reconnect re-sends every subscription at once, so a client
+// holding more subscriptions than the server's MaxConcurrentRequests (256 by
+// default) can see some of them closed with CodeTooManyRequests.
 //
 // [WithPatch] makes the subscription accept the partial updates the server
 // sends with aprot.PatchSubscription. The client applies each patch and
