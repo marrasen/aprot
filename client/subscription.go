@@ -13,20 +13,28 @@ type subEntry interface {
 	method() string
 	params() jsontext.Value
 	wantsPatch() bool
-	// sent records that a subscribe frame is going out, so the next error
-	// for this ID answers it.
-	sent()
+	// sent records that a subscribe frame is going out on conn. Until the
+	// first answer arrives, the subscription holds one of the connection's
+	// subscribe slots (see maxSubscribesInFlight).
+	sent(conn wireConn)
+	// awaitingOn returns the connection whose subscribe frame is still
+	// unanswered, or nil.
+	awaitingOn() wireConn
+	// takeAwaiting clears the unanswered state and returns the connection
+	// it was on, or nil. Exactly one caller gets a non-nil result, and that
+	// caller releases the slot.
+	takeAwaiting() wireConn
 	// deliver hands over a full result. Exactly one of raw and blob is set.
 	deliver(raw jsontext.Value, blob *Blob)
 	// patch applies a subscription_patch payload. It returns false when the
 	// subscription cannot apply it, and the client then re-subscribes to
 	// fetch the full result.
 	patch(raw jsontext.Value) bool
-	// serverError handles an error frame for this ID. An error answering a
-	// subscribe frame closes the subscription; an error from a later
-	// refresh does not, because the server keeps the subscription and a
-	// later refresh may succeed.
-	serverError(err error)
+	// refreshError reports an error from a server-driven refresh. It does
+	// not close the subscription: the server keeps it, and a later refresh
+	// may succeed. (An error answering the subscribe frame closes it; the
+	// client handles that case with fail.)
+	refreshError(err error)
 	// connLost forgets state tied to the dropped connection.
 	connLost()
 	// fail closes the subscription with err.
@@ -100,7 +108,7 @@ type Subscription[T any] struct {
 	err      error
 	current  T
 	hasCur   bool
-	awaiting bool // a subscribe frame is out and not yet answered
+	awaiting wireConn // connection of an unanswered subscribe frame, or nil
 }
 
 // Subscribe opens a subscription to method with params. See [Subscription].
@@ -150,24 +158,83 @@ func Subscribe[T any](ctx context.Context, c *Client, method string, params []an
 	return s
 }
 
+// maxSubscribesInFlight caps how many subscribe frames on one connection
+// may wait for their first answer at once. The server runs each one's first
+// handler call in a request slot, and refuses frames beyond its
+// MaxConcurrentRequests (256 by default) with CodeTooManyRequests. Without
+// a cap, the resubscribe burst after a reconnect, or a program opening
+// hundreds of subscriptions at once, could have some of them refused and
+// closed. Later subscriptions wait in a queue; each answer sends the next.
+const maxSubscribesInFlight = 64
+
 // sendSubscribe sends a subscribe frame for s on conn, unless s has been
-// closed or conn is no longer current. The check and the send happen under
-// subSendMu, which Subscription.end also holds while it removes s and sends
-// unsubscribe, so the two frames always reach the server in the order the
-// decisions were made.
+// closed or conn is no longer current. If maxSubscribesInFlight frames are
+// already unanswered, s is queued instead and sent by releaseSubSlot.
+//
+// The check and the send happen under subSendMu, which Subscription.end
+// also holds while it removes s and sends unsubscribe, so the two frames
+// always reach the server in the order the decisions were made.
 func (c *Client) sendSubscribe(conn wireConn, s subEntry) {
+	// Re-sending for a subscription whose first answer is still pending
+	// (the patch fallback) reuses the slot it already holds.
+	holdsSlot := s.awaitingOn() == conn
+
 	c.subSendMu.Lock()
 	defer c.subSendMu.Unlock()
 	c.mu.Lock()
-	current := c.subs[s.id()] == s && c.conn == conn
-	c.mu.Unlock()
-	if !current {
+	if c.subs[s.id()] != s || c.conn != conn {
+		c.mu.Unlock()
 		return
 	}
-	s.sent()
+	if !holdsSlot {
+		if c.subInFlight >= maxSubscribesInFlight {
+			c.subQueue = append(c.subQueue, s)
+			c.mu.Unlock()
+			return
+		}
+		c.subInFlight++
+	}
+	c.mu.Unlock()
+	c.writeSubscribe(conn, s)
+}
+
+// writeSubscribe marks s as awaiting its answer and writes the frame. The
+// caller holds subSendMu and has taken a slot for s.
+func (c *Client) writeSubscribe(conn wireConn, s subEntry) {
+	s.sent(conn)
 	// A failed write means the connection is dropping; the reconnect
 	// re-sends every subscription.
 	_ = c.send(conn, outFrame{Type: "subscribe", ID: s.id(), Method: s.method(), Params: s.params(), Patch: s.wantsPatch()})
+}
+
+// releaseSubSlot frees the slot of a subscribe frame on conn that has been
+// answered (or whose subscription ended), and sends queued subscriptions
+// into the free slots. A release for a connection that is no longer current
+// is ignored: markConnected and markDisconnected reset the count.
+func (c *Client) releaseSubSlot(conn wireConn) {
+	c.subSendMu.Lock()
+	defer c.subSendMu.Unlock()
+	c.mu.Lock()
+	if c.conn != conn {
+		c.mu.Unlock()
+		return
+	}
+	c.subInFlight--
+	var next []subEntry
+	for c.subInFlight < maxSubscribesInFlight && len(c.subQueue) > 0 {
+		s := c.subQueue[0]
+		c.subQueue[0] = nil
+		c.subQueue = c.subQueue[1:]
+		if c.subs[s.id()] != s {
+			continue // closed while queued
+		}
+		c.subInFlight++
+		next = append(next, s)
+	}
+	c.mu.Unlock()
+	for _, s := range next {
+		c.writeSubscribe(conn, s)
+	}
 }
 
 // Close ends the subscription: it tells the server to stop, and closes C.
@@ -195,7 +262,6 @@ func (s *Subscription[T]) end(err error) {
 	}
 	c := s.client
 	c.subSendMu.Lock()
-	defer c.subSendMu.Unlock()
 	c.mu.Lock()
 	if cur, ok := c.subs[s.subID]; ok && cur == subEntry(s) {
 		delete(c.subs, s.subID)
@@ -206,6 +272,13 @@ func (s *Subscription[T]) end(err error) {
 		// A result already on the wire is dropped by the read loop: the ID
 		// is no longer in the table.
 		_ = c.send(conn, outFrame{Type: "unsubscribe", ID: s.subID})
+	}
+	c.subSendMu.Unlock()
+
+	// A subscription closed before its first answer gives its slot to the
+	// next queued one.
+	if aw := s.takeAwaiting(); aw != nil {
+		c.releaseSubSlot(aw)
 	}
 }
 
@@ -236,10 +309,24 @@ func (s *Subscription[T]) params() jsontext.Value { return s.rawParams }
 func (s *Subscription[T]) wantsPatch() bool       { return s.applyPatch != nil }
 func (s *Subscription[T]) fail(err error)         { s.end(err) }
 
-func (s *Subscription[T]) sent() {
+func (s *Subscription[T]) sent(conn wireConn) {
 	s.mu.Lock()
-	s.awaiting = true
+	s.awaiting = conn
 	s.mu.Unlock()
+}
+
+func (s *Subscription[T]) awaitingOn() wireConn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.awaiting
+}
+
+func (s *Subscription[T]) takeAwaiting() wireConn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	aw := s.awaiting
+	s.awaiting = nil
+	return aw
 }
 
 func (s *Subscription[T]) connLost() {
@@ -247,18 +334,11 @@ func (s *Subscription[T]) connLost() {
 	var zero T
 	s.current = zero
 	s.hasCur = false
-	s.awaiting = false
+	s.awaiting = nil
 	s.mu.Unlock()
 }
 
-func (s *Subscription[T]) serverError(err error) {
-	s.mu.Lock()
-	awaiting := s.awaiting
-	s.mu.Unlock()
-	if awaiting {
-		s.end(err)
-		return
-	}
+func (s *Subscription[T]) refreshError(err error) {
 	if s.onError != nil {
 		s.onError(err)
 		return
@@ -274,7 +354,6 @@ func (s *Subscription[T]) deliver(raw jsontext.Value, blob *Blob) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.awaiting = false
 	s.publishLocked(v)
 }
 

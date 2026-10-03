@@ -55,9 +55,16 @@
 // subscription survives reconnects; the fresh result after a reconnect
 // arrives on the same C. An error answering the subscribe closes C, and
 // [Subscription.Err] returns it; an error from a later refresh does not (see
-// [OnError]). A reconnect re-sends every subscription at once, so a client
-// holding more subscriptions than the server's MaxConcurrentRequests (256 by
-// default) can see some of them closed with CodeTooManyRequests.
+// [OnError]).
+//
+// A subscription costs the server almost nothing while idle: a small entry
+// in two maps, with no goroutine or timer. The cost comes when a trigger
+// fires: the server re-runs the handler once for every subscription on that
+// key. The server runs each subscription's first handler call in one of the
+// connection's request slots (MaxConcurrentRequests, 256 by default). So
+// the client keeps at most 64 subscribe frames waiting for their first
+// answer, and queues the rest. Opening hundreds of subscriptions at once,
+// or re-sending them all after a reconnect, never runs into that limit.
 //
 // [WithPatch] makes the subscription accept the partial updates the server
 // sends with aprot.PatchSubscription. The client applies each patch and

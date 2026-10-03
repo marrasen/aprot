@@ -423,3 +423,70 @@ func TestReconnectHandshakeTimesOut(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+type burstHandlers struct {
+	running atomic.Int64
+	peak    atomic.Int64
+}
+
+func (h *burstHandlers) Get(ctx context.Context, n int) (int, error) {
+	aprot.RegisterRefreshTrigger(ctx, "burst")
+	cur := h.running.Add(1)
+	defer h.running.Add(-1)
+	for {
+		p := h.peak.Load()
+		if cur <= p || h.peak.CompareAndSwap(p, cur) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	return n, nil
+}
+
+// More subscriptions than the server's MaxConcurrentRequests (256), with a
+// handler slow enough that their first runs overlap. Without the client's
+// subscribe cap, the burst at start and the resubscribe burst after a
+// reconnect had some subscriptions refused with CodeTooManyRequests.
+func TestSubscribeBurstStaysUnderServerLimit(t *testing.T) {
+	h := &burstHandlers{}
+	reg := aprot.NewRegistry()
+	reg.Register(h)
+	srv := aprot.NewServer(reg, aprot.ServerOptions{ReconnectInterval: 10, ReconnectMaxInterval: 10})
+	setUser(srv)
+	hs := httptest.NewServer(srv)
+	defer func() {
+		hs.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Stop(ctx)
+	}()
+
+	ctx := testCtx(t)
+	c, err := client.Dial(ctx, "ws"+strings.TrimPrefix(hs.URL, "http"), client.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	const n = 300
+	subs := make([]*client.Subscription[int], n)
+	for i := range subs {
+		subs[i] = client.Subscribe[int](ctx, c, "burstHandlers.Get", []any{i})
+		defer subs[i].Close()
+	}
+	for i, s := range subs {
+		if v := recv(t, s.C); v != i {
+			t.Fatalf("sub %d got %d", i, v)
+		}
+	}
+
+	srv.DisconnectUser("u1")
+	for i, s := range subs {
+		if v := recv(t, s.C); v != i {
+			t.Fatalf("after reconnect, sub %d got %d (Err = %v)", i, v, s.Err())
+		}
+	}
+	if p := h.peak.Load(); p > 64 {
+		t.Fatalf("server ran %d first runs at once; the client cap is 64", p)
+	}
+}

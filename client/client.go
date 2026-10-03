@@ -139,7 +139,12 @@ type Client struct {
 	// reconnect could send unsubscribe first, and the server would keep a
 	// subscription the client has dropped.
 	subSendMu sync.Mutex
-	backoff   backoff
+	// subInFlight counts subscribe frames on the current connection still
+	// waiting for their first answer; subQueue holds the ones waiting for a
+	// slot. Both are reset whenever the connection changes. Guarded by mu.
+	subInFlight int
+	subQueue    []subEntry
+	backoff     backoff
 }
 
 type backoff struct {
@@ -415,6 +420,8 @@ func (c *Client) markConnected(conn wireConn, watch *connWatch) bool {
 	}
 	c.conn = conn
 	c.watch = watch
+	c.subInFlight = 0
+	c.subQueue = nil
 	subs := make([]subEntry, 0, len(c.subs))
 	for _, s := range c.subs {
 		subs = append(subs, s)
@@ -476,6 +483,8 @@ func (c *Client) markDisconnected(conn wireConn, cause error) {
 	}
 	c.conn = nil
 	c.watch = nil
+	c.subInFlight = 0
+	c.subQueue = nil
 	c.ready = make(chan struct{})
 	pending := c.pending
 	c.pending = make(map[string]*pendingCall)
@@ -813,7 +822,14 @@ func (c *Client) handleError(f inFrame) {
 	s := c.subs[f.ID]
 	c.mu.Unlock()
 	if s != nil && f.ID != "" {
-		s.serverError(apiErr)
+		if aw := s.takeAwaiting(); aw != nil {
+			// The error answers the subscribe itself: the server did not
+			// register it.
+			c.releaseSubSlot(aw)
+			s.fail(apiErr)
+		} else {
+			s.refreshError(apiErr)
+		}
 		return
 	}
 	if f.Code == CodeConnectionRejected {
@@ -842,6 +858,9 @@ func (c *Client) deliverResult(id string, raw jsontext.Value, blob *Blob) {
 	c.mu.Unlock()
 	if s != nil {
 		s.deliver(raw, blob)
+		if aw := s.takeAwaiting(); aw != nil {
+			c.releaseSubSlot(aw)
+		}
 	}
 }
 
