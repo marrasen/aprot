@@ -292,7 +292,7 @@ func (h *H) CreateUser(ctx context.Context, req *CreateReq) (*User, error) {
 - `Server.TriggerRefresh(keys...)` for background goroutines / cron / webhooks — flushes immediately, no request context required.
 - `RegisterRefreshTrigger` is a no-op outside subscribe; package-level `TriggerRefresh` is a no-op outside a request context.
 - `TriggerRefresh`/`TriggerRefreshNow` work on every transport — a REST or MCP mutation (or a direct `Server.Invoke`) refreshes subscribed socket clients, provided a `Server` was built from the same registry.
-- Cost: an idle subscription is a small map entry on the server (no goroutine, no timer). Each matching trigger re-runs its handler, so the cost is fan-out × handler cost. Only the first run of a subscribe takes a request slot (`MaxConcurrentRequests`, 256 per connection); the generated client keeps at most 64 subscribe frames waiting for their first answer and queues the rest, so hundreds of subscriptions (and the resubscribe after a reconnect) never trip it.
+- Cost: an idle subscription is a small map entry on the server (no goroutine, no timer). Each matching trigger re-runs its handler, so the cost is fan-out × handler cost. Only the first run of a subscribe takes a request slot (`MaxConcurrentRequests`, 256 per connection); the generated client keeps about 64 subscribe frames waiting for their first answer and queues the rest, so hundreds of subscriptions (and the resubscribe after a reconnect) stay well under it (calls and streams share the limit).
 
 ### Subscription patches (#237)
 

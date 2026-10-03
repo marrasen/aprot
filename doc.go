@@ -746,9 +746,10 @@
 // or timer. Each matching trigger re-runs its handler, so the cost is
 // fan-out times handler cost. Only a subscribe's first run takes a request
 // slot ([ServerOptions].MaxConcurrentRequests, 256 per connection by
-// default). The generated client keeps at most 64 subscribe frames waiting
-// for their first answer, so hundreds of subscriptions, re-sent together
-// after a reconnect, never trip that limit.
+// default, shared with calls and streams). The generated client keeps about
+// 64 subscribe frames waiting for their first answer, so hundreds of
+// subscriptions, re-sent together after a reconnect, stay well under that
+// limit.
 //
 // # Subscription Patches
 //

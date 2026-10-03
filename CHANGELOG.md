@@ -19,7 +19,7 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   reconnect, the generated TypeScript client re-sent every subscription at
   once, so with slow enough queries some were refused, and their `onError`
   fired instead of data arriving. The same could happen when a page opened
-  hundreds of subscriptions at once. The client now keeps at most 64 subscribe
+  hundreds of subscriptions at once. The client now keeps about 64 subscribe
   frames waiting for their first answer and sends the rest as answers arrive.
 
 ### Removed

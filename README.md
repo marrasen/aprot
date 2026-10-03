@@ -696,7 +696,7 @@ Binary delivery is opt-in via the `Blob` type and applies to top-level results o
 
 A subscription costs the server almost nothing while idle: a small entry in two maps, with no goroutine, timer, or polling. The cost comes when a trigger fires: the server re-runs the handler once for every subscription registered on that key, so plan for *fan-out × handler cost* per trigger. Use [Subscription Patches](#subscription-patches) when the change is small and the result is large.
 
-Only the first run of a subscribe takes a request slot, and the server allows `MaxConcurrentRequests` (256 by default) per connection. The generated client keeps at most 64 subscribe frames waiting for their first answer and queues the rest, so a page with hundreds of subscriptions, and the resubscribe after every reconnect, never runs into that limit. The total a connection may hold is `MaxSubscriptions` (1024 by default).
+Only the first run of a subscribe takes a request slot, and the server allows `MaxConcurrentRequests` (256 by default) per connection. That limit is shared with calls and streams. The generated client keeps about 64 subscribe frames waiting for their first answer and queues the rest, so a page with hundreds of subscriptions, and the resubscribe after every reconnect, stays well under it. The trade-off: if 64 first runs are slow, later subscriptions wait for them. The total a connection may hold is `MaxSubscriptions` (1024 by default).
 
 ## Subscription Patches
 
