@@ -183,6 +183,33 @@ consistent with them.
   cannot use the pull pattern and a measurement of what it costs them.
   Ruling recorded for #387 and #389.
 
+- **A Go client is in; a second wire codec is out.** `aprot/client` and the
+  Go generator (#399) give Go programs what the TypeScript client gives a
+  browser: calls, streams, push events, and subscriptions that survive a
+  reconnect. It is a client of the existing JSON protocol, so it needs no
+  server change, no new dispatch path, and no new column in
+  `matrix_test.go`. The generated package copies the wire shape of every
+  type instead of importing the server's, so a client program does not
+  inherit the server's dependencies.
+
+  The paired **no** is gob. It was proposed for smaller, faster Go-to-Go
+  payloads. Gob ignores `json` tags, `omitempty`, `MarshalJSON` and
+  `format:` tags, so the same handler result would look different over gob
+  than over WebSocket, REST or MCP. That breaks the rule that a
+  client-visible result never depends on the transport. The server is also
+  JSON all the way through, not just at the edge: params arrive as
+  `jsontext.Value`, subscriptions keep raw JSON params to re-run them, and
+  patches and stream chunks are pre-marshaled JSON. A second codec would run
+  through every one of those paths, which is the tax that removed SSE
+  (#280). Payload size is a transport concern with a cheaper answer that
+  helps every client: WebSocket compression (#398).
+
+  The client's subscription channel holds one value and the newest wins.
+  That is the client deciding about its own data, which is why it is fine
+  here and droppable pushes were not: every subscription result is a full
+  snapshot, so skipping one loses nothing, and the decision never reaches
+  the server's queue. Ruling recorded for #399.
+
 - **Reporting what the connection is doing is in; deciding when that is
   wrong is out.** `ServerStats.InFlightRequests`, `OldestRequestAge`,
   `Server.InFlightRequests()` and `Conn.InFlightRequests()` report the

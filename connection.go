@@ -264,9 +264,10 @@ func (c *Conn) dispatchRequest(msg IncomingMessage) {
 		return
 	}
 	c.server.requestsWg.Add(1)
+	reg := c.beginRequest(msg.ID, msg.Method, false)
 	go func() {
 		defer c.releaseRequestSlot()
-		c.handleRequest(msg)
+		c.handleRequest(msg, reg)
 	}()
 }
 
@@ -277,10 +278,30 @@ func (c *Conn) dispatchSubscribe(msg IncomingMessage) {
 		return
 	}
 	c.server.requestsWg.Add(1)
+	reg := c.beginRequest(msg.ID, msg.Method, true)
 	go func() {
 		defer c.releaseRequestSlot()
-		c.handleSubscribe(msg)
+		c.runSubscribe(msg, reg)
 	}()
+}
+
+// requestReg is a request registered in c.requests before its goroutine
+// starts.
+type requestReg struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+}
+
+// beginRequest creates the request's context and registers it, so a cancel
+// or unsubscribe frame can find it. Dispatch calls it on the read loop,
+// before spawning the handler goroutine. Registering inside the goroutine
+// left a window in which a cancel or unsubscribe arriving right behind its
+// request found nothing: the cancel was lost, and the subscription was
+// registered anyway and re-ran until the connection closed.
+func (c *Conn) beginRequest(id, method string, subscribe bool) requestReg {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	c.registerRequest(id, method, subscribe, cancel)
+	return requestReg{ctx: ctx, cancel: cancel}
 }
 
 // ServerBroadcaster returns the server as a Broadcaster.
@@ -776,8 +797,12 @@ func (c *Conn) armAuthTimeout(d time.Duration) {
 	c.mu.Unlock()
 }
 
-func (c *Conn) handleRequest(msg IncomingMessage) {
+func (c *Conn) handleRequest(msg IncomingMessage, reg requestReg) {
 	defer c.server.requestsWg.Done()
+	defer func() {
+		c.unregisterRequest(msg.ID, reg.cancel)
+		reg.cancel(nil)
+	}()
 
 	// Report the completed request to the observer (if any). reqCode is updated
 	// at each terminal branch; this defer runs after the panic-recovery defer
@@ -818,12 +843,7 @@ func (c *Conn) handleRequest(msg IncomingMessage) {
 		return
 	}
 
-	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(msg.ID, msg.Method, false, cancel)
-	defer func() {
-		c.unregisterRequest(msg.ID, cancel)
-		cancel(nil)
-	}()
+	ctx := reg.ctx
 
 	// Add progress reporter and connection to context
 	progress := newProgressReporter(c, msg.ID)
@@ -1043,7 +1063,15 @@ func (c *Conn) sendStreamEnd(reqID string, err error) {
 }
 
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
+	c.runSubscribe(msg, c.beginRequest(msg.ID, msg.Method, true))
+}
+
+func (c *Conn) runSubscribe(msg IncomingMessage, reg requestReg) {
 	defer c.server.requestsWg.Done()
+	defer func() {
+		c.unregisterRequest(msg.ID, reg.cancel)
+		reg.cancel(nil)
+	}()
 
 	// Report the completed subscribe to the observer (if any). See handleRequest
 	// for the defer-ordering rationale.
@@ -1086,12 +1114,7 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 		return
 	}
 
-	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(msg.ID, msg.Method, true, cancel)
-	defer func() {
-		c.unregisterRequest(msg.ID, cancel)
-		cancel(nil)
-	}()
+	ctx := reg.ctx
 
 	// Add standard context values
 	progress := newProgressReporter(c, msg.ID)
