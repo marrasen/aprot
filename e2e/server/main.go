@@ -31,6 +31,7 @@ func main() {
 	})
 
 	state.Broadcaster = server
+	e2eapi.Burst.Disconnect = server.DisconnectUser
 	state.UserPusher = server
 
 	restAdapter := aprot.NewRESTAdapter(registry)

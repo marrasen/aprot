@@ -10,6 +10,18 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client with hundreds of subscriptions no longer has some refused
+  after a reconnect.** The server runs each subscription's first query in one
+  of the connection's request slots, and refuses frames beyond
+  `MaxConcurrentRequests` (256 by default) with `CodeTooManyRequests`. After a
+  reconnect, the generated TypeScript client re-sent every subscription at
+  once, so with slow enough queries some were refused, and their `onError`
+  fired instead of data arriving. The same could happen when a page opened
+  hundreds of subscriptions at once. The client now keeps at most 64 subscribe
+  frames waiting for their first answer and sends the rest as answers arrive.
+
 ### Removed
 
 - **Breaking: the SSE transport is gone** (#280). `Server.HTTPTransport`,
