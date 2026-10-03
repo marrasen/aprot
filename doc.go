@@ -1255,6 +1255,10 @@
 // so a client can refuse an oversized frame locally instead of losing the
 // connection.
 //
+// The auth_error the server sends when [ServerOptions].AuthTimeout fires
+// carries "timeout": true. It precedes a close and is not a verdict on any
+// auth frame, which may be crossing it on the wire.
+//
 // # Design Scope
 //
 // aprot owns transport concerns — how a call arrives, how a credential

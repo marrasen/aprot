@@ -63,6 +63,12 @@ type SubscriptionPatchMessage struct {
 type AuthResultMessage struct {
 	Type    MessageType `json:"type"`
 	Message string      `json:"message,omitempty"`
+	// Timeout marks the auth_error the server sends when the pending-auth
+	// timeout ([ServerOptions].AuthTimeout) fires, just before it closes the
+	// connection. It is not a verdict on any auth frame: one may be crossing
+	// it on the wire. Clients treat it as a connection about to close, not
+	// as a rejected token.
+	Timeout bool `json:"timeout,omitzero"`
 }
 
 // ResponseMessage represents a successful response from server to client.

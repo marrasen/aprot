@@ -87,6 +87,14 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 - **A frame with an unknown method no longer cancels another request** that
   uses the same ID. It is rejected before it is registered.
 
+- **A pending-auth timeout no longer reads as a rejected token.** When the
+  server's `AuthTimeout` fired just as the client's auth frame arrived, the
+  timeout's `auth_error` crossed it on the wire, and the client took it as
+  the verdict on its token. It then stopped reconnecting for good, though the
+  token was valid. The timeout's `auth_error` now carries `"timeout": true`,
+  and the generated TypeScript client and the Go client treat it as a
+  closing connection, not a rejection. Older clients ignore the field.
+
 - **A client cancel is reported as `CodeCanceled`**, not as an internal
   error, when the principal provider returns the cancelled context's error.
 

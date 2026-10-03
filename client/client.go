@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -263,6 +264,11 @@ func DialStream(ctx context.Context, dial func(ctx context.Context) (io.ReadWrit
 	maxSize := opts.MaxMessageSize
 	if maxSize <= 0 {
 		maxSize = defaultMaxMessageSize
+	}
+	// The line scanner needs room for the newline, and a larger limit means
+	// no practical limit anyway (math.MaxInt would overflow).
+	if maxSize >= math.MaxInt32 {
+		maxSize = math.MaxInt32 - 1
 	}
 	return start(ctx, opts, func(ctx context.Context) (wireConn, error) {
 		rw, err := dial(ctx)
@@ -885,6 +891,13 @@ func (c *Client) handleFrame(conn wireConn, watch *connWatch, f inFrame) {
 	case "error":
 		c.handleError(conn, f)
 	case "auth_ok", "auth_error":
+		if f.Timeout && c.opts.AuthToken != nil {
+			// The server's pending-auth timeout fired; it closes the
+			// connection next. It is not the verdict on our auth frame,
+			// which may be crossing it, so the close takes the normal
+			// reconnect path instead of being treated as a rejection.
+			return
+		}
 		solicited := watch.authSent.Add(-1) >= 0
 		if !solicited {
 			watch.authSent.Store(0)

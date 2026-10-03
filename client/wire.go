@@ -47,11 +47,13 @@ type outFrame struct {
 // inFrame is the union of every server-to-client message. Only the fields
 // the frame's type uses are set.
 type inFrame struct {
-	Type    string           `json:"type"`
-	ID      string           `json:"id"`
-	Result  jsontext.Value   `json:"result"`
-	Code    int              `json:"code"`
-	Message string           `json:"message"`
+	Type    string         `json:"type"`
+	ID      string         `json:"id"`
+	Result  jsontext.Value `json:"result"`
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	// Timeout marks the server's pending-auth timeout auth_error.
+	Timeout bool             `json:"timeout"`
 	Data    jsontext.Value   `json:"data"`
 	Event   string           `json:"event"`
 	Item    jsontext.Value   `json:"item"`

@@ -222,3 +222,28 @@ describe('Frames sent while authenticating', () => {
         expect(t.sent).toEqual([]);
     });
 });
+
+describe('The pending-auth timeout', () => {
+    // The server's timeout auth_error is marked timeout: true. It can cross
+    // the client's auth frame on the wire, so it must not be taken as the
+    // verdict on that frame: the close that follows is an ordinary close.
+    test('a timeout auth_error crossing the auth frame is not a rejection', async () => {
+        const { t, client, connected, giveToken } = await connectWithSlowToken();
+        let rejected = false;
+        const c2 = client as unknown as { options: { onConnectionRejected?: () => void } };
+        c2.options.onConnectionRejected = () => { rejected = true; };
+
+        giveToken();
+        await tick();
+        expect(t.sent.map((m) => m.type)).toEqual(['auth']);
+        t.serverSend({ type: 'auth_error', message: 'authentication timeout', timeout: true });
+        await tick();
+        t.serverClose();
+        await connected;
+        await tick();
+
+        expect(rejected).toBe(false);
+        expect(client.getLastRejection()).toBeNull();
+        expect(client.getLastConnectionError()?.reason).toBe('server-closed');
+    });
+});

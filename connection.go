@@ -648,6 +648,16 @@ func (c *Conn) unregisterRequest(id string, seq uint64) (refreshAgain bool) {
 	return false
 }
 
+// runDeferredRefresh runs a refresh that registerRefresh deferred to a
+// request with the same ID, once that request has finished. The caller still
+// holds its own requestsWg count, so Add here cannot race a Wait to zero.
+func (c *Conn) runDeferredRefresh(id string) {
+	if sub := c.server.subscriptions.get(c.id, id); sub != nil {
+		c.server.requestsWg.Add(1)
+		go c.refreshSubscription(sub)
+	}
+}
+
 // registerRefresh registers a server-driven refresh of subscription id, the
 // way registerRequest does, with one difference. A refresh must not cancel a
 // client subscribe for the same ID that is still running: the client would
@@ -908,7 +918,7 @@ func (c *Conn) armAuthTimeout(d time.Duration) {
 		if c.isAuthenticated() {
 			return
 		}
-		c.sendAuthError("authentication timeout")
+		_ = c.sendJSON(AuthResultMessage{Type: TypeAuthError, Message: "authentication timeout", Timeout: true})
 		c.close()
 	})
 	c.mu.Lock()
@@ -919,8 +929,14 @@ func (c *Conn) armAuthTimeout(d time.Duration) {
 func (c *Conn) handleRequest(msg IncomingMessage, info *HandlerInfo, reg requestReg) {
 	defer c.server.requestsWg.Done()
 	defer func() {
-		c.unregisterRequest(msg.ID, reg.seq)
+		again := c.unregisterRequest(msg.ID, reg.seq)
 		reg.cancel(nil)
+		if again {
+			// A buggy or hostile client reused a subscription's ID for this
+			// request, and a refresh of that subscription came due meanwhile
+			// (registerRefresh). Run it, so the subscriber does not miss it.
+			c.runDeferredRefresh(msg.ID)
+		}
 	}()
 
 	// Report the completed request to the observer (if any). reqCode is updated
@@ -1201,10 +1217,7 @@ func (c *Conn) runSubscribe(msg IncomingMessage, info *HandlerInfo, reg requestR
 		if again {
 			// A refresh came due while this subscribe ran (registerRefresh).
 			// Run it now; it no-ops if the subscribe did not register.
-			if sub := c.server.subscriptions.get(c.id, msg.ID); sub != nil {
-				c.server.requestsWg.Add(1)
-				go c.refreshSubscription(sub)
-			}
+			c.runDeferredRefresh(msg.ID)
 		}
 	}()
 

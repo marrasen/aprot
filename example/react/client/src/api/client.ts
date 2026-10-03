@@ -1360,6 +1360,10 @@ export class ApiClient {
                 // auth frame went out answers it; an earlier one answers some
                 // other frame or is the server's pending-auth timeout, which
                 // closes the connection (handleClose settles the waiter).
+                // The pending-auth timeout's auth_error is marked timeout: it
+                // can cross the auth frame on the wire, so it is never a
+                // verdict on it. The close that follows reconnects normally.
+                if (msg.timeout) break;
                 const waiter = this.authWaiter;
                 if (!waiter?.sent) break;
                 this.authWaiter = null;
