@@ -89,7 +89,7 @@ func (h HandlersClient) CreateUser(ctx context.Context, name string, email strin
 
 // SubscribeCreateUser runs CreateUser as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeCreateUser(ctx context.Context, name string, email string, opts ...client.SubscribeOption[*CreateUserResponse]) *client.Subscription[*CreateUserResponse] {
+func (h HandlersClient) SubscribeCreateUser(ctx context.Context, name string, email string, opts ...client.SubscribeOption) *client.Subscription[*CreateUserResponse] {
 	return client.Subscribe[*CreateUserResponse](ctx, h.c, "Handlers.CreateUser", []any{name, email}, opts...)
 }
 
@@ -101,7 +101,7 @@ func (h HandlersClient) GetDashboard(ctx context.Context) (*GetDashboardResponse
 
 // SubscribeGetDashboard runs GetDashboard as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeGetDashboard(ctx context.Context, opts ...client.SubscribeOption[*GetDashboardResponse]) *client.Subscription[*GetDashboardResponse] {
+func (h HandlersClient) SubscribeGetDashboard(ctx context.Context, opts ...client.SubscribeOption) *client.Subscription[*GetDashboardResponse] {
 	return client.Subscribe[*GetDashboardResponse](ctx, h.c, "Handlers.GetDashboard", nil, opts...)
 }
 
@@ -112,7 +112,7 @@ func (h HandlersClient) GetTask(ctx context.Context, id string) (*GetTaskRespons
 
 // SubscribeGetTask runs GetTask as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeGetTask(ctx context.Context, id string, opts ...client.SubscribeOption[*GetTaskResponse]) *client.Subscription[*GetTaskResponse] {
+func (h HandlersClient) SubscribeGetTask(ctx context.Context, id string, opts ...client.SubscribeOption) *client.Subscription[*GetTaskResponse] {
 	return client.Subscribe[*GetTaskResponse](ctx, h.c, "Handlers.GetTask", []any{id}, opts...)
 }
 
@@ -123,7 +123,7 @@ func (h HandlersClient) GetUser(ctx context.Context, id string) (*GetUserRespons
 
 // SubscribeGetUser runs GetUser as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeGetUser(ctx context.Context, id string, opts ...client.SubscribeOption[*GetUserResponse]) *client.Subscription[*GetUserResponse] {
+func (h HandlersClient) SubscribeGetUser(ctx context.Context, id string, opts ...client.SubscribeOption) *client.Subscription[*GetUserResponse] {
 	return client.Subscribe[*GetUserResponse](ctx, h.c, "Handlers.GetUser", []any{id}, opts...)
 }
 
@@ -134,7 +134,7 @@ func (h HandlersClient) ListUsers(ctx context.Context) (*ListUsersResponse, erro
 
 // SubscribeListUsers runs ListUsers as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeListUsers(ctx context.Context, opts ...client.SubscribeOption[*ListUsersResponse]) *client.Subscription[*ListUsersResponse] {
+func (h HandlersClient) SubscribeListUsers(ctx context.Context, opts ...client.SubscribeOption) *client.Subscription[*ListUsersResponse] {
 	return client.Subscribe[*ListUsersResponse](ctx, h.c, "Handlers.ListUsers", nil, opts...)
 }
 
@@ -148,7 +148,7 @@ func (h HandlersClient) ProcessBatch(ctx context.Context, items []string, delay 
 
 // SubscribeProcessBatch runs ProcessBatch as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeProcessBatch(ctx context.Context, items []string, delay int, opts ...client.SubscribeOption[*ProcessBatchResponse]) *client.Subscription[*ProcessBatchResponse] {
+func (h HandlersClient) SubscribeProcessBatch(ctx context.Context, items []string, delay int, opts ...client.SubscribeOption) *client.Subscription[*ProcessBatchResponse] {
 	return client.Subscribe[*ProcessBatchResponse](ctx, h.c, "Handlers.ProcessBatch", []any{items, delay}, opts...)
 }
 
@@ -159,7 +159,7 @@ func (h HandlersClient) SendNotification(ctx context.Context, message string, le
 
 // SubscribeSendNotification runs SendNotification as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeSendNotification(ctx context.Context, message string, level string, opts ...client.SubscribeOption[*SystemNotificationEvent]) *client.Subscription[*SystemNotificationEvent] {
+func (h HandlersClient) SubscribeSendNotification(ctx context.Context, message string, level string, opts ...client.SubscribeOption) *client.Subscription[*SystemNotificationEvent] {
 	return client.Subscribe[*SystemNotificationEvent](ctx, h.c, "Handlers.SendNotification", []any{message, level}, opts...)
 }
 
@@ -173,7 +173,7 @@ func (h HandlersClient) StartSharedWork(ctx context.Context, title string, steps
 
 // SubscribeStartSharedWork runs StartSharedWork as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h HandlersClient) SubscribeStartSharedWork(ctx context.Context, title string, steps []string, delay int, opts ...client.SubscribeOption[*StartSharedWorkResponse]) *client.Subscription[*StartSharedWorkResponse] {
+func (h HandlersClient) SubscribeStartSharedWork(ctx context.Context, title string, steps []string, delay int, opts ...client.SubscribeOption) *client.Subscription[*StartSharedWorkResponse] {
 	return client.Subscribe[*StartSharedWorkResponse](ctx, h.c, "Handlers.StartSharedWork", []any{title, steps, delay}, opts...)
 }
 
@@ -217,7 +217,7 @@ func (h TasksHandlerClient) ListTasks(ctx context.Context) ([]SharedTaskState, e
 
 // SubscribeListTasks runs ListTasks as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h TasksHandlerClient) SubscribeListTasks(ctx context.Context, opts ...client.SubscribeOption[[]SharedTaskState]) *client.Subscription[[]SharedTaskState] {
+func (h TasksHandlerClient) SubscribeListTasks(ctx context.Context, opts ...client.SubscribeOption) *client.Subscription[[]SharedTaskState] {
 	return client.Subscribe[[]SharedTaskState](ctx, h.c, "tasksHandler.ListTasks", nil, opts...)
 }
 

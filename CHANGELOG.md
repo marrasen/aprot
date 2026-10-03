@@ -28,9 +28,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   where the newest wins. It survives reconnects. Close it with
   `defer sub.Close()`, or the server keeps re-running the handler.
 
-  The client speaks the existing JSON protocol, so the server is unchanged.
-  Gob was considered and ruled out; the reasons are in `docs/scope.md`.
-  Smaller payloads are tracked as WebSocket compression (#398).
+  The client also pings to detect dead connections (`PingInterval`), can
+  retry a rejected reconnect (`ReconnectOnRejected`), and refuses a frame
+  larger than the server accepts with `ErrMessageTooLarge` instead of losing
+  the connection.
+
+  The client speaks the existing JSON protocol. Gob was considered and ruled
+  out; the reasons are in `docs/scope.md`. Smaller payloads are tracked as
+  WebSocket compression (#398).
+
+- **The config frame announces the server's `MaxMessageSize`**
+  (`maxMessageSize`, in bytes), so a client can refuse an oversized frame
+  locally. It is left out when the limit is disabled. Existing clients ignore
+  it.
 
 ### Fixed
 
@@ -41,8 +51,57 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   reconnect, the generated TypeScript client re-sent every subscription at
   once, so with slow enough queries some were refused, and their `onError`
   fired instead of data arriving. The same could happen when a page opened
-  hundreds of subscriptions at once. The client now keeps about 64 subscribe
-  frames waiting for their first answer and sends the rest as answers arrive.
+  hundreds of subscriptions at once, or swapped one large set for another
+  (a route change). The client now keeps about 64 subscribe frames waiting
+  for their first answer and sends the rest as answers arrive. A subscription
+  unsubscribed before its answer keeps its slot until the server replies (or
+  10 seconds pass), because the server's slot stays busy until that handler
+  returns.
+
+- **The TypeScript client no longer sends frames before auth completes.**
+  With an async `getAuthToken`, a request, subscribe or stream made while the
+  token was loading went out before the auth frame. The server answered with
+  an `auth_error`, which the client took as the answer to its own auth, so
+  the connection was rejected. Requests and streams now wait for the
+  connection to be ready, and subscriptions are sent when it is. A stream
+  started while connecting or reconnecting now waits for the connection too,
+  instead of failing at once. A close or `disconnect()` while the token is
+  loading no longer leaves `connect()` hanging, and `disconnect()` followed by
+  `connect()` in the same tick connects instead of staying disconnected.
+
+- **A reused request ID can no longer make a request uncancellable.** The
+  guard for a client reusing an in-flight request ID (#225) compared cancel
+  functions by address, which is the same for every cancel function. When
+  the shadowed request finished, it removed the new request's entry. The new
+  request then ignored cancel and unsubscribe, was skipped on disconnect,
+  was missing from `InFlightRequests`, and could stall `Server.Stop`. Through
+  a refresh racing a re-subscribe, it could also leave a subscription running
+  after the client unsubscribed. Entries are now matched by registration.
+
+- **A server-driven refresh no longer cancels a re-subscribe in flight.** The
+  client got a "request canceled" error for a subscription it never
+  cancelled, and the re-subscribe's new params were lost. The refresh now
+  waits: the re-subscribe runs it once it finishes, so a change that landed
+  meanwhile still reaches the client.
+
+- **A frame with an unknown method no longer cancels another request** that
+  uses the same ID. It is rejected before it is registered.
+
+- **A pending-auth timeout no longer reads as a rejected token.** When the
+  server's `AuthTimeout` fired just as the client's auth frame arrived, the
+  timeout's `auth_error` crossed it on the wire, and the client took it as
+  the verdict on its token. It then stopped reconnecting for good, though the
+  token was valid. The timeout's `auth_error` now carries `"timeout": true`,
+  and the generated TypeScript client and the Go client treat it as a
+  closing connection, not a rejection. Older clients ignore the field.
+
+- **A client cancel is reported as `CodeCanceled`**, not as an internal
+  error, when the principal provider returns the cancelled context's error.
+
+- **The byte-stream transport enforces `MaxMessageSize` exactly.** It
+  rejected a frame of exactly the limit, and a limit below 64 KiB was raised
+  to 64 KiB. A frame of exactly the limit is accepted with either `\n` or
+  `\r\n` line endings.
 
 - **An unsubscribe or cancel right behind its subscribe or request is no
   longer lost.** The server registered a request inside the goroutine that
@@ -70,10 +129,21 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   tax, not the lack of users, is what decided it. Ruling recorded in
   `docs/scope.md`.
 
-  **Migration:** drop the `/sse` routes and construct the client without the
-  `transport` option (or with `transport: 'websocket'`, which is the default).
-  Nothing else changes — the wire protocol, handlers, hooks, and generated
-  client API are identical over WebSocket.
+  **Migration:**
+  1. Drop the `/sse` routes, and mount the WebSocket handler if you don't
+     already: `http.Handle("/ws", server)`.
+  2. Construct the client without the `transport` option (or with
+     `transport: 'websocket'`, the default). Point it at the WebSocket
+     endpoint: replace `getSSEUrl()` with `getWebSocketUrl()`.
+  3. **If you authenticate with cookies, add an origin check:**
+     `server.SetCheckOrigin(aprot.SameOriginCheck())`. The SSE path was
+     protected by CORS preflight and never sent cookies cross-origin. A
+     WebSocket upgrade accepts any `Origin` by default, so without the check
+     another site's page can open a socket with your user's cookies
+     (cross-site WebSocket hijacking).
+
+  The wire protocol, handlers, and hooks are otherwise identical over
+  WebSocket.
 
   What stays is everything that was never SSE-specific: the internal
   `transport` interface, `SupportsBinary`, the `$blob` JSON fallback, the

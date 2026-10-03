@@ -63,6 +63,12 @@ type SubscriptionPatchMessage struct {
 type AuthResultMessage struct {
 	Type    MessageType `json:"type"`
 	Message string      `json:"message,omitempty"`
+	// Timeout marks the auth_error the server sends when the pending-auth
+	// timeout ([ServerOptions].AuthTimeout) fires, just before it closes the
+	// connection. It is not a verdict on any auth frame: one may be crossing
+	// it on the wire. Clients treat it as a connection about to close, not
+	// as a rejected token.
+	Timeout bool `json:"timeout,omitzero"`
 }
 
 // ResponseMessage represents a successful response from server to client.
@@ -152,4 +158,11 @@ type ConfigMessage struct {
 	// than by hanging on one. An absent field means a server predating the
 	// negotiation, i.e. binary frames on WebSocket.
 	BinaryFrames bool `json:"binaryFrames"`
+	// MaxMessageSize is the largest inbound message, in bytes, the server
+	// accepts on this connection (ServerOptions.MaxMessageSize after
+	// defaults). A larger message closes the connection, so a client can use
+	// this to refuse an oversized frame locally and fail just that call
+	// instead. Omitted when the limit is disabled, and by servers predating
+	// the field; a client should then apply no local limit.
+	MaxMessageSize int64 `json:"maxMessageSize,omitzero"`
 }

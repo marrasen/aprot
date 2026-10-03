@@ -177,7 +177,10 @@ func TestGoClientRoundTripSubscriptionAndPush(t *testing.T) {
 	remove := api.OnItemAdded(func(ev goclienttest.ItemAdded) { pushed <- ev })
 	defer remove()
 
-	sub := api.Items.SubscribeList(ctx, goclienttest.StatusDone)
+	// client.OnError needs no type argument on a generated Subscribe method.
+	sub := api.Items.SubscribeList(ctx, goclienttest.StatusDone, client.OnError(func(err error) {
+		t.Errorf("refresh error: %v", err)
+	}))
 	defer sub.Close()
 
 	select {

@@ -59,6 +59,8 @@ func (f *fakeConn) write(data []byte) error {
 	return nil
 }
 
+func (f *fakeConn) setOutboundLimit(int64) {}
+
 func (f *fakeConn) close() error { f.once.Do(func() { close(f.closed) }); return nil }
 
 func (f *fakeConn) take() []outFrame {

@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
+	"fmt"
 )
 
 // Progress is one progress report from a running handler.
@@ -39,7 +41,8 @@ type pendingCall struct {
 // only an error.
 //
 // While the client is reconnecting, Call waits for the connection; bound the
-// wait with ctx. A call in flight when the connection drops fails with
+// wait with ctx. A request larger than the server accepts fails with
+// [ErrMessageTooLarge] without being sent. A call in flight when the connection drops fails with
 // [ErrConnectionLost] and is not retried. Cancelling ctx sends a cancel to
 // the server and returns ctx.Err().
 func Call[T any](ctx context.Context, c *Client, method string, params []any) (T, error) {
@@ -75,10 +78,15 @@ func (c *Client) call(ctx context.Context, method string, params []any) (jsontex
 		c.mu.Unlock()
 
 		if err := c.send(conn, outFrame{Type: "request", ID: id, Method: method, Params: paramsRaw}); err != nil {
+			if errors.Is(err, ErrMessageTooLarge) {
+				// Refused locally; the connection is fine.
+				c.takePending(id)
+				return nil, nil, err
+			}
 			// The read loop will notice the broken connection and fail
 			// every pending call; take this one back first if it can.
 			if c.takePending(id) {
-				return nil, nil, ErrConnectionLost
+				return nil, nil, fmt.Errorf("%w: %v", ErrConnectionLost, err)
 			}
 		}
 

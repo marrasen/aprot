@@ -986,10 +986,10 @@
 // MarshalText becomes its wire shape. [GoGeneratorOptions].ImportTypes
 // lists third-party packages to reference directly instead.
 //
-// Every unary handler also gets a Subscribe<Method> that returns a
-// *client.Subscription[T]. Each new result arrives on its channel C, which
-// holds one value: the newest wins, so a slow reader never holds up the
-// connection. The subscription survives reconnects. Close it (or cancel its
+// Every unary handler that returns a result also gets a Subscribe<Method>
+// that returns a *client.Subscription[T]. Each new result arrives on its
+// channel C, which holds one value: the newest wins, so a slow reader never
+// holds up the connection. The subscription survives reconnects. Close it (or cancel its
 // ctx) when you stop reading, or the server keeps re-running the handler:
 //
 //	user := api.Handlers.SubscribeGetUser(ctx, id)
@@ -1242,10 +1242,22 @@
 //
 // # Wire Protocol
 //
-// Messages are JSON objects with a "type" field. Client-to-server: request,
-// cancel, subscribe, unsubscribe. Server-to-client: response, error, progress,
-// push, config, subscription_patch. Streaming adds
-// stream_item / stream_chunk / stream_end.
+// Messages are JSON objects with a "type" field. Client-to-server: auth,
+// request, cancel, subscribe, unsubscribe. Server-to-client: config,
+// auth_ok, auth_error, response, error, progress, push, subscription_patch.
+// Streaming adds stream_item / stream_chunk / stream_end. A Blob result may
+// arrive as a binary frame instead of a response (see Binary Blob Responses).
+//
+// The config frame is the first frame on every connection. It carries the
+// reconnect settings from [ServerOptions], "binaryFrames", and
+// "maxMessageSize": the largest inbound message in bytes the server
+// accepts (left out when [ServerOptions].MaxMessageSize disables the limit),
+// so a client can refuse an oversized frame locally instead of losing the
+// connection.
+//
+// The auth_error the server sends when [ServerOptions].AuthTimeout fires
+// carries "timeout": true. It precedes a close and is not a verdict on any
+// auth frame, which may be crossing it on the wire.
 //
 // # Design Scope
 //

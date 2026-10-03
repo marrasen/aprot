@@ -274,8 +274,8 @@ export interface TransportCloseInfo {
  * - connect() resolves once the channel is ready; deliver every inbound
  *   protocol message to onMessage as a JSON string, and call onClose exactly
  *   once when the channel ends (after a successful connect).
- * - connect() must settle within a bounded time (the built-in transports
- *   give up after ApiClientOptions.connectTimeout). A promise that never
+ * - connect() must settle within a bounded time (the built-in WebSocket
+ *   transport gives up after ApiClientOptions.connectTimeout). A promise that never
  *   settles pins the client in 'connecting', where connect() is a no-op
  *   and nothing can start a fresh attempt.
  * - send() receives a protocol message object; serialize it (e.g.
@@ -471,7 +471,9 @@ class WebSocketTransport implements ClientTransport {
             ws.onmessage = (e) => onMessage(e.data);
             ws.onclose = (event) => {
                 if (timer) clearTimeout(timer);
-                this.ws = null;
+                // Only forget this socket: after disconnect() a newer socket
+                // may already be current, and its close must not erase it.
+                if (this.ws === ws) this.ws = null;
                 // Surface the structured CloseEvent so the ApiClient can
                 // distinguish a clean post-upgrade close (codes 1000-1015,
                 // 4xxx) from a pre-upgrade abnormal closure (1006). The
@@ -573,6 +575,25 @@ export class ApiClient {
     private static readonly maxSubscribesInFlight = 64;
     private subscribesInFlight = new Set<string>();
     private subscribeQueue: string[] = [];
+    // Unsubscribing a subscription whose first answer has not arrived frees
+    // its slot here at once, but not its server slot: that stays taken until
+    // the handler returns. These ids are tracked until any frame for them
+    // arrives (the result, or the "canceled" error), or until
+    // subscribeDrainTimeoutMs passes — the server sends nothing when the
+    // cancel lands in a narrow window after the handler ran, so the timer
+    // makes sure a slot is never held for good. New subscribe frames go out
+    // only while live and unsubscribed waiting frames together stay under
+    // twice maxSubscribesInFlight. So a page that swaps its subscriptions
+    // for new ones (a route change) sends the new ones at once, and rapid
+    // repeated swaps still cannot push the server past its limit.
+    private static readonly subscribeDrainTimeoutMs = 10000;
+    private subscribesDraining = new Map<string, ReturnType<typeof setTimeout>>();
+    // drainScheduled is set while a microtask that sends queued
+    // subscriptions into free slots is pending. Draining later, not in the
+    // call that frees the slot, lets a loop that unsubscribes many
+    // subscriptions finish before anything is sent: queued ids it removes
+    // are then skipped instead of being sent and cancelled straight away.
+    private drainScheduled = false;
     // Ids to re-send once their pending first answer arrives (see
     // sendSubscribe).
     private subscribeResend = new Set<string>();
@@ -588,10 +609,22 @@ export class ApiClient {
     // connectInFlight is the attempt doConnect() is currently running, so a
     // second caller joins it instead of opening a competing socket.
     private connectInFlight: Promise<void> | null = null;
+    // disconnectGeneration counts disconnect() calls. An attempt started
+    // before the latest disconnect() is abandoned: connect() must not join it.
+    private disconnectGeneration = 0;
+    private connectInFlightGeneration = 0;
     private manualDisconnect = false;
     // authWaiter resolves/rejects the in-flight auth handshake (initial connect
     // or refreshAuth) when the server's auth_ok / auth_error arrives.
-    private authWaiter: { resolve: () => void; reject: (error: Error) => void } | null = null;
+    // sent turns true once the auth frame is on the wire. Until then an
+    // auth_error cannot be the reply to it: the server sends an id-less
+    // auth_error for any other frame that arrives before auth succeeds, and
+    // for its pending-auth timeout.
+    private authWaiter: { resolve: () => void; reject: (error: Error) => void; sent: boolean } | null = null;
+    // Streams started while the client is connecting or reconnecting. They
+    // start once the connection is ready, like buffered requests, and end
+    // with the connection error if the client gives up.
+    private streamStarts = new Set<{ start: () => void; fail: (error: Error) => void }>();
     // pendingRejection is set when the server sends a ConnectionRejected
     // ApiError just before tearing down the transport. handleClose() reads
     // it so the resulting ConnectionError carries reason 'server-rejected'
@@ -701,11 +734,24 @@ export class ApiClient {
         if (this.state === 'connected' && this.transport.isConnected()) {
             return Promise.resolve();
         }
-        if (this.connectInFlight) return this.connectInFlight;
+        if (this.connectInFlight) {
+            if (this.connectInFlightGeneration === this.disconnectGeneration) {
+                return this.connectInFlight;
+            }
+            // disconnect() abandoned the attempt in flight (it is settling
+            // now). Joining it would end disconnected; start a fresh attempt
+            // once it has settled. The abandoned attempt ignores its own
+            // socket's late events (see runConnect), so it cannot disturb
+            // the new one. Move to 'connecting' now, as connect() promises,
+            // so requests made meanwhile are buffered instead of failing.
+            this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
+            return this.connectInFlight.then(() => this.doConnect());
+        }
         const attempt = this.runConnect().finally(() => {
             if (this.connectInFlight === attempt) this.connectInFlight = null;
         });
         this.connectInFlight = attempt;
+        this.connectInFlightGeneration = this.disconnectGeneration;
         return attempt;
     }
 
@@ -719,6 +765,13 @@ export class ApiClient {
             this.abandonInFlight();
         }
         const attemptId = ++this.connectAttemptId;
+        const generation = this.disconnectGeneration;
+        // stale reports that this attempt was superseded by a newer one or
+        // abandoned by disconnect(). A stale attempt stops at its next step,
+        // and its socket's late events are ignored: the old socket's close
+        // event can land after a newer attempt started, and handling it
+        // would tear down the new connection.
+        const stale = () => attemptId !== this.connectAttemptId || generation !== this.disconnectGeneration;
         this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         // The URL function and getConnectParams are both resolved per attempt,
@@ -733,16 +786,27 @@ export class ApiClient {
                 url = appendQueryParams(url, await this.options.getConnectParams());
             }
         } catch (err) {
+            if (stale()) return;
             this.connectParamsFailure = { cause: err };
             this.handleClose({ wasClean: false });
             return;
         }
+        // disconnect() may have run while the URL or params were resolving.
+        if (stale()) return;
 
+        // closeReported keeps one close from being handled twice: a socket
+        // that closes before opening both reports through onClose and
+        // rejects the connect promise.
+        let closeReported = false;
         return this.transport.connect(
             url,
-            (data) => this.handleMessage(data),
-            (info) => this.handleClose(info),
+            (data) => { if (!stale()) this.handleMessage(data); },
+            (info) => {
+                closeReported = true;
+                if (!stale()) this.handleClose(info);
+            },
         ).then(async () => {
+            if (stale()) return;
             this.reconnectAttempts = 0;
             // First-message auth: authenticate before the connection is
             // considered ready, so buffered requests/subscriptions only flush
@@ -751,6 +815,9 @@ export class ApiClient {
                 try {
                     await this.authenticate();
                 } catch (err) {
+                    // The connection closed during the handshake: handleClose()
+                    // already classified it and scheduled what comes next.
+                    if (err instanceof ConnectionError || stale()) return;
                     // The server rejected the token: classify like a connection
                     // rejection (no auto-reconnect), carrying the auth error.
                     const apiError = err instanceof ApiError
@@ -770,13 +837,18 @@ export class ApiClient {
             // batch. The retry streak is deliberately not reset here — an
             // in-band rejection also passes through this point, so resetting
             // would clear the streak on every attempt; handleClose() does it.
+            if (stale()) return;
             if (this.lastRejectionAttemptId !== attemptId) {
                 this.lastRejection = null;
             }
             this.setState('connected');
         }).catch(() => {
-            // The transport's promise rejected before opening — treat as a
-            // pre-upgrade close with no diagnostic info available.
+            // The transport's promise rejected before opening. If onClose
+            // already reported the close (with its close code), that report
+            // stands. Otherwise (a connect timeout, or a custom transport that
+            // only rejects) treat it as a pre-upgrade close with no
+            // diagnostic info.
+            if (stale() || closeReported) return;
             this.handleClose({ wasClean: false });
         });
     }
@@ -787,9 +859,18 @@ export class ApiClient {
         return new Promise<void>((resolve, reject) => {
             // A newer handshake supersedes any in-flight one.
             this.authWaiter?.reject(new Error('superseded by a newer auth'));
-            this.authWaiter = { resolve, reject };
+            const waiter = { resolve, reject, sent: false };
+            this.authWaiter = waiter;
             Promise.resolve(this.options.getAuthToken!())
-                .then((token) => this.transport.send({ type: 'auth', token }))
+                .then((token) => {
+                    // Superseded, or the connection closed while the token
+                    // was being fetched: the waiter is already settled.
+                    if (this.authWaiter !== waiter) return;
+                    // Marked first: a transport may deliver the verdict
+                    // synchronously from inside send().
+                    waiter.sent = true;
+                    this.transport.send({ type: 'auth', token });
+                })
                 .catch((e) => {
                     if (this.authWaiter?.reject === reject) this.authWaiter = null;
                     reject(e instanceof Error ? e : new Error(String(e)));
@@ -813,7 +894,7 @@ export class ApiClient {
         }
         return new Promise<void>((resolve, reject) => {
             this.authWaiter?.reject(new Error('superseded by a newer auth'));
-            this.authWaiter = { resolve, reject };
+            this.authWaiter = { resolve, reject, sent: true };
             this.transport.send({ type: 'auth', token: t as string });
         });
     }
@@ -940,6 +1021,9 @@ export class ApiClient {
         this.resetSubscribeSlots();
         const reason = this.classifyClose(info);
         const error = this.buildConnectionError(reason, info);
+        // No auth reply can arrive on a closed connection. Settle the
+        // handshake (or refreshAuth) so whoever waits on it does not hang.
+        this.failAuthWaiter(error);
         // Consume the pending rejection and params failure: subsequent
         // reconnect attempts (e.g. after the auth flow refreshes) must not
         // be misclassified.
@@ -1027,6 +1111,12 @@ export class ApiClient {
         this.notifyConnectionError(error);
     }
 
+    private failAuthWaiter(error: Error): void {
+        const waiter = this.authWaiter;
+        this.authWaiter = null;
+        waiter?.reject(error);
+    }
+
     private clearReconnectTimer(): void {
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
@@ -1080,6 +1170,7 @@ export class ApiClient {
     disconnect(): void {
         if (this.manualDisconnect) return;
         this.manualDisconnect = true;
+        this.disconnectGeneration++;
         this.teardownPageListeners();
         this.clearReconnectTimer();
         this.subscriptions.clear();
@@ -1091,6 +1182,7 @@ export class ApiClient {
         // promise instead. Doing it here means the caller's "I'm done"
         // semantics win over a late server reply.
         const error = this.buildConnectionError('manual', undefined);
+        this.failAuthWaiter(error);
         for (const [, p] of this.pending) {
             p.onSettle?.();
             p.reject(error);
@@ -1118,6 +1210,7 @@ export class ApiClient {
         if (state === 'connected') {
             this.flushBuffer();
             this.resubscribeAll();
+            this.startWaitingStreams();
         } else if (state === 'disconnected') {
             // Reuse the most recent classified error if handleClose() just
             // ran, so a request buffered during a reconnect attempt that
@@ -1127,6 +1220,7 @@ export class ApiClient {
             // disconnect() with no in-flight close.
             const err = this.lastConnectionError ?? new ConnectionError('manual', 'Not connected');
             this.rejectBuffer(err);
+            this.failWaitingStreams(err);
         }
         for (const listener of this.stateListeners) {
             listener(state);
@@ -1182,7 +1276,7 @@ export class ApiClient {
     }
 
     getLoadingCount(): number {
-        let count = this.buffer.length + this.streams.size;
+        let count = this.buffer.length + this.streamStarts.size + this.streams.size;
         for (const id of this.pending.keys()) {
             if (!this.subscriptions.has(id)) count++;
         }
@@ -1256,14 +1350,24 @@ export class ApiClient {
                 break;
             case 'auth_ok': {
                 const waiter = this.authWaiter;
+                if (!waiter?.sent) break;
                 this.authWaiter = null;
-                waiter?.resolve();
+                waiter.resolve();
                 break;
             }
             case 'auth_error': {
+                // auth_error carries no id. Only one that arrives after the
+                // auth frame went out answers it; an earlier one answers some
+                // other frame or is the server's pending-auth timeout, which
+                // closes the connection (handleClose settles the waiter).
+                // The pending-auth timeout's auth_error is marked timeout: it
+                // can cross the auth frame on the wire, so it is never a
+                // verdict on it. The close that follows reconnects normally.
+                if (msg.timeout) break;
                 const waiter = this.authWaiter;
+                if (!waiter?.sent) break;
                 this.authWaiter = null;
-                waiter?.reject(new ApiError(ErrorCode.AuthFailed, msg.message ?? 'authentication failed'));
+                waiter.reject(new ApiError(ErrorCode.AuthFailed, msg.message ?? 'authentication failed'));
                 break;
             }
             case 'response': {
@@ -1275,7 +1379,7 @@ export class ApiClient {
                 if (!sub) break;
                 if (sub.onPatch) {
                     sub.onPatch(msg.patch);
-                } else if (this.transport.isConnected()) {
+                } else {
                     // Defensive: the server only sends patches to subscriptions
                     // that declared support, so this should not happen — but if
                     // it does, re-subscribe to fetch the full result rather
@@ -1461,7 +1565,7 @@ export class ApiClient {
     private requestInner<T>(method: string, params: unknown[], options?: RequestOptions): Promise<T> {
         return new Promise((resolve, reject) => {
             const res = resolve as (value: unknown) => void;
-            if (this.transport.isConnected()) {
+            if (this.isReady()) {
                 this.sendRequest(method, params, options, res, reject);
                 return;
             }
@@ -1530,7 +1634,9 @@ export class ApiClient {
                     this.pending.delete(id);
                     p.onSettle?.();
                 }
-                this.transport.send({ type: 'cancel', id });
+                if (this.isReady()) {
+                    this.transport.send({ type: 'cancel', id });
+                }
                 reject(new Error('Request aborted'));
                 this.notifyLoadingChange();
             }, { once: true });
@@ -1573,25 +1679,32 @@ export class ApiClient {
         this.notifyLoadingChange();
     }
 
-    // sendSubscribe sends the subscribe frame for id, or queues it when
-    // maxSubscribesInFlight frames are already waiting for their first
-    // answer. A re-send for a subscription that is still waiting (the patch
-    // fallback) is held until that answer arrives and then reuses its slot:
-    // sent at once, the server would answer both frames and the first answer
-    // would free the slot early.
+    // sendSubscribe sends the subscribe frame for id, or queues it when no
+    // slot is free (see hasSubscribeSlot). A re-send for a subscription that
+    // is still waiting (the patch fallback) is held until that answer
+    // arrives and then reuses its slot: sent at once, the server would
+    // answer both frames and the first answer would free the slot early.
+    // Nothing is sent until the client is ready; resubscribeAll() sends
+    // every subscription once it is.
     private sendSubscribe(id: string): void {
         const sub = this.subscriptions.get(id);
-        if (!sub || !this.transport.isConnected()) return;
+        if (!sub || !this.isReady()) return;
         if (this.subscribesInFlight.has(id)) {
             this.subscribeResend.add(id);
             return;
         }
-        if (this.subscribesInFlight.size >= ApiClient.maxSubscribesInFlight) {
+        if (!this.hasSubscribeSlot()) {
             this.subscribeQueue.push(id);
             return;
         }
         this.subscribesInFlight.add(id);
         this.writeSubscribe(id);
+    }
+
+    private hasSubscribeSlot(): boolean {
+        const live = this.subscribesInFlight.size;
+        return live < ApiClient.maxSubscribesInFlight &&
+            live + this.subscribesDraining.size < 2 * ApiClient.maxSubscribesInFlight;
     }
 
     private writeSubscribe(id: string): void {
@@ -1601,27 +1714,76 @@ export class ApiClient {
     }
 
     // subscribeAnswered handles the first answer (a result or an error) to
-    // id's subscribe frame, or its unsubscribe: it sends a held re-send on
-    // the same slot, or frees the slot and sends queued subscriptions into
-    // it. Ids that are not waiting are ignored.
+    // id's subscribe frame: it sends a held re-send on the same slot, or
+    // frees the slot. It also frees the slot of an unsubscribed subscription
+    // when any frame for it arrives. Ids that are not waiting are ignored.
     private subscribeAnswered(id: string): void {
+        const timer = this.subscribesDraining.get(id);
+        if (timer !== undefined) {
+            clearTimeout(timer);
+            this.subscribesDraining.delete(id);
+            this.scheduleSubscribeDrain();
+            return;
+        }
         if (!this.subscribesInFlight.has(id)) return;
-        if (this.subscribeResend.delete(id) && this.subscriptions.has(id) && this.transport.isConnected()) {
+        if (this.subscribeResend.delete(id) && this.subscriptions.has(id) && this.isReady()) {
             this.writeSubscribe(id);
             return;
         }
         this.subscribesInFlight.delete(id);
-        while (this.subscribesInFlight.size < ApiClient.maxSubscribesInFlight && this.subscribeQueue.length > 0) {
-            const next = this.subscribeQueue.shift()!;
-            // Skips ids unsubscribed while queued.
-            this.sendSubscribe(next);
-        }
+        this.scheduleSubscribeDrain();
+    }
+
+    // subscribeDropped handles an unsubscribe. A subscription still waiting
+    // for its first answer moves to subscribesDraining until the server
+    // answers it.
+    private subscribeDropped(id: string): void {
+        this.subscribeResend.delete(id);
+        if (!this.subscribesInFlight.delete(id)) return;
+        this.subscribesDraining.set(id, setTimeout(() => {
+            if (this.subscribesDraining.delete(id)) this.scheduleSubscribeDrain();
+        }, ApiClient.subscribeDrainTimeoutMs));
+        this.scheduleSubscribeDrain();
+    }
+
+    private scheduleSubscribeDrain(): void {
+        if (this.drainScheduled || this.subscribeQueue.length === 0) return;
+        this.drainScheduled = true;
+        queueMicrotask(() => {
+            this.drainScheduled = false;
+            while (this.subscribeQueue.length > 0 && this.hasSubscribeSlot()) {
+                // sendSubscribe skips ids unsubscribed while queued.
+                this.sendSubscribe(this.subscribeQueue.shift()!);
+            }
+        });
     }
 
     private resetSubscribeSlots(): void {
         this.subscribesInFlight.clear();
         this.subscribeQueue = [];
         this.subscribeResend.clear();
+        for (const timer of this.subscribesDraining.values()) clearTimeout(timer);
+        this.subscribesDraining.clear();
+    }
+
+    // isReady reports whether frames other than auth may be sent: the
+    // transport is open and, when getAuthToken is set, auth_ok has arrived.
+    // A frame sent earlier would be answered with an auth_error.
+    private isReady(): boolean {
+        return this.state === 'connected' && this.transport.isConnected();
+    }
+
+    private startWaitingStreams(): void {
+        const waiting = Array.from(this.streamStarts);
+        this.streamStarts.clear();
+        for (const w of waiting) w.start();
+    }
+
+    private failWaitingStreams(error: Error): void {
+        const waiting = Array.from(this.streamStarts);
+        this.streamStarts.clear();
+        for (const w of waiting) w.fail(error);
+        if (waiting.length > 0) this.notifyLoadingChange();
     }
 
     onPush<T>(event: string, handler: PushHandler<T>): () => void {
@@ -1658,8 +1820,8 @@ export class ApiClient {
         return () => {
             this.subscriptions.delete(id);
             this.pending.delete(id);
-            this.subscribeAnswered(id);
-            if (this.transport.isConnected()) {
+            this.subscribeDropped(id);
+            if (this.isReady()) {
                 this.transport.send({ type: 'unsubscribe', id });
             }
         };
@@ -1680,6 +1842,12 @@ export class ApiClient {
      * on the iterator, or aborting via `options.signal` sends a `cancel`
      * message to the server. Streams in flight at disconnect time are
      * rejected with an error and are NOT auto-resumed on reconnect.
+     *
+     * A stream started while the client is connecting or reconnecting waits
+     * for the connection, like a request does, and starts once it is ready
+     * (after auth, when getAuthToken is set). Bound the wait with
+     * options.signal. If the client gives up and becomes 'disconnected', the
+     * stream fails with the connection error.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
         const inner = this.requestStreamInner<T>(method, params, options);
@@ -1739,33 +1907,40 @@ export class ApiClient {
                     }
                 };
 
+                // Set while the stream waits for the connection to be ready.
+                let waiting: { start: () => void; fail: (error: Error) => void } | null = null;
+
                 const cancelAtServer = () => {
+                    if (waiting) {
+                        this.streamStarts.delete(waiting);
+                        waiting = null;
+                        this.notifyLoadingChange();
+                        return;
+                    }
                     if (id && !ended) {
                         this.streams.delete(id);
-                        if (this.transport.isConnected()) {
+                        if (this.isReady()) {
                             this.transport.send({ type: 'cancel', id });
                         }
                     }
                 };
 
-                const ensureStarted = () => {
-                    if (started) return;
-                    started = true;
-                    if (!this.transport.isConnected()) {
-                        const err = this.lastConnectionError ?? (
-                            typeof navigator !== 'undefined' && navigator.onLine === false
-                                ? new ConnectionError('offline', 'Offline: no network connection')
-                                : new ConnectionError('manual', 'Not connected: call client.connect() first — the client never connects automatically')
-                        );
-                        end(err);
-                        return;
-                    }
+                const open = () => {
+                    if (ended) return;
                     id = String(++this.requestId);
                     this.streams.set(id, { push, end });
                     this.notifyLoadingChange();
+                    this.transport.send({ type: 'request', id, method, params });
+                };
+
+                // A stream started while the client is connecting or
+                // reconnecting waits until it is ready, as a request would.
+                // Otherwise a stream needs a ready connection now.
+                const ensureStarted = () => {
+                    if (started) return;
+                    started = true;
                     if (options?.signal) {
                         if (options.signal.aborted) {
-                            cancelAtServer();
                             end(new Error('Request aborted'));
                             return;
                         }
@@ -1774,7 +1949,26 @@ export class ApiClient {
                             end(new Error('Request aborted'));
                         }, { once: true });
                     }
-                    this.transport.send({ type: 'request', id, method, params });
+                    if (this.isReady()) {
+                        open();
+                        return;
+                    }
+                    if (this.state === 'connecting' || this.state === 'reconnecting') {
+                        const w = {
+                            start: () => { waiting = null; open(); },
+                            fail: (err: Error) => { waiting = null; end(err); },
+                        };
+                        waiting = w;
+                        this.streamStarts.add(w);
+                        this.notifyLoadingChange();
+                        return;
+                    }
+                    const err = this.lastConnectionError ?? (
+                        typeof navigator !== 'undefined' && navigator.onLine === false
+                            ? new ConnectionError('offline', 'Offline: no network connection')
+                            : new ConnectionError('manual', 'Not connected: call client.connect() first — the client never connects automatically')
+                    );
+                    end(err);
                 };
 
                 return {

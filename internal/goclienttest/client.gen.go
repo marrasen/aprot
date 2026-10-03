@@ -48,7 +48,7 @@ func (h AdminClient) Ping(ctx context.Context) (string, error) {
 
 // SubscribePing runs Ping as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h AdminClient) SubscribePing(ctx context.Context, opts ...client.SubscribeOption[string]) *client.Subscription[string] {
+func (h AdminClient) SubscribePing(ctx context.Context, opts ...client.SubscribeOption) *client.Subscription[string] {
 	return client.Subscribe[string](ctx, h.c, "Admin.Ping", nil, opts...)
 }
 
@@ -70,7 +70,7 @@ func (h ItemsClient) Download(ctx context.Context, name string) (*client.Blob, e
 
 // SubscribeDownload runs Download as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h ItemsClient) SubscribeDownload(ctx context.Context, name string, opts ...client.SubscribeOption[*client.Blob]) *client.Subscription[*client.Blob] {
+func (h ItemsClient) SubscribeDownload(ctx context.Context, name string, opts ...client.SubscribeOption) *client.Subscription[*client.Blob] {
 	return client.Subscribe[*client.Blob](ctx, h.c, "Items.Download", []any{name}, opts...)
 }
 
@@ -81,7 +81,7 @@ func (h ItemsClient) Echo(ctx context.Context, item GogentestItem) (GogentestIte
 
 // SubscribeEcho runs Echo as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h ItemsClient) SubscribeEcho(ctx context.Context, item GogentestItem, opts ...client.SubscribeOption[GogentestItem]) *client.Subscription[GogentestItem] {
+func (h ItemsClient) SubscribeEcho(ctx context.Context, item GogentestItem, opts ...client.SubscribeOption) *client.Subscription[GogentestItem] {
 	return client.Subscribe[GogentestItem](ctx, h.c, "Items.Echo", []any{item}, opts...)
 }
 
@@ -97,7 +97,7 @@ func (h ItemsClient) Get(ctx context.Context, id int) (*GogentestItem, error) {
 
 // SubscribeGet runs Get as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h ItemsClient) SubscribeGet(ctx context.Context, id int, opts ...client.SubscribeOption[*GogentestItem]) *client.Subscription[*GogentestItem] {
+func (h ItemsClient) SubscribeGet(ctx context.Context, id int, opts ...client.SubscribeOption) *client.Subscription[*GogentestItem] {
 	return client.Subscribe[*GogentestItem](ctx, h.c, "Items.Get", []any{id}, opts...)
 }
 
@@ -108,7 +108,7 @@ func (h ItemsClient) List(ctx context.Context, status Status) ([]GogentestItem, 
 
 // SubscribeList runs List as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h ItemsClient) SubscribeList(ctx context.Context, status Status, opts ...client.SubscribeOption[[]GogentestItem]) *client.Subscription[[]GogentestItem] {
+func (h ItemsClient) SubscribeList(ctx context.Context, status Status, opts ...client.SubscribeOption) *client.Subscription[[]GogentestItem] {
 	return client.Subscribe[[]GogentestItem](ctx, h.c, "Items.List", []any{status}, opts...)
 }
 
@@ -128,7 +128,7 @@ func (h ItemsClient) Sum(ctx context.Context, base int, nums ...int) (int, error
 
 // SubscribeSum runs Sum as a live query.
 // Each result arrives on the subscription's C; close it with Close.
-func (h ItemsClient) SubscribeSum(ctx context.Context, base int, nums []int, opts ...client.SubscribeOption[int]) *client.Subscription[int] {
+func (h ItemsClient) SubscribeSum(ctx context.Context, base int, nums []int, opts ...client.SubscribeOption) *client.Subscription[int] {
 	params := []any{base}
 	for _, x := range nums {
 		params = append(params, x)
