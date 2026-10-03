@@ -61,10 +61,12 @@
 // in two maps, with no goroutine or timer. The cost comes when a trigger
 // fires: the server re-runs the handler once for every subscription on that
 // key. The server runs each subscription's first handler call in one of the
-// connection's request slots (MaxConcurrentRequests, 256 by default). So
-// the client keeps at most 64 subscribe frames waiting for their first
-// answer, and queues the rest. Opening hundreds of subscriptions at once,
-// or re-sending them all after a reconnect, never runs into that limit.
+// connection's request slots (MaxConcurrentRequests, 256 by default), which
+// calls and streams share. So the client keeps about 64 subscribe frames
+// waiting for their first answer, and queues the rest. That keeps hundreds
+// of subscriptions, opened at once or re-sent after a reconnect, well under
+// the limit. The trade-off: if 64 first runs are slow, later subscriptions
+// wait for them.
 //
 // [WithPatch] makes the subscription accept the partial updates the server
 // sends with aprot.PatchSubscription. The client applies each patch and

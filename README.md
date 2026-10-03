@@ -1348,7 +1348,7 @@ for {
 ```
 
 - **The newest value wins.** `C` holds one value. A reader that falls behind gets the latest result, never a backlog, and never holds up the connection. Every result is a full snapshot, so a skipped one loses nothing.
-- **Reconnects are invisible.** The client re-subscribes, and the fresh result arrives on the same `C`. It keeps at most 64 subscribe frames waiting for their first answer and queues the rest, so a client with hundreds of subscriptions never trips the server's `MaxConcurrentRequests` limit (256 per connection) when it re-sends them all.
+- **Reconnects are invisible.** The client re-subscribes, and the fresh result arrives on the same `C`. It keeps about 64 subscribe frames waiting for their first answer and queues the rest, so re-sending hundreds of subscriptions stays well under the server's `MaxConcurrentRequests` limit (256 per connection, shared with calls and streams).
 - **Ending it.** `Close()`, cancelling `ctx`, or `Client.Close()` sends `unsubscribe` and closes `C`. Without one of them, the server keeps re-running the handler until the client closes.
 - **Errors.** An error answering the subscribe (bad params, permission denied) closes `C`, and `Err()` returns it. An error from a later refresh does not close `C`, because the server keeps the subscription and the next refresh may succeed. Pass `client.OnError[T](fn)` to see those errors; otherwise the client logs them.
 - **Patches.** `client.WithPatch(apply)` declares patch support, so `aprot.PatchSubscription` sends this subscriber a patch instead of a full refresh. The client applies the patch and sends the new full value on `C`.

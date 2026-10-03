@@ -743,7 +743,7 @@ func (c *Client) handleFrame(conn wireConn, f inFrame) {
 		if s != nil && !s.patch(f.Patch) {
 			// The subscription cannot apply this patch: fetch the full
 			// result again rather than go stale.
-			c.sendSubscribe(conn, s)
+			c.resubscribe(conn, s)
 		}
 	case "stream_item":
 		c.mu.Lock()
@@ -859,7 +859,7 @@ func (c *Client) deliverResult(id string, raw jsontext.Value, blob *Blob) {
 	if s != nil {
 		s.deliver(raw, blob)
 		if aw := s.takeAwaiting(); aw != nil {
-			c.releaseSubSlot(aw)
+			c.answered(aw, s)
 		}
 	}
 }

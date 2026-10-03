@@ -24,6 +24,11 @@ type subEntry interface {
 	// it was on, or nil. Exactly one caller gets a non-nil result, and that
 	// caller releases the slot.
 	takeAwaiting() wireConn
+	// markResend asks for the subscribe frame to be sent again once the
+	// pending first answer arrives, on the same slot. takeResend reports and
+	// clears that request.
+	markResend()
+	takeResend() bool
 	// deliver hands over a full result. Exactly one of raw and blob is set.
 	deliver(raw jsontext.Value, blob *Blob)
 	// patch applies a subscription_patch payload. It returns false when the
@@ -109,6 +114,7 @@ type Subscription[T any] struct {
 	current  T
 	hasCur   bool
 	awaiting wireConn // connection of an unanswered subscribe frame, or nil
+	resend   bool     // re-send the subscribe frame after its first answer
 }
 
 // Subscribe opens a subscription to method with params. See [Subscription].
@@ -175,10 +181,6 @@ const maxSubscribesInFlight = 64
 // also holds while it removes s and sends unsubscribe, so the two frames
 // always reach the server in the order the decisions were made.
 func (c *Client) sendSubscribe(conn wireConn, s subEntry) {
-	// Re-sending for a subscription whose first answer is still pending
-	// (the patch fallback) reuses the slot it already holds.
-	holdsSlot := s.awaitingOn() == conn
-
 	c.subSendMu.Lock()
 	defer c.subSendMu.Unlock()
 	c.mu.Lock()
@@ -186,16 +188,44 @@ func (c *Client) sendSubscribe(conn wireConn, s subEntry) {
 		c.mu.Unlock()
 		return
 	}
-	if !holdsSlot {
-		if c.subInFlight >= maxSubscribesInFlight {
-			c.subQueue = append(c.subQueue, s)
-			c.mu.Unlock()
-			return
-		}
-		c.subInFlight++
+	if c.subInFlight >= maxSubscribesInFlight {
+		c.subQueue = append(c.subQueue, s)
+		c.mu.Unlock()
+		return
 	}
+	c.subInFlight++
 	c.mu.Unlock()
 	c.writeSubscribe(conn, s)
+}
+
+// resubscribe asks the server for s's full result again, after a patch s
+// could not apply. If s's first answer is still pending, the re-send waits
+// for it and reuses its slot: sending at once would put two frames for s
+// in flight on one slot, and the server answers both.
+func (c *Client) resubscribe(conn wireConn, s subEntry) {
+	if s.awaitingOn() == conn {
+		s.markResend()
+		return
+	}
+	c.sendSubscribe(conn, s)
+}
+
+// answered handles the first answer to s's subscribe frame on conn: it
+// sends a re-send requested meanwhile on the same slot, or frees the slot.
+func (c *Client) answered(conn wireConn, s subEntry) {
+	if s.takeResend() {
+		c.subSendMu.Lock()
+		c.mu.Lock()
+		current := c.subs[s.id()] == s && c.conn == conn
+		c.mu.Unlock()
+		if current {
+			c.writeSubscribe(conn, s)
+			c.subSendMu.Unlock()
+			return
+		}
+		c.subSendMu.Unlock()
+	}
+	c.releaseSubSlot(conn)
 }
 
 // writeSubscribe marks s as awaiting its answer and writes the frame. The
@@ -266,6 +296,14 @@ func (s *Subscription[T]) end(err error) {
 	if cur, ok := c.subs[s.subID]; ok && cur == subEntry(s) {
 		delete(c.subs, s.subID)
 	}
+	// Drop it from the slot queue, so closed entries do not pile up while
+	// every slot is busy.
+	for i, q := range c.subQueue {
+		if q == subEntry(s) {
+			c.subQueue = append(c.subQueue[:i], c.subQueue[i+1:]...)
+			break
+		}
+	}
 	conn := c.conn
 	c.mu.Unlock()
 	if conn != nil {
@@ -321,6 +359,20 @@ func (s *Subscription[T]) awaitingOn() wireConn {
 	return s.awaiting
 }
 
+func (s *Subscription[T]) markResend() {
+	s.mu.Lock()
+	s.resend = true
+	s.mu.Unlock()
+}
+
+func (s *Subscription[T]) takeResend() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.resend
+	s.resend = false
+	return r
+}
+
 func (s *Subscription[T]) takeAwaiting() wireConn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -335,6 +387,7 @@ func (s *Subscription[T]) connLost() {
 	s.current = zero
 	s.hasCur = false
 	s.awaiting = nil
+	s.resend = false
 	s.mu.Unlock()
 }
 
