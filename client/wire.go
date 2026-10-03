@@ -199,6 +199,11 @@ func (c *wsConn) pingLoop() {
 func (c *wsConn) read() ([]byte, bool, error) {
 	kind, data, err := c.ws.ReadMessage()
 	if err != nil {
+		// A failed read ends the connection: gorilla allows no further
+		// reads. Stop the pings and release the socket here, because
+		// nothing else closes a connection that dropped on its own.
+		c.closeOnce.Do(func() { close(c.stopPing) })
+		_ = c.ws.Close()
 		if c.pingInterval > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
 			return nil, false, fmt.Errorf("aprot client: no message or pong from the server for %v (keepalive): %w", 2*c.pingInterval, err)
 		}
@@ -239,7 +244,9 @@ type streamConn struct {
 
 func newStreamConn(rw io.ReadWriteCloser, maxMessageSize int) *streamConn {
 	sc := bufio.NewScanner(rw)
-	sc.Buffer(make([]byte, min(64*1024, maxMessageSize)), maxMessageSize)
+	// The scanner's limit covers the line and its newline, so a message of
+	// exactly maxMessageSize bytes needs one more. The server does the same.
+	sc.Buffer(make([]byte, min(64*1024, maxMessageSize+1)), maxMessageSize+1)
 	return &streamConn{rw: rw, sc: sc}
 }
 
@@ -252,6 +259,9 @@ func (c *streamConn) read() ([]byte, bool, error) {
 		// The scanner reuses its buffer; frames are decoded later, so copy.
 		return bytes.Clone(line), false, nil
 	}
+	// The stream is finished either way; release it, because nothing else
+	// closes a connection that dropped on its own.
+	_ = c.rw.Close()
 	if err := c.sc.Err(); err != nil {
 		return nil, false, err
 	}

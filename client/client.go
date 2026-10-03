@@ -431,6 +431,11 @@ type connWatch struct {
 	// auth_ok or auth_error. A verdict when it is zero is unsolicited: the
 	// server requires auth and the client sent none.
 	authSent atomic.Int32
+	// authAbandoned counts auth frames whose caller gave up (its ctx ended)
+	// before the verdict arrived. The server answers auth frames in order,
+	// so the next that many verdicts belong to them and are dropped, rather
+	// than reaching a later RefreshAuth. Guarded by Client.mu.
+	authAbandoned int
 }
 
 // run supervises the connection: it waits for the current one to drop, then
@@ -550,9 +555,11 @@ func (c *Client) applyConfig(conn wireConn, f inFrame) {
 	}
 }
 
-// LastRejection returns the server's most recent rejection while the client
-// retries it under [Options.ReconnectOnRejected], and nil otherwise. It
-// returns to nil once a reconnect succeeds. While retrying, the client is in
+// LastRejection returns the server's most recent rejection under
+// [Options.ReconnectOnRejected], or nil if there has been none since the last
+// successful connect. It returns to nil once a reconnect succeeds, and keeps
+// its value if the client closes while retrying or runs out of attempts, so
+// it still explains why the session ended. While retrying, the client is in
 // StateConnecting, and calls wait for the connection as they do during any
 // reconnect.
 func (c *Client) LastRejection() *Error {
@@ -819,7 +826,17 @@ func (c *Client) authenticate(ctx context.Context, conn wireConn, token string, 
 	case <-watch.done:
 		return fmt.Errorf("%w during auth", ErrConnectionLost)
 	case <-ctx.Done():
-		return ctx.Err()
+		c.mu.Lock()
+		if c.authWait == wait {
+			// Give up on the verdict; the read loop drops it when it comes.
+			c.authWait = nil
+			watch.authAbandoned++
+			c.mu.Unlock()
+			return ctx.Err()
+		}
+		c.mu.Unlock()
+		// The read loop already took this verdict and is handing it over.
+		return <-wait
 	}
 }
 
@@ -871,11 +888,14 @@ func (c *Client) handleFrame(conn wireConn, watch *connWatch, f inFrame) {
 		solicited := watch.authSent.Add(-1) >= 0
 		if !solicited {
 			watch.authSent.Store(0)
-			if f.Type == "auth_error" {
-				// The server requires auth and the client sent no token:
+			if f.Type == "auth_error" && c.opts.AuthToken == nil {
+				// The server requires auth and the client has no token:
 				// every request will get this answer, and the server will
 				// close the connection when its auth timeout runs out.
-				// Reconnecting cannot help, so stop and say why.
+				// Reconnecting cannot help, so stop and say why. (With an
+				// AuthToken, this is the server's auth timeout firing while
+				// the token was still being fetched: the close that follows
+				// takes the normal reconnect path.)
 				msg := f.Message
 				if msg == "" {
 					msg = "authentication required"
@@ -885,11 +905,16 @@ func (c *Client) handleFrame(conn wireConn, watch *connWatch, f inFrame) {
 			return
 		}
 		c.mu.Lock()
+		if watch.authAbandoned > 0 {
+			// The verdict for an auth whose caller gave up.
+			watch.authAbandoned--
+			c.mu.Unlock()
+			return
+		}
 		wait := c.authWait
 		c.authWait = nil
 		c.mu.Unlock()
 		if wait == nil {
-			// The verdict for an auth whose caller gave up.
 			return
 		}
 		if f.Type == "auth_ok" {
