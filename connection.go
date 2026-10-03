@@ -46,6 +46,11 @@ type inflight struct {
 	method    string
 	subscribe bool
 	started   time.Time
+	// refresh marks a server-driven re-execution (refreshSubscription).
+	refresh bool
+	// refreshAgain records that a refresh was due while a client subscribe
+	// for this ID was still running. The subscribe runs it when it ends.
+	refreshAgain bool
 }
 
 // Conn represents a single client connection.
@@ -631,12 +636,58 @@ func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context
 // Go func values cannot be compared, and every func returned by
 // context.WithCancelCause shares one code pointer, so comparing them through
 // reflect matched any two entries.
-func (c *Conn) unregisterRequest(id string, seq uint64) {
+// It reports whether a refresh was deferred to this request (see
+// registerRefresh), so the caller can run it.
+func (c *Conn) unregisterRequest(id string, seq uint64) (refreshAgain bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if req, ok := c.requests[id]; ok && seq != 0 && req.seq == seq {
 		delete(c.requests, id)
+		return req.refreshAgain
 	}
+	return false
+}
+
+// registerRefresh registers a server-driven refresh of subscription id, the
+// way registerRequest does, with one difference. A refresh must not cancel a
+// client subscribe for the same ID that is still running: the client would
+// get a "request canceled" error for a subscription it never cancelled, and
+// the subscribe's new params would be lost. Instead it marks that subscribe
+// to run one refresh when it ends, so a change that landed after the
+// subscribe computed its result still reaches the client. ok is false when
+// the refresh was deferred that way, or the connection is closed.
+func (c *Conn) registerRefresh(id, method string, cancel context.CancelCauseFunc) (seq uint64, ok bool) {
+	started := time.Now()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		cancel(ErrConnectionClosed)
+		return 0, false
+	}
+	if cur, exists := c.requests[id]; exists && !cur.refresh {
+		cur.refreshAgain = true
+		c.requests[id] = cur
+		c.mu.Unlock()
+		cancel(nil)
+		return 0, false
+	}
+	// An older refresh of the same subscription is superseded by this one.
+	old := c.requests[id].cancel
+	c.reqSeq++
+	seq = c.reqSeq
+	c.requests[id] = inflight{
+		seq:       seq,
+		cancel:    cancel,
+		method:    method,
+		subscribe: true,
+		started:   started,
+		refresh:   true,
+	}
+	c.mu.Unlock()
+	if old != nil {
+		old(ErrClientCanceled)
+	}
+	return seq, true
 }
 
 func (c *Conn) cancelRequest(id string) {
@@ -1145,8 +1196,16 @@ func (c *Conn) handleSubscribe(msg IncomingMessage) {
 func (c *Conn) runSubscribe(msg IncomingMessage, info *HandlerInfo, reg requestReg) {
 	defer c.server.requestsWg.Done()
 	defer func() {
-		c.unregisterRequest(msg.ID, reg.seq)
+		again := c.unregisterRequest(msg.ID, reg.seq)
 		reg.cancel(nil)
+		if again {
+			// A refresh came due while this subscribe ran (registerRefresh).
+			// Run it now; it no-ops if the subscribe did not register.
+			if sub := c.server.subscriptions.get(c.id, msg.ID); sub != nil {
+				c.server.requestsWg.Add(1)
+				go c.refreshSubscription(sub)
+			}
+		}
 	}()
 
 	// Report the completed subscribe to the observer (if any). See handleRequest
@@ -1308,7 +1367,10 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	seq := c.registerRequest(sub.id, sub.method, true, cancel)
+	seq, ok := c.registerRefresh(sub.id, sub.method, cancel)
+	if !ok {
+		return
+	}
 	defer func() {
 		c.unregisterRequest(sub.id, seq)
 		cancel(nil)

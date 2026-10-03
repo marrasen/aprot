@@ -63,9 +63,11 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   token was loading went out before the auth frame. The server answered with
   an `auth_error`, which the client took as the answer to its own auth, so
   the connection was rejected. Requests and streams now wait for the
-  connection to be ready, and subscriptions are sent when it is. A close or
-  `disconnect()` while the token is loading no longer leaves `connect()`
-  hanging.
+  connection to be ready, and subscriptions are sent when it is. A stream
+  started while connecting or reconnecting now waits for the connection too,
+  instead of failing at once. A close or `disconnect()` while the token is
+  loading no longer leaves `connect()` hanging, and `disconnect()` followed by
+  `connect()` in the same tick connects instead of staying disconnected.
 
 - **A reused request ID can no longer make a request uncancellable.** The
   guard for a client reusing an in-flight request ID (#225) compared cancel
@@ -76,6 +78,12 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   a refresh racing a re-subscribe, it could also leave a subscription running
   after the client unsubscribed. Entries are now matched by registration.
 
+- **A server-driven refresh no longer cancels a re-subscribe in flight.** The
+  client got a "request canceled" error for a subscription it never
+  cancelled, and the re-subscribe's new params were lost. The refresh now
+  waits: the re-subscribe runs it once it finishes, so a change that landed
+  meanwhile still reaches the client.
+
 - **A frame with an unknown method no longer cancels another request** that
   uses the same ID. It is rejected before it is registered.
 
@@ -84,7 +92,8 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 - **The byte-stream transport enforces `MaxMessageSize` exactly.** It
   rejected a frame of exactly the limit, and a limit below 64 KiB was raised
-  to 64 KiB.
+  to 64 KiB. A frame of exactly the limit is accepted with either `\n` or
+  `\r\n` line endings.
 
 - **An unsubscribe or cancel right behind its subscribe or request is no
   longer lost.** The server registered a request inside the goroutine that

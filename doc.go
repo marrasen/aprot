@@ -1248,6 +1248,13 @@
 // Streaming adds stream_item / stream_chunk / stream_end. A Blob result may
 // arrive as a binary frame instead of a response (see Binary Blob Responses).
 //
+// The config frame is the first frame on every connection. It carries the
+// reconnect settings from [ServerOptions], "binaryFrames", and
+// "maxMessageSize": the largest inbound message in bytes the server
+// accepts (left out when [ServerOptions].MaxMessageSize disables the limit),
+// so a client can refuse an oversized frame locally instead of losing the
+// connection.
+//
 // # Design Scope
 //
 // aprot owns transport concerns — how a call arrives, how a credential

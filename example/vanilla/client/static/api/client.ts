@@ -600,6 +600,10 @@ export class ApiClient {
     // connectInFlight is the attempt doConnect() is currently running, so a
     // second caller joins it instead of opening a competing socket.
     private connectInFlight: Promise<void> | null = null;
+    // disconnectGeneration counts disconnect() calls. An attempt started
+    // before the latest disconnect() is abandoned: connect() must not join it.
+    private disconnectGeneration = 0;
+    private connectInFlightGeneration = 0;
     private manualDisconnect = false;
     // authWaiter resolves/rejects the in-flight auth handshake (initial connect
     // or refreshAuth) when the server's auth_ok / auth_error arrives.
@@ -721,11 +725,20 @@ export class ApiClient {
         if (this.state === 'connected' && this.transport.isConnected()) {
             return Promise.resolve();
         }
-        if (this.connectInFlight) return this.connectInFlight;
+        if (this.connectInFlight) {
+            if (this.connectInFlightGeneration === this.disconnectGeneration) {
+                return this.connectInFlight;
+            }
+            // disconnect() abandoned the attempt in flight (it is settling
+            // now). Joining it would end disconnected; start a fresh attempt
+            // once it has settled, so the two never race for the transport.
+            return this.connectInFlight.then(() => this.doConnect());
+        }
         const attempt = this.runConnect().finally(() => {
             if (this.connectInFlight === attempt) this.connectInFlight = null;
         });
         this.connectInFlight = attempt;
+        this.connectInFlightGeneration = this.disconnectGeneration;
         return attempt;
     }
 
@@ -817,8 +830,10 @@ export class ApiClient {
                     // Superseded, or the connection closed while the token
                     // was being fetched: the waiter is already settled.
                     if (this.authWaiter !== waiter) return;
-                    this.transport.send({ type: 'auth', token });
+                    // Marked first: a transport may deliver the verdict
+                    // synchronously from inside send().
                     waiter.sent = true;
+                    this.transport.send({ type: 'auth', token });
                 })
                 .catch((e) => {
                     if (this.authWaiter?.reject === reject) this.authWaiter = null;
@@ -1119,6 +1134,7 @@ export class ApiClient {
     disconnect(): void {
         if (this.manualDisconnect) return;
         this.manualDisconnect = true;
+        this.disconnectGeneration++;
         this.teardownPageListeners();
         this.clearReconnectTimer();
         this.subscriptions.clear();
@@ -1786,6 +1802,12 @@ export class ApiClient {
      * on the iterator, or aborting via `options.signal` sends a `cancel`
      * message to the server. Streams in flight at disconnect time are
      * rejected with an error and are NOT auto-resumed on reconnect.
+     *
+     * A stream started while the client is connecting or reconnecting waits
+     * for the connection, like a request does, and starts once it is ready
+     * (after auth, when getAuthToken is set). Bound the wait with
+     * options.signal. If the client gives up and becomes 'disconnected', the
+     * stream fails with the connection error.
      */
     requestStream<T>(method: string, params: unknown[], options?: RequestOptions): AsyncIterable<T> {
         const inner = this.requestStreamInner<T>(method, params, options);

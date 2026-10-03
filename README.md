@@ -592,6 +592,8 @@ function UserList() {
 
 Cancellation works exactly like any other request: break out of the `for await` loop, pass an `AbortSignal`, or unmount the React component, and the handler's `ctx` is canceled — the next `yield` returns `false` and the iterator stops. Streaming handlers also support `iter.Seq2[K, V]`, which surfaces as `AsyncIterable<[K, V]>` on the TypeScript side.
 
+A stream started while the client is connecting or reconnecting waits for the connection, like a request, and starts once it is ready (after auth, when `getAuthToken` is set). Bound the wait with an `AbortSignal`. If the client gives up and becomes `'disconnected'`, the stream fails with the connection error. A stream already running when the connection drops ends with that error and is not resumed.
+
 Streaming handlers are WebSocket and byte-stream only. Registering one via `RegisterREST` panics at registration time since REST cannot deliver multi-message responses over a single HTTP request.
 
 ### Chunked delivery for large streams

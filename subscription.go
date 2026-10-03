@@ -233,6 +233,13 @@ func (sm *subscriptionManager) has(connID uint64, subID string) bool {
 	return false
 }
 
+// get returns a connection's subscription by ID, or nil.
+func (sm *subscriptionManager) get(connID uint64, subID string) *subscription {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.byConn[connID][subID]
+}
+
 // count returns the total number of active subscriptions across all
 // connections. Used by Server.Stats for gauge-style metrics.
 func (sm *subscriptionManager) count() int {
