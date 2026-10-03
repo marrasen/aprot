@@ -102,8 +102,9 @@ consistent with them.
   (#316, #330). An adapter nobody uses is still the canary for the uniformity
   guarantee, but **only while CI exercises it**: the invariant matrix (#339)
   is the standing keep-condition. If that coverage lapses, deletion becomes
-  the right call, on the same "unused in practice" standard that removed the
-  SSE transport (#280). Ruling recorded for #340.
+  the right call. Usage alone is not the test, though: the SSE transport
+  (#280) was removed because it taxed every new feature, not because nobody
+  used it. Ruling recorded for #340.
 - **The SSE transport is out; the transport abstraction stays.** SSE was
   removed in full — `transport_sse.go`, `sse_handler.go`,
   `Server.HTTPTransport`, `ConnectedMessage`/`TypeConnected`, and the

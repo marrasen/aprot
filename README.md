@@ -173,6 +173,7 @@ go get github.com/marrasen/aprot
 
 - **[`aprot`](https://pkg.go.dev/github.com/marrasen/aprot)** — core library: handlers, registry, server, middleware, subscriptions, code generation
 - **[`aprot/tasks`](https://pkg.go.dev/github.com/marrasen/aprot/tasks)** — hierarchical task trees, shared tasks, output streaming
+- **[`aprot/client`](https://pkg.go.dev/github.com/marrasen/aprot/client)** — the Go client runtime: calls, streams, push events, and subscriptions over WebSocket or a byte stream (see [Go Client](#go-client); a generated example lives in `example/react/goclient`)
 
 **Design** — what belongs in aprot and what stays consumer-owned, and the standing decisions behind the API:
 
@@ -1327,7 +1328,7 @@ user, err := api.Handlers.GetUser(ctx, "42")
 
 ### Subscriptions
 
-Every unary handler gets a `Subscribe<Method>` that returns a `*client.Subscription[T]`. Each new result arrives on its channel `C`. Subscribe once, outside the loop, and always close the subscription when you stop reading it:
+Every unary handler that returns a result gets a `Subscribe<Method>` that returns a `*client.Subscription[T]`. Each new result arrives on its channel `C`. Subscribe once, outside the loop, and always close the subscription when you stop reading it:
 
 ```go
 user := api.Handlers.SubscribeGetUser(ctx, "42")
@@ -1355,8 +1356,8 @@ for {
 
 - **The newest value wins.** `C` holds one value. A reader that falls behind gets the latest result, never a backlog, and never holds up the connection. Every result is a full snapshot, so a skipped one loses nothing.
 - **Reconnects are invisible.** The client re-subscribes, and the fresh result arrives on the same `C`. It keeps about 64 subscribe frames waiting for their first answer and queues the rest, so re-sending hundreds of subscriptions stays well under the server's `MaxConcurrentRequests` limit (256 per connection, shared with calls and streams).
-- **Ending it.** `Close()`, cancelling `ctx`, or `Client.Close()` sends `unsubscribe` and closes `C`. Without one of them, the server keeps re-running the handler until the client closes.
-- **Errors.** An error answering the subscribe (bad params, permission denied) closes `C`, and `Err()` returns it. An error from a later refresh does not close `C`, because the server keeps the subscription and the next refresh may succeed. Pass `client.OnError[T](fn)` to see those errors; otherwise the client logs them.
+- **Ending it.** `Close()` or cancelling `ctx` sends `unsubscribe` and closes `C`. `Client.Close()` closes the connection, which ends every subscription on the server, and closes every `C`. Without one of these, the server keeps re-running the handler until the client closes.
+- **Errors.** An error answering the subscribe (bad params, permission denied) closes `C`, and `Err()` returns it. An error from a later refresh does not close `C`, because the server keeps the subscription and the next refresh may succeed. Pass `client.OnError(fn)` to see those errors; otherwise the client logs them.
 - **Patches.** `client.WithPatch(apply)` declares patch support, so `aprot.PatchSubscription` sends this subscriber a patch instead of a full refresh. The client applies the patch and sends the new full value on `C`.
 
 ### Streams and push events
@@ -1374,6 +1375,17 @@ defer remove()
 ```
 
 Leaving a stream's loop early cancels the handler at the server. Each push handler gets its events in order on its own goroutine, so it may block or make calls.
+
+### Connection options
+
+`client.Options` covers the rest of the connection's behaviour:
+
+- **Auth.** `AuthToken` is called on every connect. Without it, a server that requires auth closes the client with `CodeAuthFailed` instead of leaving calls to hang.
+- **Rejections.** By default a server rejection on reconnect (a connect hook error or a refused token) closes the client for good, which is right for a real sign-out. For a long-running service where a rejection is usually temporary, set `ReconnectOnRejected: &client.RejectedRetry{Delay: 2 * time.Second, MaxAttempts: 10}`. While it retries, `Client.LastRejection()` returns the rejection.
+- **Dead connections.** The client pings the server every `PingInterval` (default 30s) and reconnects when nothing arrives for twice that, which catches a connection that died without a close.
+- **Backoff.** `ReconnectInterval`, `ReconnectMaxInterval` and `ReconnectMaxAttempts` win when set. Left at zero, they take the server's values from its config frame.
+- **TLS and dialing.** `TLSConfig`, `NetDialContext` and `Header` configure the WebSocket dial. Proxy settings from the environment apply.
+- **Message size.** The server announces its `MaxMessageSize`. A call or subscribe larger than that fails locally with `client.ErrMessageTooLarge`, and the connection stays up.
 
 ### Byte streams
 
