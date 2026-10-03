@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,6 +120,9 @@ func TestServeStreamEcho(t *testing.T) {
 	cfg := client.readFrame()
 	if cfg["type"] != "config" {
 		t.Fatalf("first frame type = %v, want config", cfg["type"])
+	}
+	if got, ok := cfg["maxMessageSize"].(float64); !ok || got != 4<<20 {
+		t.Errorf("config maxMessageSize = %v, want %d", cfg["maxMessageSize"], 4<<20)
 	}
 
 	client.send(IncomingMessage{
@@ -359,4 +363,45 @@ func waitForConnections(t *testing.T, server *Server, n int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("connection count = %d, want %d", server.ConnectionCount(), n)
+}
+
+// echoFrameOfSize builds a newline-free Echo request frame of exactly n bytes.
+func echoFrameOfSize(t *testing.T, id string, n int) []byte {
+	t.Helper()
+	prefix := `{"type":"request","id":"` + id + `","method":"StreamServeHandlers.Echo","params":[{"message":"`
+	suffix := `"}]}`
+	pad := n - len(prefix) - len(suffix)
+	if pad < 0 {
+		t.Fatalf("frame size %d too small", n)
+	}
+	return []byte(prefix + strings.Repeat("x", pad) + suffix)
+}
+
+// The byte-stream transport accepts a frame of exactly MaxMessageSize bytes,
+// as WebSocket does and as the config frame advertises, and closes the
+// connection on one byte more.
+func TestServeStreamMaxMessageSizeBoundary(t *testing.T) {
+	const limit = 512
+	server := newStreamTestServer(t, ServerOptions{MaxMessageSize: limit})
+	clientEnd, errCh := startStreamServer(context.Background(), server, ConnInfo{})
+	defer clientEnd.Close()
+	client := newStreamTestClient(t, clientEnd)
+	cfg := client.readFrameOfType("config")
+	if got, _ := cfg["maxMessageSize"].(float64); got != limit {
+		t.Fatalf("config maxMessageSize = %v, want %d", cfg["maxMessageSize"], limit)
+	}
+
+	fits := append(echoFrameOfSize(t, "1", limit), '\n')
+	go func() { _, _ = clientEnd.Write(fits) }()
+	if resp := client.readFrameOfType("response"); resp["id"] != "1" {
+		t.Fatalf("response id = %v, want 1", resp["id"])
+	}
+
+	tooBig := append(echoFrameOfSize(t, "2", limit+1), '\n')
+	go func() { _, _ = clientEnd.Write(tooBig) }()
+	select {
+	case <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("an oversized frame did not close the stream connection")
+	}
 }

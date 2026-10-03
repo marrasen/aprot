@@ -509,17 +509,18 @@ func TestUnregisterRequestKeepsReplacement(t *testing.T) {
 	tc := NewTestPushConn(2)
 	c := tc.Conn
 
-	first := func(cause error) {}
-	c.registerRequest("dup", "Test.First", false, first)
+	// Real cancel funcs from context.WithCancelCause: they all share one code
+	// pointer, which is what defeated the original reflect-based guard.
+	_, first := context.WithCancelCause(context.Background())
+	firstSeq := c.registerRequest("dup", "Test.First", false, first)
 
-	replacementCanceled := false
-	replacement := func(cause error) { replacementCanceled = true }
+	replacementCtx, replacement := context.WithCancelCause(context.Background())
 	c.registerRequest("dup", "Test.Replacement", false, replacement)
 
 	// The shadowed (first) handler unwinds and runs its deferred unregister
-	// with its own cancel func. This must be a no-op because the map now holds
-	// the replacement.
-	c.unregisterRequest("dup", first)
+	// with its own token. This must be a no-op because the map now holds the
+	// replacement.
+	c.unregisterRequest("dup", firstSeq)
 
 	c.mu.Lock()
 	got, exists := c.requests["dup"]
@@ -530,7 +531,7 @@ func TestUnregisterRequestKeepsReplacement(t *testing.T) {
 
 	// The retained entry must be the replacement, and canceling it must work.
 	got.cancel(ErrClientCanceled)
-	if !replacementCanceled {
+	if context.Cause(replacementCtx) != ErrClientCanceled {
 		t.Error("retained cancel func is not the replacement's")
 	}
 }

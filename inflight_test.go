@@ -332,8 +332,14 @@ func TestInFlightRequests_IDReuseKeepsOneEntry(t *testing.T) {
 	tc := NewTestPushConn(7)
 	c := tc.Conn
 
-	c.registerRequest("dup", "Test.First", false, func(cause error) {})
-	c.registerRequest("dup", "Test.Second", false, func(cause error) {})
+	// Real cancel funcs, as dispatch registers them (see #225).
+	_, first := context.WithCancelCause(context.Background())
+	firstSeq := c.registerRequest("dup", "Test.First", false, first)
+	_, second := context.WithCancelCause(context.Background())
+	c.registerRequest("dup", "Test.Second", false, second)
+
+	// The shadowed request unwinds; the replacement's entry must survive.
+	c.unregisterRequest("dup", firstSeq)
 
 	if got := c.InFlightRequests(); got != 1 {
 		t.Errorf("InFlightRequests() = %d, want 1 after ID reuse", got)

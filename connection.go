@@ -37,8 +37,11 @@ func connInfoFromRequest(r *http.Request) ConnInfo {
 // inflight is the bookkeeping a connection keeps for one running request. The
 // cancel func is what the connection needs to cancel it; method, subscribe and
 // started exist so a request that never returns can be named rather than only
-// counted (#374).
+// counted (#374). seq identifies this registration, so a request's unregister
+// can tell its own entry from a replacement registered under the same ID
+// (#225).
 type inflight struct {
+	seq       uint64
 	cancel    context.CancelCauseFunc
 	method    string
 	subscribe bool
@@ -77,6 +80,10 @@ type Conn struct {
 	// dispatched on this connection (request, subscribe, refresh). Set via
 	// SetPrincipalProvider, read via resolvePrincipal; guarded by mu.
 	principalProvider PrincipalProvider
+	// reqSeq numbers request registrations on this connection (see
+	// inflight.seq). Guarded by mu; the first registration gets 1, so 0 never
+	// names a live entry.
+	reqSeq uint64
 }
 
 // isAuthenticated reports whether the connection has passed first-message auth.
@@ -258,7 +265,15 @@ func (c *Conn) releaseRequestSlot() {
 // live here (the release fires when the handler goroutine returns), so the
 // handlers stay callable in isolation and both transports share one correct
 // path.
+//
+// A frame that cannot run (unknown method) is rejected before it registers:
+// registering cancels any in-flight request with the same ID, and a frame that
+// will never run must not cancel an unrelated request.
 func (c *Conn) dispatchRequest(msg IncomingMessage) {
+	info, ok := c.lookupRunnable(msg, false)
+	if !ok {
+		return
+	}
 	if !c.acquireRequestSlot() {
 		c.sendError(msg.ID, CodeTooManyRequests, "too many concurrent requests")
 		return
@@ -267,12 +282,16 @@ func (c *Conn) dispatchRequest(msg IncomingMessage) {
 	reg := c.beginRequest(msg.ID, msg.Method, false)
 	go func() {
 		defer c.releaseRequestSlot()
-		c.handleRequest(msg, reg)
+		c.handleRequest(msg, info, reg)
 	}()
 }
 
 // dispatchSubscribe is dispatchRequest's counterpart for subscribe frames.
 func (c *Conn) dispatchSubscribe(msg IncomingMessage) {
+	info, ok := c.lookupRunnable(msg, true)
+	if !ok {
+		return
+	}
 	if !c.acquireRequestSlot() {
 		c.sendError(msg.ID, CodeTooManyRequests, "too many concurrent requests")
 		return
@@ -281,15 +300,52 @@ func (c *Conn) dispatchSubscribe(msg IncomingMessage) {
 	reg := c.beginRequest(msg.ID, msg.Method, true)
 	go func() {
 		defer c.releaseRequestSlot()
-		c.runSubscribe(msg, reg)
+		c.runSubscribe(msg, info, reg)
 	}()
 }
 
+// lookupRunnable resolves the handler for a request or subscribe frame. When
+// the frame cannot run — the method is unknown, or a subscribe names a
+// streaming handler — it sends the error frame, reports the request to the
+// observer, and returns false. It runs before beginRequest, so a rejected
+// frame never registers and never cancels an in-flight request that shares
+// its ID.
+func (c *Conn) lookupRunnable(msg IncomingMessage, subscribe bool) (*HandlerInfo, bool) {
+	info, ok := c.server.registry.Get(msg.Method)
+	if !ok {
+		c.rejectFrame(msg, subscribe, CodeMethodNotFound, "method not found: "+msg.Method)
+		return nil, false
+	}
+	// Subscriptions require a reproducible unary result to re-send on refresh;
+	// streaming handlers can't satisfy that contract.
+	if subscribe && info.Kind != HandlerKindUnary {
+		c.rejectFrame(msg, subscribe, CodeInvalidRequest, "streaming handlers cannot be subscribed: "+msg.Method)
+		return nil, false
+	}
+	return info, true
+}
+
+// rejectFrame sends the error frame for a request or subscribe that never ran
+// and reports it to the observer with the same code.
+func (c *Conn) rejectFrame(msg IncomingMessage, subscribe bool, code int, message string) {
+	start := time.Now()
+	c.sendError(msg.ID, code, message)
+	if observer := c.server.observer; observer != nil {
+		observer.RequestCompleted(RequestEvent{
+			Method:    msg.Method,
+			Subscribe: subscribe,
+			Duration:  time.Since(start),
+			Code:      code,
+		})
+	}
+}
+
 // requestReg is a request registered in c.requests before its goroutine
-// starts.
+// starts. seq is the registration token unregisterRequest checks.
 type requestReg struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
+	seq    uint64
 }
 
 // beginRequest creates the request's context and registers it, so a cancel
@@ -300,8 +356,8 @@ type requestReg struct {
 // registered anyway and re-ran until the connection closed.
 func (c *Conn) beginRequest(id, method string, subscribe bool) requestReg {
 	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(id, method, subscribe, cancel)
-	return requestReg{ctx: ctx, cancel: cancel}
+	seq := c.registerRequest(id, method, subscribe, cancel)
+	return requestReg{ctx: ctx, cancel: cancel, seq: seq}
 }
 
 // ServerBroadcaster returns the server as a Broadcaster.
@@ -522,7 +578,11 @@ func (c *Conn) sendProgress(id string, current, total int, message string) {
 	_ = c.sendJSON(msg)
 }
 
-func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context.CancelCauseFunc) {
+// registerRequest stores the request's cancel func under id and returns the
+// registration's token, which the request passes to unregisterRequest when it
+// unwinds. It returns 0 (a token that matches no entry) when the connection is
+// already closed.
+func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context.CancelCauseFunc) uint64 {
 	// Read the clock before taking the lock: it keeps the clock read off the
 	// critical section, and dispatch time is the age we want to report anyway.
 	started := time.Now()
@@ -534,14 +594,17 @@ func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context
 		// holding requestsWg and stalling Server.Stop. Cancel immediately.
 		c.mu.Unlock()
 		cancel(ErrConnectionClosed)
-		return
+		return 0
 	}
 	// A client may (maliciously or accidentally) reuse an in-flight request
 	// ID. Overwriting the map entry would orphan the previous request's
 	// cancel func — its context would never be canceled until the connection
 	// closes. Cancel the shadowed request instead.
 	old := c.requests[id].cancel
+	c.reqSeq++
+	seq := c.reqSeq
 	c.requests[id] = inflight{
+		seq:       seq,
 		cancel:    cancel,
 		method:    method,
 		subscribe: subscribe,
@@ -552,19 +615,26 @@ func (c *Conn) registerRequest(id, method string, subscribe bool, cancel context
 	if old != nil {
 		old(ErrClientCanceled)
 	}
+	return seq
 }
 
-// unregisterRequest removes the request's cancel func from the map, but only
-// if it is still the one this handler registered. A client may reuse an
+// unregisterRequest removes the request's entry from the map, but only if it
+// is still the one this handler registered, identified by the token
+// registerRequest returned. A client may reuse an
 // in-flight request ID, in which case registerRequest replaces the map entry
 // and cancels the shadowed request. When that shadowed handler later unwinds,
 // its deferred unregister must not delete the replacement's cancel func — doing
 // so would make the still-running replacement uncancelable via cancel,
 // unsubscribe, or connection-close bookkeeping. (#225)
-func (c *Conn) unregisterRequest(id string, cancel context.CancelCauseFunc) {
+//
+// The token is a per-connection sequence number rather than the cancel func:
+// Go func values cannot be compared, and every func returned by
+// context.WithCancelCause shares one code pointer, so comparing them through
+// reflect matched any two entries.
+func (c *Conn) unregisterRequest(id string, seq uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if reflect.ValueOf(c.requests[id].cancel).Pointer() == reflect.ValueOf(cancel).Pointer() {
+	if req, ok := c.requests[id]; ok && seq != 0 && req.seq == seq {
 		delete(c.requests, id)
 	}
 }
@@ -738,13 +808,11 @@ func (c *Conn) handleAuth(token string) {
 // runAuthHook calls the server's auth hook and converts a panic into an error,
 // so a panicking hook cannot take down the process.
 //
-// Without this the policy was asymmetric across transports: handleAuth runs in
-// the WebSocket read-loop goroutine, which has no recover above it, so a hook
-// panic killed the process; the same panic under net/http only
-// dropped the connection. The hook is also where the principal provider is
-// registered, so consumer code in it has grown (#332). Recovering here — the
-// one place both transports call the hook — keeps it a single policy point
-// (#327).
+// handleAuth runs on the transport's read-loop goroutine, which has no
+// recover above it, so without this a hook panic killed the process. The hook
+// is also where the principal provider is registered, so consumer code in it
+// has grown (#332). Recovering here — the one place every transport calls the
+// hook — keeps it a single policy point (#327).
 //
 // The panic is logged through panicError like every other recover site, so the
 // value and stack reach the log exactly once. Its generic message is discarded:
@@ -797,10 +865,10 @@ func (c *Conn) armAuthTimeout(d time.Duration) {
 	c.mu.Unlock()
 }
 
-func (c *Conn) handleRequest(msg IncomingMessage, reg requestReg) {
+func (c *Conn) handleRequest(msg IncomingMessage, info *HandlerInfo, reg requestReg) {
 	defer c.server.requestsWg.Done()
 	defer func() {
-		c.unregisterRequest(msg.ID, reg.cancel)
+		c.unregisterRequest(msg.ID, reg.seq)
 		reg.cancel(nil)
 	}()
 
@@ -836,13 +904,6 @@ func (c *Conn) handleRequest(msg IncomingMessage, reg requestReg) {
 		}
 	}()
 
-	info, ok := c.server.registry.Get(msg.Method)
-	if !ok {
-		reqCode = CodeMethodNotFound
-		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
-		return
-	}
-
 	ctx := reg.ctx
 
 	// Add progress reporter and connection to context
@@ -852,9 +913,16 @@ func (c *Conn) handleRequest(msg IncomingMessage, reg requestReg) {
 
 	// Resolve the caller's principal for this execution (no-op without a
 	// provider). A provider error aborts before middleware runs, mapped
-	// onto the wire like a handler error.
+	// onto the wire like a handler error — unless the request was canceled
+	// meanwhile, in which case the provider most likely returned ctx.Err()
+	// and the outcome is a cancel, not an internal error.
 	var authErr error
 	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		if ctx.Err() != nil {
+			reqCode = CodeCanceled
+			c.sendError(msg.ID, CodeCanceled, "request canceled")
+			return
+		}
 		reqCode = c.sendErrorFor(msg.ID, authErr)
 		return
 	}
@@ -1062,14 +1130,22 @@ func (c *Conn) sendStreamEnd(reqID string, err error) {
 	_ = c.sendRaw(data)
 }
 
+// handleSubscribe runs a subscribe frame synchronously, the way
+// dispatchSubscribe does on its goroutine. The caller must have added one to
+// requestsWg; it is released whether or not the frame runs.
 func (c *Conn) handleSubscribe(msg IncomingMessage) {
-	c.runSubscribe(msg, c.beginRequest(msg.ID, msg.Method, true))
+	info, ok := c.lookupRunnable(msg, true)
+	if !ok {
+		c.server.requestsWg.Done()
+		return
+	}
+	c.runSubscribe(msg, info, c.beginRequest(msg.ID, msg.Method, true))
 }
 
-func (c *Conn) runSubscribe(msg IncomingMessage, reg requestReg) {
+func (c *Conn) runSubscribe(msg IncomingMessage, info *HandlerInfo, reg requestReg) {
 	defer c.server.requestsWg.Done()
 	defer func() {
-		c.unregisterRequest(msg.ID, reg.cancel)
+		c.unregisterRequest(msg.ID, reg.seq)
 		reg.cancel(nil)
 	}()
 
@@ -1099,21 +1175,6 @@ func (c *Conn) runSubscribe(msg IncomingMessage, reg requestReg) {
 		}
 	}()
 
-	info, ok := c.server.registry.Get(msg.Method)
-	if !ok {
-		reqCode = CodeMethodNotFound
-		c.sendError(msg.ID, CodeMethodNotFound, "method not found: "+msg.Method)
-		return
-	}
-
-	// Subscriptions require a reproducible unary result to re-send on refresh;
-	// streaming handlers can't satisfy that contract.
-	if info.Kind != HandlerKindUnary {
-		reqCode = CodeInvalidRequest
-		c.sendError(msg.ID, CodeInvalidRequest, "streaming handlers cannot be subscribed: "+msg.Method)
-		return
-	}
-
 	ctx := reg.ctx
 
 	// Add standard context values
@@ -1123,8 +1184,15 @@ func (c *Conn) runSubscribe(msg IncomingMessage, reg requestReg) {
 
 	// Resolve the caller's principal for this execution (no-op without a
 	// provider); a provider error rejects the subscribe before middleware.
+	// A cancel that landed meanwhile is reported as a cancel (see
+	// handleRequest).
 	var authErr error
 	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		if ctx.Err() != nil {
+			reqCode = CodeCanceled
+			c.sendError(msg.ID, CodeCanceled, "request canceled")
+			return
+		}
 		reqCode = c.sendErrorFor(msg.ID, authErr)
 		return
 	}
@@ -1240,9 +1308,9 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	}
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	c.registerRequest(sub.id, sub.method, true, cancel)
+	seq := c.registerRequest(sub.id, sub.method, true, cancel)
 	defer func() {
-		c.unregisterRequest(sub.id, cancel)
+		c.unregisterRequest(sub.id, seq)
 		cancel(nil)
 	}()
 
@@ -1255,9 +1323,16 @@ func (c *Conn) refreshSubscription(sub *subscription) {
 	// refreshes run on the server's schedule, so this is where identity
 	// changes (a revoked role, an upgraded session) take effect without a
 	// reconnect. A provider error becomes an error frame; the subscription
-	// stays registered, so a later refresh re-resolves.
+	// stays registered, so a later refresh re-resolves. A refresh canceled
+	// meanwhile (unsubscribe, re-subscribe, close) ends silently, like the
+	// canceled-handler branch below: the provider most likely returned
+	// ctx.Err(), and an error frame would land on an ID the client has
+	// dropped or re-subscribed.
 	var authErr error
 	if ctx, authErr = c.resolvePrincipal(ctx); authErr != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		_ = c.sendErrorFor(sub.id, authErr)
 		return
 	}

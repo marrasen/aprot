@@ -727,6 +727,7 @@ func TestConfigSentOnConnect(t *testing.T) {
 	server := NewServer(registry, ServerOptions{
 		ReconnectInterval:    2000,
 		ReconnectMaxInterval: 60000,
+		MaxMessageSize:       1 << 20,
 	})
 	handlers.server = server
 
@@ -760,6 +761,21 @@ func TestConfigSentOnConnect(t *testing.T) {
 	}
 	if msg.ReconnectMaxInterval != 60000 {
 		t.Errorf("Expected ReconnectMaxInterval 60000, got %d", msg.ReconnectMaxInterval)
+	}
+	if msg.MaxMessageSize != 1<<20 {
+		t.Errorf("Expected MaxMessageSize %d, got %d", 1<<20, msg.MaxMessageSize)
+	}
+}
+
+// A disabled inbound limit (MaxMessageSize -1) is advertised by omitting the
+// field, which clients read as "no local limit".
+func TestConfigMessageOmitsDisabledMaxMessageSize(t *testing.T) {
+	data, err := json.Marshal(configMessage(ServerOptions{MaxMessageSize: -1}, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "maxMessageSize") {
+		t.Errorf("config frame = %s, want no maxMessageSize when the limit is disabled", data)
 	}
 }
 
@@ -1532,6 +1548,9 @@ func TestServerOptionsDefaults(t *testing.T) {
 	}
 	if msg.ReconnectMaxInterval != 10000 {
 		t.Errorf("Expected default ReconnectMaxInterval 10000, got %d", msg.ReconnectMaxInterval)
+	}
+	if msg.MaxMessageSize != 4<<20 {
+		t.Errorf("Expected default MaxMessageSize %d, got %d", 4<<20, msg.MaxMessageSize)
 	}
 }
 

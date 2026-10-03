@@ -145,12 +145,19 @@ func (t *streamTransport) readLoop(conn *Conn) {
 		_ = t.Close()
 	}()
 
+	// The scanner needs room for the line plus its newline, so a frame of
+	// exactly MaxMessageSize bytes is accepted, as on WebSocket and as the
+	// config frame advertises. The scanner's limit is the larger of its max
+	// and the initial buffer's capacity, so the initial buffer must not
+	// exceed the limit either.
 	maxSize := t.opts.MaxMessageSize
-	if maxSize <= 0 || maxSize > math.MaxInt32 {
+	if maxSize <= 0 || maxSize >= math.MaxInt32 {
 		maxSize = math.MaxInt32
+	} else {
+		maxSize++
 	}
 	sc := bufio.NewScanner(t.rw)
-	sc.Buffer(make([]byte, 64*1024), int(maxSize))
+	sc.Buffer(make([]byte, min(64*1024, int(maxSize))), int(maxSize))
 
 	for sc.Scan() {
 		line := sc.Bytes()

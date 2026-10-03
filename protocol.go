@@ -152,4 +152,11 @@ type ConfigMessage struct {
 	// than by hanging on one. An absent field means a server predating the
 	// negotiation, i.e. binary frames on WebSocket.
 	BinaryFrames bool `json:"binaryFrames"`
+	// MaxMessageSize is the largest inbound message, in bytes, the server
+	// accepts on this connection (ServerOptions.MaxMessageSize after
+	// defaults). A larger message closes the connection, so a client can use
+	// this to refuse an oversized frame locally and fail just that call
+	// instead. Omitted when the limit is disabled, and by servers predating
+	// the field; a client should then apply no local limit.
+	MaxMessageSize int64 `json:"maxMessageSize,omitzero"`
 }

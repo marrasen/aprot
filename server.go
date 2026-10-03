@@ -480,8 +480,8 @@ func (s *Server) buildHandler(info *HandlerInfo) Handler {
 
 // Invoke executes a registered unary method through the full server request
 // pipeline — handler info and request context, refresh queue, server and
-// handler-group middleware — exactly as a request arriving over WebSocket or
-// the socket. It is the transport-agnostic entry point (#316): request-scoped
+// handler-group middleware — exactly as a request arriving over a WebSocket or
+// a byte stream. It is the transport-agnostic entry point (#316): request-scoped
 // transports (REST, MCP, custom HTTP surfaces) call Invoke instead of
 // re-assembling the pipeline, so aprot.TriggerRefresh, HandlerInfoFromContext
 // and RequestFromContext behave identically on every transport.
@@ -1030,7 +1030,18 @@ func configMessage(opts ServerOptions, binaryFrames bool) ConfigMessage {
 		ReconnectMaxInterval: opts.ReconnectMaxInterval,
 		ReconnectMaxAttempts: opts.ReconnectMaxAttempts,
 		BinaryFrames:         binaryFrames,
+		MaxMessageSize:       advertisedMaxMessageSize(opts.MaxMessageSize),
 	}
+}
+
+// advertisedMaxMessageSize is the inbound limit the config frame reports. A
+// non-positive MaxMessageSize disables the limit, which the frame expresses by
+// omitting the field.
+func advertisedMaxMessageSize(limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	return limit
 }
 
 // wsBinaryFromRequest reports whether a WebSocket connection accepts binary
