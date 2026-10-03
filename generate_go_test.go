@@ -287,7 +287,7 @@ func TestGoGenerateTypeMapping(t *testing.T) {
 		// Methods.
 		"func (h GgHandlersClient) Get(ctx context.Context, id int, filter string) (*GgAll, error) {",
 		`return client.Call[*GgAll](ctx, h.c, "ggHandlers.Get", []any{id, filter})`,
-		"func (h GgHandlersClient) SubscribeGet(ctx context.Context, id int, filter string, opts ...client.SubscribeOption[*GgAll]) *client.Subscription[*GgAll] {",
+		"func (h GgHandlersClient) SubscribeGet(ctx context.Context, id int, filter string, opts ...client.SubscribeOption) *client.Subscription[*GgAll] {",
 		"func (h GgHandlersClient) Remove(ctx context.Context, id int) error {",
 		`_, err := client.Call[struct{}](ctx, h.c, "ggHandlers.Remove", []any{id})`,
 		"func (h GgHandlersClient) Rows(ctx context.Context) *client.StreamResult[GgElem] {",
@@ -296,7 +296,7 @@ func TestGoGenerateTypeMapping(t *testing.T) {
 		// A parameter named like a generated identifier is renamed, and a
 		// variadic parameter is spread.
 		"func (h GgHandlersClient) Spread(ctx context.Context, ctx_ string, nums ...int) (int, error) {",
-		"func (h GgHandlersClient) SubscribeSpread(ctx context.Context, ctx_ string, nums []int, opts ...client.SubscribeOption[int])",
+		"func (h GgHandlersClient) SubscribeSpread(ctx context.Context, ctx_ string, nums []int, opts ...client.SubscribeOption)",
 		// Push events.
 		"func (c *Client) OnGgChanged(fn func(GgChanged)) (remove func()) {",
 		`return client.OnPush(c.Client, "ggChanged", fn)`,

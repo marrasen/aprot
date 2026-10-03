@@ -439,7 +439,7 @@ func TestSubscribePatch(t *testing.T) {
 	}
 	runs := f.handlers.listRuns.Load()
 
-	sub := client.Subscribe(ctx, c, "Handlers.List", nil,
+	sub := client.Subscribe[[]Item](ctx, c, "Handlers.List", nil,
 		client.WithPatch(func(cur []Item, raw jsontext.Value) ([]Item, error) {
 			var p ItemPatch
 			if err := json.Unmarshal(raw, &p); err != nil {

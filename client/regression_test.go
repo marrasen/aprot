@@ -370,8 +370,8 @@ func TestOnErrorReceivesRefreshErrors(t *testing.T) {
 	}
 	defer c.Close()
 	errs := make(chan error, 4)
-	sub := client.Subscribe(ctx, c, "RegressionHandlers.Flaky", nil,
-		client.OnError[int](func(err error) { errs <- err }))
+	sub := client.Subscribe[int](ctx, c, "RegressionHandlers.Flaky", nil,
+		client.OnError(func(err error) { errs <- err }))
 	defer sub.Close()
 	recv(t, sub.C)
 

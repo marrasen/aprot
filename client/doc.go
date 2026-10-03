@@ -90,9 +90,20 @@
 //
 // [Dial] returns once the first connection is open and, with
 // [Options.AuthToken], authenticated. If that fails it returns the error.
-// After that the client reconnects on its own with linear backoff, using the
-// intervals from the server's config frame. A server rejection (a connect
-// hook error or a refused token) stops the client instead: retrying would
-// only be rejected again. [Client.Done] and [Client.Err] report when and why
-// the client stopped.
+// After that the client reconnects on its own with linear backoff. Reconnect
+// settings set in [Options] win; the ones left at zero come from the
+// server's config frame. A server rejection (a connect hook error or a
+// refused token) stops the client, unless [Options.ReconnectOnRejected]
+// retries it at a fixed delay; [Client.LastRejection] reports the rejection
+// while it retries. A server that requires auth from a client without
+// AuthToken also stops it, with CodeAuthFailed. [Client.Done] and
+// [Client.Err] report when and why the client stopped.
+//
+// On a WebSocket, the client pings the server every [Options.PingInterval]
+// (30s by default) and reconnects when nothing arrives for twice that, so a
+// connection whose network path died silently does not hang calls.
+//
+// The server reports the largest message it accepts. The client refuses a
+// larger request locally with [ErrMessageTooLarge], rather than sending a
+// frame that would make the server close the connection.
 package client

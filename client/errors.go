@@ -36,6 +36,15 @@ var (
 	// server may already have run it. Subscriptions are not affected: they
 	// are re-established when the client reconnects.
 	ErrConnectionLost = errors.New("aprot client: connection lost")
+
+	// ErrMessageTooLarge is returned for a request whose frame is larger
+	// than the server accepts (the server's MaxMessageSize, which it reports
+	// in its config frame). The server would close the connection on such a
+	// frame, so the client refuses it locally: [Call] and [Stream] return
+	// the error, a [Subscription] closes with it, and the connection stays
+	// up. The returned error wraps ErrMessageTooLarge and names both sizes.
+	// Servers that do not report a limit get no local check.
+	ErrMessageTooLarge = errors.New("aprot client: message too large")
 )
 
 // Error is an error response from the server.

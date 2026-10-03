@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -46,8 +47,22 @@ type subEntry interface {
 	fail(err error)
 }
 
-// SubscribeOption configures a [Subscription].
-type SubscribeOption[T any] func(*Subscription[T])
+// SubscribeOption configures a [Subscription]. Make one with [WithPatch] or
+// [OnError].
+type SubscribeOption interface {
+	applySubscribe(*subscribeConfig)
+}
+
+// subscribeConfig is the type-erased result of the options. patch holds a
+// func(T, jsontext.Value) (T, error), which Subscribe[T] asserts back.
+type subscribeConfig struct {
+	patch   any
+	onError func(error)
+}
+
+type subscribeOptionFunc func(*subscribeConfig)
+
+func (f subscribeOptionFunc) applySubscribe(cfg *subscribeConfig) { f(cfg) }
 
 // WithPatch declares that the subscription can apply the patches the server
 // sends with aprot.PatchSubscription, instead of receiving a full result
@@ -62,8 +77,11 @@ type SubscribeOption[T any] func(*Subscription[T])
 // After a reconnect, a patch can arrive before the fresh full result. The
 // client then fetches the full result again instead of patching a value
 // from the old connection.
-func WithPatch[T any](apply func(current T, patch jsontext.Value) (T, error)) SubscribeOption[T] {
-	return func(s *Subscription[T]) { s.applyPatch = apply }
+//
+// T must match the subscription's result type. A mismatch closes the
+// subscription with an error that names both types.
+func WithPatch[T any](apply func(current T, patch jsontext.Value) (T, error)) SubscribeOption {
+	return subscribeOptionFunc(func(cfg *subscribeConfig) { cfg.patch = apply })
 }
 
 // OnError registers fn for errors from server-driven refreshes. The server
@@ -73,8 +91,8 @@ func WithPatch[T any](apply func(current T, patch jsontext.Value) (T, error)) Su
 //
 // An error answering the subscribe itself (bad params, a permission error,
 // an unknown method) is different: it closes C, and Err returns it.
-func OnError[T any](fn func(error)) SubscribeOption[T] {
-	return func(s *Subscription[T]) { s.onError = fn }
+func OnError(fn func(error)) SubscribeOption {
+	return subscribeOptionFunc(func(cfg *subscribeConfig) { cfg.onError = fn })
 }
 
 // Subscription is a live query. The server runs the handler once, then runs
@@ -121,11 +139,27 @@ type Subscription[T any] struct {
 // It does not block: a subscription made while the client is reconnecting is
 // sent once the connection is back. An error encoding params closes the
 // returned subscription at once.
-func Subscribe[T any](ctx context.Context, c *Client, method string, params []any, opts ...SubscribeOption[T]) *Subscription[T] {
+//
+// A subscribe frame larger than the server accepts closes the subscription
+// with [ErrMessageTooLarge] instead of being sent.
+func Subscribe[T any](ctx context.Context, c *Client, method string, params []any, opts ...SubscribeOption) *Subscription[T] {
 	ch := make(chan T, 1)
 	s := &Subscription[T]{C: ch, c: ch, client: c, wireMethod: method}
+	var cfg subscribeConfig
 	for _, opt := range opts {
-		opt(s)
+		if opt != nil {
+			opt.applySubscribe(&cfg)
+		}
+	}
+	s.onError = cfg.onError
+	if cfg.patch != nil {
+		apply, ok := cfg.patch.(func(T, jsontext.Value) (T, error))
+		if !ok {
+			var zero T
+			s.closeWith(fmt.Errorf("aprot client: subscribe %s: WithPatch apply func is %T, want func(%T, jsontext.Value) (%T, error)", method, cfg.patch, zero, zero))
+			return s
+		}
+		s.applyPatch = apply
 	}
 
 	raw, err := marshalParams(params)
@@ -232,9 +266,16 @@ func (c *Client) answered(conn wireConn, s subEntry) {
 // caller holds subSendMu and has taken a slot for s.
 func (c *Client) writeSubscribe(conn wireConn, s subEntry) {
 	s.sent(conn)
-	// A failed write means the connection is dropping; the reconnect
-	// re-sends every subscription.
-	_ = c.send(conn, outFrame{Type: "subscribe", ID: s.id(), Method: s.method(), Params: s.params(), Patch: s.wantsPatch()})
+	err := c.send(conn, outFrame{Type: "subscribe", ID: s.id(), Method: s.method(), Params: s.params(), Patch: s.wantsPatch()})
+	if errors.Is(err, ErrMessageTooLarge) {
+		// The server would close the connection on this frame, and every
+		// reconnect would re-send it. Close the subscription instead. fail
+		// needs subSendMu, which the caller holds, so it runs once that is
+		// released; it frees the slot taken for s.
+		go s.fail(fmt.Errorf("aprot client: subscribe %s: %w", s.method(), err))
+	}
+	// Any other failed write means the connection is dropping; the
+	// reconnect re-sends every subscription.
 }
 
 // releaseSubSlot frees the slot of a subscribe frame on conn that has been

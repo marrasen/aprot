@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	experimentjson "github.com/go-json-experiment/json"
@@ -62,6 +64,9 @@ type inFrame struct {
 	ReconnectInterval    int `json:"reconnectInterval"`
 	ReconnectMaxInterval int `json:"reconnectMaxInterval"`
 	ReconnectMaxAttempts int `json:"reconnectMaxAttempts"`
+	// MaxMessageSize is the largest inbound message the server accepts, in
+	// bytes. Absent (0) from servers that predate it or have no limit.
+	MaxMessageSize int64 `json:"maxMessageSize"`
 }
 
 // binaryFrameHeader is the JSON header of a binary frame. Layout: a 4-byte
@@ -93,23 +98,57 @@ func decodeBinaryFrame(data []byte) (binaryFrameHeader, []byte, error) {
 type wireConn interface {
 	// read returns the next message. binary reports a binary frame.
 	read() (data []byte, binary bool, err error)
-	// write sends one text message. Safe for concurrent use.
+	// write sends one text message. Safe for concurrent use. A message
+	// larger than the outbound limit is refused with an error wrapping
+	// ErrMessageTooLarge, and the connection stays up.
 	write(data []byte) error
+	// setOutboundLimit sets the largest message the server accepts, from
+	// its config frame. 0 means no limit.
+	setOutboundLimit(n int64)
 	close() error
+}
+
+// outboundLimit is the server's advertised inbound limit, shared by both
+// wireConn implementations.
+type outboundLimit struct{ max atomic.Int64 }
+
+func (l *outboundLimit) setOutboundLimit(n int64) {
+	if n < 0 {
+		n = 0
+	}
+	l.max.Store(n)
+}
+
+// check refuses a message of size bytes on the wire (framing included).
+func (l *outboundLimit) check(size int) error {
+	if max := l.max.Load(); max > 0 && int64(size) > max {
+		return fmt.Errorf("%w: the message is %d bytes, and the server's MaxMessageSize is %d bytes", ErrMessageTooLarge, size, max)
+	}
+	return nil
 }
 
 // wsConn is a wireConn over a gorilla WebSocket.
 type wsConn struct {
+	outboundLimit
 	ws           *websocket.Conn
 	writeTimeout time.Duration
-	mu           sync.Mutex
+	mu           sync.Mutex // serializes data writes; gorilla allows one writer
+
+	// Keepalive. pingInterval 0 disables it. A read deadline of
+	// 2 × pingInterval, pushed forward by every message and pong, turns a
+	// silent (half-open) connection into a read error.
+	pingInterval time.Duration
+	stopPing     chan struct{}
+	closeOnce    sync.Once
 }
 
-func dialWebSocket(ctx context.Context, url string, header http.Header, dialer *websocket.Dialer, writeTimeout time.Duration) (wireConn, error) {
-	if dialer == nil {
-		dialer = websocket.DefaultDialer
+func dialWebSocket(ctx context.Context, url string, opts *Options, writeTimeout, pingInterval time.Duration) (wireConn, error) {
+	dialer := &websocket.Dialer{
+		Proxy:           http.ProxyFromEnvironment,
+		TLSClientConfig: opts.TLSConfig,
+		NetDialContext:  opts.NetDialContext,
 	}
-	ws, resp, err := dialer.DialContext(ctx, url, header)
+	ws, resp, err := dialer.DialContext(ctx, url, opts.Header)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -119,18 +158,62 @@ func dialWebSocket(ctx context.Context, url string, header http.Header, dialer *
 		}
 		return nil, fmt.Errorf("aprot client: dial %s: %w", url, err)
 	}
-	return &wsConn{ws: ws, writeTimeout: writeTimeout}, nil
+	c := &wsConn{ws: ws, writeTimeout: writeTimeout, pingInterval: pingInterval, stopPing: make(chan struct{})}
+	if pingInterval > 0 {
+		c.extendReadDeadline()
+		ws.SetPongHandler(func(string) error {
+			c.extendReadDeadline()
+			return nil
+		})
+		go c.pingLoop()
+	}
+	return c, nil
+}
+
+func (c *wsConn) extendReadDeadline() {
+	_ = c.ws.SetReadDeadline(time.Now().Add(2 * c.pingInterval))
+}
+
+// pingLoop sends a ping every pingInterval until the connection closes.
+// WriteControl may run concurrently with WriteMessage, so it does not take
+// c.mu, and a slow data write cannot hold up a ping.
+func (c *wsConn) pingLoop() {
+	t := time.NewTicker(c.pingInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			deadline := time.Now().Add(c.pingInterval)
+			if c.writeTimeout > 0 && c.writeTimeout < c.pingInterval {
+				deadline = time.Now().Add(c.writeTimeout)
+			}
+			// A failed ping needs no handling here: a broken connection
+			// fails the read loop, or the read deadline does.
+			_ = c.ws.WriteControl(websocket.PingMessage, nil, deadline)
+		case <-c.stopPing:
+			return
+		}
+	}
 }
 
 func (c *wsConn) read() ([]byte, bool, error) {
 	kind, data, err := c.ws.ReadMessage()
 	if err != nil {
+		if c.pingInterval > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, false, fmt.Errorf("aprot client: no message or pong from the server for %v (keepalive): %w", 2*c.pingInterval, err)
+		}
 		return nil, false, err
+	}
+	if c.pingInterval > 0 {
+		c.extendReadDeadline()
 	}
 	return data, kind == websocket.BinaryMessage, nil
 }
 
 func (c *wsConn) write(data []byte) error {
+	if err := c.check(len(data)); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.writeTimeout > 0 {
@@ -140,16 +223,15 @@ func (c *wsConn) write(data []byte) error {
 }
 
 func (c *wsConn) close() error {
-	c.mu.Lock()
-	_ = c.ws.SetWriteDeadline(time.Now().Add(time.Second))
-	_ = c.ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	c.mu.Unlock()
+	c.closeOnce.Do(func() { close(c.stopPing) })
+	_ = c.ws.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return c.ws.Close()
 }
 
 // streamConn is a wireConn over a byte stream with newline-delimited JSON
 // framing, matching the server's ServeStream.
 type streamConn struct {
+	outboundLimit
 	rw io.ReadWriteCloser
 	sc *bufio.Scanner
 	mu sync.Mutex
@@ -157,7 +239,7 @@ type streamConn struct {
 
 func newStreamConn(rw io.ReadWriteCloser, maxMessageSize int) *streamConn {
 	sc := bufio.NewScanner(rw)
-	sc.Buffer(make([]byte, 64*1024), maxMessageSize)
+	sc.Buffer(make([]byte, min(64*1024, maxMessageSize)), maxMessageSize)
 	return &streamConn{rw: rw, sc: sc}
 }
 
@@ -177,6 +259,10 @@ func (c *streamConn) read() ([]byte, bool, error) {
 }
 
 func (c *streamConn) write(data []byte) error {
+	// The server's line scanner must hold the line and its newline.
+	if err := c.check(len(data) + 1); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	buf := make([]byte, 0, len(data)+1)

@@ -2,17 +2,18 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // State is the connection state of a [Client].
@@ -46,29 +47,67 @@ func (s State) String() string {
 type Options struct {
 	// AuthToken, if set, is called on every connect, and its token is sent
 	// as the first message (the server's OnAuth hook). A rejected token
-	// closes the client with an *Error carrying CodeAuthFailed.
+	// closes the client with an *Error carrying CodeAuthFailed, unless
+	// [Options.ReconnectOnRejected] retries it.
+	//
+	// Without AuthToken, a server that requires auth answers the first
+	// request with an auth_error. The client then closes with an *Error
+	// carrying CodeAuthFailed, and pending calls fail with it.
 	AuthToken func(ctx context.Context) (string, error)
 
 	// Header is sent with the WebSocket upgrade request, for example a
 	// cookie or an Authorization header. Ignored by [DialStream].
 	Header http.Header
 
-	// Dialer dials the WebSocket. Defaults to websocket.DefaultDialer.
+	// TLSConfig configures TLS for wss:// URLs. Nil uses the defaults.
 	// Ignored by [DialStream].
-	Dialer *websocket.Dialer
+	TLSConfig *tls.Config
+
+	// NetDialContext dials the network connection under the WebSocket. Nil
+	// uses a plain net.Dialer. Either way, the proxy settings from the
+	// environment (HTTP_PROXY, HTTPS_PROXY, NO_PROXY) apply; with a proxy,
+	// NetDialContext dials the proxy. Ignored by [DialStream].
+	NetDialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// Reconnect backoff. Attempt n waits n × ReconnectInterval, capped at
-	// ReconnectMaxInterval. Defaults: 1s and 10s. The server's config frame
-	// overrides both, as it does for the TypeScript client.
+	// ReconnectMaxInterval. A value set here wins. A value left at 0 takes
+	// the server's setting from its config frame, as the TypeScript client
+	// does, and falls back to 1s and 10s.
 	ReconnectInterval    time.Duration
 	ReconnectMaxInterval time.Duration
 	// ReconnectMaxAttempts caps consecutive failed reconnects before the
-	// client closes. 0 means unlimited. The server's config frame overrides
-	// it.
+	// client closes. 0 takes the server's setting, which is unlimited by
+	// default. A negative value means unlimited, whatever the server says.
 	ReconnectMaxAttempts int
 	// NoReconnect closes the client when the first connection drops,
 	// instead of reconnecting.
 	NoReconnect bool
+
+	// ReconnectOnRejected retries when the server rejects a reconnect (its
+	// connect hook fails, or it refuses the AuthToken), instead of closing
+	// the client for good. Nil, the default, closes the client: the right
+	// response to a real sign-out. Set it when a rejection is usually
+	// temporary, such as a session store that is briefly down or a token
+	// that AuthToken will mint fresh on the next attempt.
+	//
+	// It applies only after the first successful connect: a rejection
+	// during [Dial] or [DialStream] is still returned. A connection
+	// rejection the server sends mid-session (CodeConnectionRejected) is
+	// retried the same way. While retrying, the client is in
+	// StateConnecting and [Client.LastRejection] returns the rejection.
+	ReconnectOnRejected *RejectedRetry
+
+	// PingInterval is how often the client pings the server on a WebSocket
+	// connection. A connection that delivers no message and no pong for
+	// twice the interval is treated as dead: the client closes it and
+	// reconnects. That catches a half-open connection, where the network
+	// path died without either side seeing a close. Default 30s; a negative
+	// value disables pings and the check.
+	//
+	// [DialStream] connections have no keepalive: the byte-stream framing
+	// has no ping. Detect a dead stream in the dial func's transport, for
+	// example with TCP keepalive.
+	PingInterval time.Duration
 
 	// ConnectTimeout bounds each connection attempt: dial, the server's
 	// first frame, and auth. A server that accepts the connection but never
@@ -80,7 +119,11 @@ type Options struct {
 	WriteTimeout time.Duration
 
 	// MaxMessageSize bounds one inbound message on [DialStream]
-	// connections. Default 32 MiB.
+	// connections. Default 32 MiB. (Outbound messages are bounded by the
+	// server's own limit; see [ErrMessageTooLarge].) A larger message breaks
+	// the connection, and a subscription whose result is that large makes
+	// every reconnect fail the same way, so set it above the largest result
+	// the server sends.
 	MaxMessageSize int
 
 	// OnStateChange, if set, is called on every state change, in order, on
@@ -93,7 +136,23 @@ type Options struct {
 	Logger *slog.Logger
 }
 
+// RejectedRetry configures retries after the server rejects a reconnect.
+// See [Options.ReconnectOnRejected]. It mirrors the TypeScript client's
+// reconnectOnRejected option.
+type RejectedRetry struct {
+	// Delay is the wait before each retry. It is fixed, not backed off: a
+	// rejection means the server is up and answered. Default 2s.
+	Delay time.Duration
+	// MaxAttempts caps consecutive rejections; after that the client closes
+	// with the last rejection. 0 means unlimited. Any other outcome, such as
+	// a network failure or a connection that drops normally, resets the
+	// count.
+	MaxAttempts int
+}
+
 const (
+	defaultRejectedRetryDelay   = 2 * time.Second
+	defaultPingInterval         = 30 * time.Second
 	defaultReconnectInterval    = time.Second
 	defaultReconnectMaxInterval = 10 * time.Second
 	defaultWriteTimeout         = 10 * time.Second
@@ -144,12 +203,23 @@ type Client struct {
 	// slot. Both are reset whenever the connection changes. Guarded by mu.
 	subInFlight int
 	subQueue    []subEntry
-	backoff     backoff
+	backoff     backoff // guarded by mu
+	// lastRejection is the rejection being retried under
+	// ReconnectOnRejected; nil once a connect succeeds. Guarded by mu.
+	lastRejection *Error
+	// dropRejection is a mid-session CodeConnectionRejected frame, held
+	// for the run loop to retry when ReconnectOnRejected is set. Guarded by
+	// mu.
+	dropRejection *Error
 }
 
+// backoff holds the reconnect schedule. The fixed flags mark values set in
+// Options, which the server's config frame must not override.
 type backoff struct {
 	interval, maxInterval time.Duration
 	maxAttempts           int
+
+	fixedInterval, fixedMaxInterval, fixedMaxAttempts bool
 }
 
 func (b backoff) delay(attempt int) time.Duration {
@@ -170,8 +240,14 @@ func Dial(ctx context.Context, url string, opts Options) (*Client, error) {
 	if writeTimeout == 0 {
 		writeTimeout = defaultWriteTimeout
 	}
+	pingInterval := opts.PingInterval
+	if pingInterval == 0 {
+		pingInterval = defaultPingInterval
+	} else if pingInterval < 0 {
+		pingInterval = 0
+	}
 	return start(ctx, opts, func(ctx context.Context) (wireConn, error) {
-		return dialWebSocket(ctx, url, opts.Header, opts.Dialer, writeTimeout)
+		return dialWebSocket(ctx, url, &opts, writeTimeout, pingInterval)
 	})
 }
 
@@ -215,9 +291,12 @@ func start(ctx context.Context, opts Options, dial func(context.Context) (wireCo
 		streams:  make(map[string]streamEntry),
 		pushes:   make(map[string]map[*pushHandler]struct{}),
 		backoff: backoff{
-			interval:    opts.ReconnectInterval,
-			maxInterval: opts.ReconnectMaxInterval,
-			maxAttempts: opts.ReconnectMaxAttempts,
+			interval:         opts.ReconnectInterval,
+			maxInterval:      opts.ReconnectMaxInterval,
+			maxAttempts:      max(opts.ReconnectMaxAttempts, 0),
+			fixedInterval:    opts.ReconnectInterval > 0,
+			fixedMaxInterval: opts.ReconnectMaxInterval > 0,
+			fixedMaxAttempts: opts.ReconnectMaxAttempts != 0,
 		},
 	}
 	if c.backoff.interval <= 0 {
@@ -229,6 +308,13 @@ func start(ctx context.Context, opts Options, dial func(context.Context) (wireCo
 
 	conn, watch, err := c.connect(ctx)
 	if err != nil {
+		if errors.Is(err, ErrClosed) {
+			// The connection closed the client while it came up, for
+			// example with an auth_error: report why.
+			if cause := c.Err(); cause != nil {
+				err = cause
+			}
+		}
 		c.shutdown(err)
 		return nil, err
 	}
@@ -288,7 +374,7 @@ func (c *Client) connect(ctx context.Context) (conn wireConn, watch *connWatch, 
 	}
 	switch first.Type {
 	case "config":
-		c.applyConfig(first)
+		c.applyConfig(conn, first)
 	case "error":
 		_ = conn.close()
 		return nil, nil, &rejectedError{&Error{Code: first.Code, Message: first.Message, Data: first.Data}}
@@ -299,7 +385,7 @@ func (c *Client) connect(ctx context.Context) (conn wireConn, watch *connWatch, 
 
 	watch = &connWatch{done: make(chan struct{})}
 	go func() {
-		watch.err = c.readLoop(conn)
+		watch.err = c.readLoop(conn, watch)
 		close(watch.done)
 	}()
 
@@ -310,7 +396,7 @@ func (c *Client) connect(ctx context.Context) (conn wireConn, watch *connWatch, 
 			<-watch.done
 			return nil, nil, fmt.Errorf("aprot client: AuthToken: %w", err)
 		}
-		if err := c.authenticate(ctx, conn, token, watch.done); err != nil {
+		if err := c.authenticate(ctx, conn, token, watch); err != nil {
 			_ = conn.close()
 			<-watch.done
 			var apiErr *Error
@@ -341,11 +427,20 @@ func (e *rejectedError) Unwrap() error { return e.err }
 type connWatch struct {
 	done chan struct{}
 	err  error
+	// authSent counts auth frames on this connection still awaiting their
+	// auth_ok or auth_error. A verdict when it is zero is unsolicited: the
+	// server requires auth and the client sent none.
+	authSent atomic.Int32
 }
 
 // run supervises the connection: it waits for the current one to drop, then
-// reconnects with backoff until the client is closed.
+// reconnects until the client is closed. Failed attempts back off linearly. A
+// rejection is retried at a fixed delay under Options.ReconnectOnRejected,
+// and closes the client otherwise.
 func (c *Client) run(ctx context.Context, conn wireConn, watch *connWatch) {
+	// rejections counts consecutive rejections, as the TypeScript client's
+	// reconnectOnRejected does: any other outcome resets it.
+	rejections := 0
 	for {
 		select {
 		case <-watch.done:
@@ -355,20 +450,53 @@ func (c *Client) run(ctx context.Context, conn wireConn, watch *connWatch) {
 			return
 		}
 		dropErr := watch.err
+		c.mu.Lock()
+		rejected := c.dropRejection
+		c.dropRejection = nil
+		c.mu.Unlock()
 		c.markDisconnected(conn, dropErr)
 
 		if c.opts.NoReconnect {
-			c.shutdown(fmt.Errorf("%w: %v", ErrConnectionLost, dropErr))
+			if rejected != nil {
+				c.shutdown(rejected)
+			} else {
+				c.shutdown(fmt.Errorf("%w: %v", ErrConnectionLost, dropErr))
+			}
 			return
+		}
+		if rejected == nil {
+			rejections = 0
 		}
 
 		var err error
-		for attempt := 1; ; attempt++ {
-			if c.backoff.maxAttempts > 0 && attempt > c.backoff.maxAttempts {
-				c.shutdown(fmt.Errorf("aprot client: gave up after %d reconnect attempts: %w", c.backoff.maxAttempts, err))
-				return
+		for attempt := 0; ; {
+			var delay time.Duration
+			if rejected != nil {
+				retry := c.opts.ReconnectOnRejected
+				if retry == nil || (retry.MaxAttempts > 0 && rejections >= retry.MaxAttempts) {
+					c.shutdown(rejected)
+					return
+				}
+				rejections++
+				delay = retry.Delay
+				if delay <= 0 {
+					delay = defaultRejectedRetryDelay
+				}
+				c.mu.Lock()
+				c.lastRejection = rejected
+				c.mu.Unlock()
+				c.logger.Debug("aprot client: connection rejected; retrying", "rejections", rejections, "err", rejected)
+			} else {
+				rejections = 0
+				attempt++
+				b := c.currentBackoff()
+				if b.maxAttempts > 0 && attempt > b.maxAttempts {
+					c.shutdown(fmt.Errorf("aprot client: gave up after %d reconnect attempts: %w", b.maxAttempts, err))
+					return
+				}
+				delay = b.delay(attempt)
 			}
-			t := time.NewTimer(c.backoff.delay(attempt))
+			t := time.NewTimer(delay)
 			select {
 			case <-t.C:
 			case <-ctx.Done():
@@ -377,33 +505,60 @@ func (c *Client) run(ctx context.Context, conn wireConn, watch *connWatch) {
 			}
 			conn, watch, err = c.connect(ctx)
 			if err == nil {
+				c.mu.Lock()
+				c.lastRejection = nil
+				c.mu.Unlock()
 				break
-			}
-			var rej *rejectedError
-			if errors.As(err, &rej) {
-				c.shutdown(rej.err)
-				return
 			}
 			if ctx.Err() != nil {
 				return
 			}
+			var rej *rejectedError
+			if errors.As(err, &rej) {
+				// The server answered, so the network is fine: restart
+				// the backoff schedule.
+				rejected = rej.err
+				attempt = 0
+				continue
+			}
+			rejected = nil
 			c.logger.Debug("aprot client: reconnect failed", "attempt", attempt, "err", err)
 		}
 	}
 }
 
-func (c *Client) applyConfig(f inFrame) {
+func (c *Client) currentBackoff() backoff {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if f.ReconnectInterval > 0 {
+	return c.backoff
+}
+
+// applyConfig applies a config frame received on conn. Reconnect settings
+// from the server fill in only what Options left unset.
+func (c *Client) applyConfig(conn wireConn, f inFrame) {
+	conn.setOutboundLimit(f.MaxMessageSize)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if f.ReconnectInterval > 0 && !c.backoff.fixedInterval {
 		c.backoff.interval = time.Duration(f.ReconnectInterval) * time.Millisecond
 	}
-	if f.ReconnectMaxInterval > 0 {
+	if f.ReconnectMaxInterval > 0 && !c.backoff.fixedMaxInterval {
 		c.backoff.maxInterval = time.Duration(f.ReconnectMaxInterval) * time.Millisecond
 	}
-	if f.ReconnectMaxAttempts > 0 {
+	if f.ReconnectMaxAttempts > 0 && !c.backoff.fixedMaxAttempts {
 		c.backoff.maxAttempts = f.ReconnectMaxAttempts
 	}
+}
+
+// LastRejection returns the server's most recent rejection while the client
+// retries it under [Options.ReconnectOnRejected], and nil otherwise. It
+// returns to nil once a reconnect succeeds. While retrying, the client is in
+// StateConnecting, and calls wait for the connection as they do during any
+// reconnect.
+func (c *Client) LastRejection() *Error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastRejection
 }
 
 // markConnected publishes conn and re-sends every open subscription.
@@ -637,7 +792,7 @@ func (c *Client) send(conn wireConn, f outFrame) error {
 
 // authenticate sends an auth frame on conn and waits for the server's
 // verdict.
-func (c *Client) authenticate(ctx context.Context, conn wireConn, token string, connDone <-chan struct{}) error {
+func (c *Client) authenticate(ctx context.Context, conn wireConn, token string, watch *connWatch) error {
 	c.authMu.Lock()
 	defer c.authMu.Unlock()
 
@@ -653,13 +808,15 @@ func (c *Client) authenticate(ctx context.Context, conn wireConn, token string, 
 		c.mu.Unlock()
 	}()
 
+	watch.authSent.Add(1)
 	if err := c.send(conn, outFrame{Type: "auth", Token: token}); err != nil {
+		watch.authSent.Add(-1)
 		return err
 	}
 	select {
 	case err := <-wait:
 		return err
-	case <-connDone:
+	case <-watch.done:
 		return fmt.Errorf("%w during auth", ErrConnectionLost)
 	case <-ctx.Done():
 		return ctx.Err()
@@ -681,11 +838,11 @@ func (c *Client) RefreshAuth(ctx context.Context, token string) error {
 	if watch == nil {
 		return ErrConnectionLost
 	}
-	return c.authenticate(ctx, conn, token, watch.done)
+	return c.authenticate(ctx, conn, token, watch)
 }
 
 // readLoop reads and routes frames until the connection fails.
-func (c *Client) readLoop(conn wireConn) error {
+func (c *Client) readLoop(conn wireConn, watch *connWatch) error {
 	for {
 		data, binary, err := conn.read()
 		if err != nil {
@@ -700,22 +857,39 @@ func (c *Client) readLoop(conn wireConn) error {
 			c.logger.Warn("aprot client: undecodable frame", "err", err)
 			continue
 		}
-		c.handleFrame(conn, f)
+		c.handleFrame(conn, watch, f)
 	}
 }
 
-func (c *Client) handleFrame(conn wireConn, f inFrame) {
+func (c *Client) handleFrame(conn wireConn, watch *connWatch, f inFrame) {
 	switch f.Type {
 	case "response":
 		c.deliverResult(f.ID, f.Result, nil)
 	case "error":
-		c.handleError(f)
+		c.handleError(conn, f)
 	case "auth_ok", "auth_error":
+		solicited := watch.authSent.Add(-1) >= 0
+		if !solicited {
+			watch.authSent.Store(0)
+			if f.Type == "auth_error" {
+				// The server requires auth and the client sent no token:
+				// every request will get this answer, and the server will
+				// close the connection when its auth timeout runs out.
+				// Reconnecting cannot help, so stop and say why.
+				msg := f.Message
+				if msg == "" {
+					msg = "authentication required"
+				}
+				c.shutdown(&Error{Code: CodeAuthFailed, Message: msg})
+			}
+			return
+		}
 		c.mu.Lock()
 		wait := c.authWait
 		c.authWait = nil
 		c.mu.Unlock()
 		if wait == nil {
+			// The verdict for an auth whose caller gave up.
 			return
 		}
 		if f.Type == "auth_ok" {
@@ -781,7 +955,7 @@ func (c *Client) handleFrame(conn wireConn, f inFrame) {
 			}
 		}
 	case "config":
-		c.applyConfig(f)
+		c.applyConfig(conn, f)
 	default:
 		c.logger.Debug("aprot client: ignoring unknown frame", "type", f.Type)
 	}
@@ -802,7 +976,7 @@ func (c *Client) rejectStreamForCall(conn wireConn, id string) {
 	p.ch <- callResult{err: &Error{Code: CodeInvalidRequest, Message: "method is a streaming handler; use Stream or Stream2"}}
 }
 
-func (c *Client) handleError(f inFrame) {
+func (c *Client) handleError(conn wireConn, f inFrame) {
 	apiErr := &Error{Code: f.Code, Message: f.Message, Data: f.Data}
 	c.mu.Lock()
 	if p, ok := c.pending[f.ID]; ok && f.ID != "" {
@@ -834,6 +1008,16 @@ func (c *Client) handleError(f inFrame) {
 	}
 	if f.Code == CodeConnectionRejected {
 		// The server is ending the session and will close the connection.
+		if c.opts.ReconnectOnRejected != nil && !c.opts.NoReconnect {
+			// Retry it as a rejection, at the fixed delay.
+			c.mu.Lock()
+			if c.conn == conn {
+				c.dropRejection = apiErr
+			}
+			c.mu.Unlock()
+			_ = conn.close()
+			return
+		}
 		// Shut down before the close lands, so the client does not
 		// reconnect into the same rejection.
 		c.shutdown(apiErr)
@@ -852,6 +1036,14 @@ func (c *Client) deliverResult(id string, raw jsontext.Value, blob *Blob) {
 		delete(c.pending, id)
 		c.mu.Unlock()
 		p.ch <- callResult{raw: raw, blob: blob}
+		return
+	}
+	if st, ok := c.streams[id]; ok {
+		// A plain result for a stream: the method is not a streaming
+		// handler. The handler has finished, so there is nothing to cancel.
+		delete(c.streams, id)
+		c.mu.Unlock()
+		st.end(&Error{Code: CodeInvalidRequest, Message: "method is not a streaming handler; use Call"})
 		return
 	}
 	s := c.subs[id]

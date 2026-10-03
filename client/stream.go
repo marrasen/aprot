@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json/jsontext"
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
@@ -143,7 +144,10 @@ func startStream(ctx context.Context, c *Client, method string, params []any) *r
 		c.mu.Lock()
 		delete(c.streams, s.id)
 		c.mu.Unlock()
-		s.end(fmt.Errorf("%w: %v", ErrConnectionLost, err))
+		if !errors.Is(err, ErrMessageTooLarge) {
+			err = fmt.Errorf("%w: %v", ErrConnectionLost, err)
+		}
+		s.end(err)
 		return s
 	}
 	stopCtx := context.AfterFunc(ctx, func() { s.stop(ctx.Err()) })
@@ -177,7 +181,9 @@ type StreamResult[T any] struct {
 }
 
 // Stream starts a call to a streaming handler. It waits while the client is
-// reconnecting; bound the wait with ctx.
+// reconnecting; bound the wait with ctx. A request larger than the server
+// accepts ends the stream with [ErrMessageTooLarge] without being sent. A
+// method that is not a streaming handler ends it with CodeInvalidRequest.
 func Stream[T any](ctx context.Context, c *Client, method string, params []any) *StreamResult[T] {
 	return &StreamResult[T]{s: startStream(ctx, c, method, params)}
 }

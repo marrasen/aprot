@@ -39,7 +39,7 @@ var aprotPkgPath = reflect.TypeFor[Registry]().PkgPath()
 // A handler group whose field name equals one of these would shadow it, so
 // generation fails instead. A test in generate_go_test.go keeps this list in
 // step with the runtime package.
-var goPromotedClientMembers = []string{"Client", "Close", "Done", "Err", "RefreshAuth", "State"}
+var goPromotedClientMembers = []string{"Client", "Close", "Done", "Err", "LastRejection", "RefreshAuth", "State"}
 
 var (
 	jsonMarshalerToType = reflect.TypeFor[jsonv2.MarshalerTo]()
@@ -536,8 +536,8 @@ func (g *GoGenerator) renderMethod(b *strings.Builder, grp goGroup, info *Handle
 
 	sub := "Subscribe" + info.Name
 	fmt.Fprintf(b, "// %s runs %s as a live query.\n// Each result arrives on the subscription's C; close it with Close.\n", sub, info.Name)
-	fmt.Fprintf(b, "%s%s(%s, opts ...%s.SubscribeOption[%s]) *%s.Subscription[%s] {\n%sreturn %s.Subscribe[%s](ctx, h.c, %s, %s, opts...)\n}\n\n",
-		recv, sub, subSig, cl, result, cl, result, prelude, cl, result, wire, paramsExpr)
+	fmt.Fprintf(b, "%s%s(%s, opts ...%s.SubscribeOption) *%s.Subscription[%s] {\n%sreturn %s.Subscribe[%s](ctx, h.c, %s, %s, opts...)\n}\n\n",
+		recv, sub, subSig, cl, cl, result, prelude, cl, result, wire, paramsExpr)
 }
 
 // streamTypes returns the key (nil for iter.Seq) and value types of an
