@@ -135,6 +135,7 @@ Open the component in two browser tabs, click "Add job" in one, and the other up
 
 - **Type-safe handlers** — define handlers with any signature; parameters become TypeScript arguments
 - **Automatic TypeScript generation** — standalone functions, React hooks, typed errors, enum const objects
+- **Go client** — a generated, standalone Go client (`aprot/client` + `NewGoGenerator`) with typed calls, streams, push events, and live subscriptions delivered on a channel; it copies the wire shape of every type, so a client program never imports server code
 - **Streaming handlers** — return `iter.Seq[T]` / `iter.Seq2[K, V]` from Go and the generated client exposes `AsyncIterable<T>`, so UIs can populate lists item-by-item as results arrive
 - **Binary Blob responses** — return `aprot.Blob` from a handler and the client receives a DOM `Blob`; delivered as a raw WebSocket binary frame (no base64 overhead), with an automatic JSON fallback for clients that decline binary and on the byte-stream transport
 - **Subscription refresh** — server-driven auto-refresh: query handlers declare trigger keys, mutation handlers fire them to push updates to all subscribed clients
@@ -1276,6 +1277,107 @@ client.connect();
 ```
 
 **Electron note:** a renderer can open `ws://127.0.0.1:<port>` directly, so for most Electron apps the simplest wiring is still a loopback WebSocket to the spawned Go process — pair it with `OnAuth` (a spawn-time random token) and `SetCheckOrigin` so other local processes and browser tabs can't connect. Use `ServeStream` + a custom `ClientTransport` when you want no listening port at all: Go child speaks NDJSON on stdio to the main process, which relays to the renderer over a `MessagePort`.
+
+## Go Client
+
+Go programs can call an aprot server too, with the same live subscriptions the React hooks get. The client speaks the existing JSON protocol, so the server needs no changes. It has two parts:
+
+- **`github.com/marrasen/aprot/client`** — the runtime: connect, auth, reconnect, calls, streams, push events, subscriptions. It does not import the aprot server package.
+- **`aprot.NewGoGenerator`** — generates a typed client package from your `Registry`, with one method per handler.
+
+### Generate the client
+
+```go
+gen := aprot.NewGoGenerator(registry).WithOptions(aprot.GoGeneratorOptions{
+    OutputDir:   "../../goclient",
+    PackageName: "goclient",
+})
+if _, err := gen.Generate(); err != nil {
+    log.Fatal(err)
+}
+```
+
+This writes one file, `client.gen.go`. It holds a `Client` with one field per handler group, a Go copy of every type the handlers use, enum constants, `ErrCode<Name>` constants for registered errors, and an `On<Event>` method per push event. Like the TypeScript generator, `Generate()` removes stale aprot-generated `.go` files from `OutputDir`.
+
+The generated types reproduce the **wire shape**, not the server's Go types, so the client package never imports server code:
+
+- Your own types are copied with identical `json` tags. Two types with the same name from different packages get their package name as a prefix (`OtherItem`).
+- Standard-library types (`time.Time`, `time.Duration`, `json.RawMessage`, …) are used directly.
+- `sql.Null*` becomes a pointer (`*string`, `*int64`, …), since the server sends the value or `null`.
+- `aprot.Blob` becomes `client.Blob`.
+- A type with its own `MarshalJSON`/`MarshalText` becomes its wire shape: `string` or `bool` when it marshals to one, otherwise `jsontext.Value`. A registered enum with its own marshaler becomes a string type whose constants are the marshaled values. Its zero value may not mean "zero" to the server (for example `""` for a money type that expects `"0.00"`), so set such fields explicitly.
+- To use a third-party type directly instead of its wire shape, list its package in `ImportTypes`, for example `ImportTypes: []string{"github.com/google/uuid"}`. A listed package must not import your server code (the generator can only refuse the aprot package itself), and its types must not contain `sql.Null*` fields, which the client does not flatten.
+
+### Use it
+
+```go
+rc, err := client.Dial(ctx, "ws://localhost:8080/ws", client.Options{
+    AuthToken: func(ctx context.Context) (string, error) { return token, nil }, // optional
+})
+if err != nil {
+    log.Fatal(err)
+}
+api := goclient.New(rc)
+defer api.Close()
+
+user, err := api.Handlers.GetUser(ctx, "42")
+```
+
+`Dial` returns once the first connection is up, or returns its error. After that the client reconnects on its own. A call in flight when the connection drops fails with `client.ErrConnectionLost` and is not retried. A call made while reconnecting waits for the connection, so give it a `ctx` deadline. Server errors come back as `*client.Error`; check them with `client.HasCode(err, client.CodeForbidden)`.
+
+### Subscriptions
+
+Every unary handler gets a `Subscribe<Method>` that returns a `*client.Subscription[T]`. Each new result arrives on its channel `C`. Subscribe once, outside the loop, and always close the subscription when you stop reading it:
+
+```go
+user := api.Handlers.SubscribeGetUser(ctx, "42")
+defer user.Close()
+users := api.Handlers.SubscribeListUsers(ctx)
+defer users.Close()
+
+for {
+    select {
+    case u, ok := <-user.C:
+        if !ok {
+            return user.Err()
+        }
+        // update one user
+    case all, ok := <-users.C:
+        if !ok {
+            return users.Err()
+        }
+        // update the user list
+    case <-ctx.Done():
+        return ctx.Err()
+    }
+}
+```
+
+- **The newest value wins.** `C` holds one value. A reader that falls behind gets the latest result, never a backlog, and never holds up the connection. Every result is a full snapshot, so a skipped one loses nothing.
+- **Reconnects are invisible.** The client re-subscribes, and the fresh result arrives on the same `C`. It keeps about 64 subscribe frames waiting for their first answer and queues the rest, so re-sending hundreds of subscriptions stays well under the server's `MaxConcurrentRequests` limit (256 per connection, shared with calls and streams).
+- **Ending it.** `Close()`, cancelling `ctx`, or `Client.Close()` sends `unsubscribe` and closes `C`. Without one of them, the server keeps re-running the handler until the client closes.
+- **Errors.** An error answering the subscribe (bad params, permission denied) closes `C`, and `Err()` returns it. An error from a later refresh does not close `C`, because the server keeps the subscription and the next refresh may succeed. Pass `client.OnError[T](fn)` to see those errors; otherwise the client logs them.
+- **Patches.** `client.WithPatch(apply)` declares patch support, so `aprot.PatchSubscription` sends this subscriber a patch instead of a full refresh. The client applies the patch and sends the new full value on `C`.
+
+### Streams and push events
+
+```go
+rows := api.StreamingHandlers.Numbers(ctx, 100, 0)
+defer rows.Close()
+for row := range rows.All() {
+    // ...
+}
+if err := rows.Err(); err != nil { ... }
+
+remove := api.OnUserCreatedEvent(func(e goclient.UserCreatedEvent) { ... })
+defer remove()
+```
+
+Leaving a stream's loop early cancels the handler at the server. Each push handler gets its events in order on its own goroutine, so it may block or make calls.
+
+### Byte streams
+
+`client.DialStream` connects over the `ServeStream` framing instead of a WebSocket: a TCP connection, a Unix socket, or the stdio pipes of a child process. Its `dial` function is called again for every reconnect; for a stream that cannot be reopened, set `Options.NoReconnect`.
 
 ## Project Structure
 

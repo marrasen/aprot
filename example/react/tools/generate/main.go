@@ -45,4 +45,18 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("Generated client/src/api/openapi.json")
+
+	// Generate the Go client. It imports only github.com/marrasen/aprot/client,
+	// never the server packages.
+	goFiles, err := aprot.NewGoGenerator(registry).WithOptions(aprot.GoGeneratorOptions{
+		OutputDir:   "../../goclient",
+		PackageName: "goclient",
+	}).Generate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate Go client: %v\n", err)
+		os.Exit(1)
+	}
+	for filename := range goFiles {
+		fmt.Printf("Generated goclient/%s\n", filename)
+	}
 }
