@@ -464,7 +464,9 @@ class WebSocketTransport implements ClientTransport {
             ws.onmessage = (e) => onMessage(e.data);
             ws.onclose = (event) => {
                 if (timer) clearTimeout(timer);
-                this.ws = null;
+                // Only forget this socket: after disconnect() a newer socket
+                // may already be current, and its close must not erase it.
+                if (this.ws === ws) this.ws = null;
                 // Surface the structured CloseEvent so the ApiClient can
                 // distinguish a clean post-upgrade close (codes 1000-1015,
                 // 4xxx) from a pre-upgrade abnormal closure (1006). The
@@ -731,7 +733,11 @@ export class ApiClient {
             }
             // disconnect() abandoned the attempt in flight (it is settling
             // now). Joining it would end disconnected; start a fresh attempt
-            // once it has settled, so the two never race for the transport.
+            // once it has settled. The abandoned attempt ignores its own
+            // socket's late events (see runConnect), so it cannot disturb
+            // the new one. Move to 'connecting' now, as connect() promises,
+            // so requests made meanwhile are buffered instead of failing.
+            this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
             return this.connectInFlight.then(() => this.doConnect());
         }
         const attempt = this.runConnect().finally(() => {
@@ -752,6 +758,13 @@ export class ApiClient {
             this.abandonInFlight();
         }
         const attemptId = ++this.connectAttemptId;
+        const generation = this.disconnectGeneration;
+        // stale reports that this attempt was superseded by a newer one or
+        // abandoned by disconnect(). A stale attempt stops at its next step,
+        // and its socket's late events are ignored: the old socket's close
+        // event can land after a newer attempt started, and handling it
+        // would tear down the new connection.
+        const stale = () => attemptId !== this.connectAttemptId || generation !== this.disconnectGeneration;
         this.setState(this.reconnectAttempts > 0 ? 'reconnecting' : 'connecting');
 
         // The URL function and getConnectParams are both resolved per attempt,
@@ -766,16 +779,27 @@ export class ApiClient {
                 url = appendQueryParams(url, await this.options.getConnectParams());
             }
         } catch (err) {
+            if (stale()) return;
             this.connectParamsFailure = { cause: err };
             this.handleClose({ wasClean: false });
             return;
         }
+        // disconnect() may have run while the URL or params were resolving.
+        if (stale()) return;
 
+        // closeReported keeps one close from being handled twice: a socket
+        // that closes before opening both reports through onClose and
+        // rejects the connect promise.
+        let closeReported = false;
         return this.transport.connect(
             url,
-            (data) => this.handleMessage(data),
-            (info) => this.handleClose(info),
+            (data) => { if (!stale()) this.handleMessage(data); },
+            (info) => {
+                closeReported = true;
+                if (!stale()) this.handleClose(info);
+            },
         ).then(async () => {
+            if (stale()) return;
             this.reconnectAttempts = 0;
             // First-message auth: authenticate before the connection is
             // considered ready, so buffered requests/subscriptions only flush
@@ -786,7 +810,7 @@ export class ApiClient {
                 } catch (err) {
                     // The connection closed during the handshake: handleClose()
                     // already classified it and scheduled what comes next.
-                    if (err instanceof ConnectionError) return;
+                    if (err instanceof ConnectionError || stale()) return;
                     // The server rejected the token: classify like a connection
                     // rejection (no auto-reconnect), carrying the auth error.
                     const apiError = err instanceof ApiError
@@ -806,13 +830,18 @@ export class ApiClient {
             // batch. The retry streak is deliberately not reset here — an
             // in-band rejection also passes through this point, so resetting
             // would clear the streak on every attempt; handleClose() does it.
+            if (stale()) return;
             if (this.lastRejectionAttemptId !== attemptId) {
                 this.lastRejection = null;
             }
             this.setState('connected');
         }).catch(() => {
-            // The transport's promise rejected before opening — treat as a
-            // pre-upgrade close with no diagnostic info available.
+            // The transport's promise rejected before opening. If onClose
+            // already reported the close (with its close code), that report
+            // stands. Otherwise (a connect timeout, or a custom transport that
+            // only rejects) treat it as a pre-upgrade close with no
+            // diagnostic info.
+            if (stale() || closeReported) return;
             this.handleClose({ wasClean: false });
         });
     }

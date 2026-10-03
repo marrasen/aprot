@@ -1,0 +1,22 @@
+import { test, expect } from 'vitest';
+import { wsUrl } from './helpers';
+import { ApiClient } from '../api/client';
+import { numbers } from '../api/streaming-handlers';
+test('stream started while connecting waits, abort while waiting ends it', async () => {
+    const client = new ApiClient(wsUrl(), { reconnect: false, getAuthToken: () => new Promise<string>((r) => setTimeout(() => r('t'), 50)) });
+    void client.connect();
+    const got: number[] = [];
+    for await (const it of numbers(client, 3, 0)) got.push(it ? 1 : 0);
+    expect(got.length).toBe(3);
+    client.disconnect();
+    const c2 = new ApiClient(wsUrl(), { reconnect: false, getAuthToken: () => new Promise<string>(() => {}) });
+    void c2.connect();
+    const ac = new AbortController();
+    const it = numbers(c2, 3, 0, { signal: ac.signal })[Symbol.asyncIterator]();
+    const p = it.next();
+    expect(c2.getLoadingCount()).toBe(1);
+    ac.abort();
+    await expect(p).rejects.toThrow('Request aborted');
+    expect(c2.getLoadingCount()).toBe(0);
+    c2.disconnect();
+});
