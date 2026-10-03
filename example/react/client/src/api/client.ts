@@ -562,6 +562,20 @@ export class ApiClient {
         push: (item: unknown) => void;
         end: (err: Error | null) => void;
     }>();
+    // The server runs each subscription's first query in one of the
+    // connection's request slots and refuses frames beyond its
+    // MaxConcurrentRequests (256 by default, shared with calls and streams).
+    // So about this many subscribe frames wait for their first answer at
+    // once; the rest queue, and each answer sends the next. Without it,
+    // resubscribing hundreds of subscriptions after a reconnect could have
+    // some refused. The count is approximate: a refresh result looks like a
+    // first answer on the wire.
+    private static readonly maxSubscribesInFlight = 64;
+    private subscribesInFlight = new Set<string>();
+    private subscribeQueue: string[] = [];
+    // Ids to re-send once their pending first answer arrives (see
+    // sendSubscribe).
+    private subscribeResend = new Set<string>();
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
@@ -921,6 +935,9 @@ export class ApiClient {
             this.connectParamsFailure = null;
             return;
         }
+        // Slots belong to the connection that just closed; resubscribeAll()
+        // re-sends everything on the next one.
+        this.resetSubscribeSlots();
         const reason = this.classifyClose(info);
         const error = this.buildConnectionError(reason, info);
         // Consume the pending rejection and params failure: subsequent
@@ -1066,6 +1083,7 @@ export class ApiClient {
         this.teardownPageListeners();
         this.clearReconnectTimer();
         this.subscriptions.clear();
+        this.resetSubscribeSlots();
 
         // Reject in-flight requests/streams synchronously: the server may
         // still respond between transport.disconnect() and the close event
@@ -1262,11 +1280,12 @@ export class ApiClient {
                     // that declared support, so this should not happen — but if
                     // it does, re-subscribe to fetch the full result rather
                     // than silently going stale.
-                    this.transport.send({ type: 'subscribe', id: msg.id, method: sub.method, params: sub.params });
+                    this.sendSubscribe(msg.id);
                 }
                 break;
             }
             case 'error': {
+                if (msg.id) this.subscribeAnswered(msg.id);
                 const p = this.pending.get(msg.id);
                 if (p) {
                     this.pending.delete(msg.id);
@@ -1363,6 +1382,7 @@ export class ApiClient {
      * two paths cannot drift apart.
      */
     private settleResponse(id: string, result: unknown): void {
+        this.subscribeAnswered(id);
         const p = this.pending.get(id);
         if (p) {
             this.pending.delete(id);
@@ -1379,6 +1399,7 @@ export class ApiClient {
     }
 
     private rejectResponse(id: string, error: Error): void {
+        this.subscribeAnswered(id);
         const p = this.pending.get(id);
         if (p) {
             this.pending.delete(id);
@@ -1541,14 +1562,66 @@ export class ApiClient {
     }
 
     private resubscribeAll(): void {
+        this.resetSubscribeSlots();
         for (const [id, sub] of this.subscriptions) {
             this.pending.set(id, {
                 resolve: (result) => { sub.callback(result); },
                 reject: (err) => { sub.onError?.(err as Error); },
             });
-            this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params, ...(sub.onPatch ? { patch: true } : {}) });
+            this.sendSubscribe(id);
         }
         this.notifyLoadingChange();
+    }
+
+    // sendSubscribe sends the subscribe frame for id, or queues it when
+    // maxSubscribesInFlight frames are already waiting for their first
+    // answer. A re-send for a subscription that is still waiting (the patch
+    // fallback) is held until that answer arrives and then reuses its slot:
+    // sent at once, the server would answer both frames and the first answer
+    // would free the slot early.
+    private sendSubscribe(id: string): void {
+        const sub = this.subscriptions.get(id);
+        if (!sub || !this.transport.isConnected()) return;
+        if (this.subscribesInFlight.has(id)) {
+            this.subscribeResend.add(id);
+            return;
+        }
+        if (this.subscribesInFlight.size >= ApiClient.maxSubscribesInFlight) {
+            this.subscribeQueue.push(id);
+            return;
+        }
+        this.subscribesInFlight.add(id);
+        this.writeSubscribe(id);
+    }
+
+    private writeSubscribe(id: string): void {
+        const sub = this.subscriptions.get(id);
+        if (!sub) return;
+        this.transport.send({ type: 'subscribe', id, method: sub.method, params: sub.params, ...(sub.onPatch ? { patch: true } : {}) });
+    }
+
+    // subscribeAnswered handles the first answer (a result or an error) to
+    // id's subscribe frame, or its unsubscribe: it sends a held re-send on
+    // the same slot, or frees the slot and sends queued subscriptions into
+    // it. Ids that are not waiting are ignored.
+    private subscribeAnswered(id: string): void {
+        if (!this.subscribesInFlight.has(id)) return;
+        if (this.subscribeResend.delete(id) && this.subscriptions.has(id) && this.transport.isConnected()) {
+            this.writeSubscribe(id);
+            return;
+        }
+        this.subscribesInFlight.delete(id);
+        while (this.subscribesInFlight.size < ApiClient.maxSubscribesInFlight && this.subscribeQueue.length > 0) {
+            const next = this.subscribeQueue.shift()!;
+            // Skips ids unsubscribed while queued.
+            this.sendSubscribe(next);
+        }
+    }
+
+    private resetSubscribeSlots(): void {
+        this.subscribesInFlight.clear();
+        this.subscribeQueue = [];
+        this.subscribeResend.clear();
     }
 
     onPush<T>(event: string, handler: PushHandler<T>): () => void {
@@ -1580,13 +1653,12 @@ export class ApiClient {
             reject: (err) => { onError?.(err as Error); },
         });
 
-        if (this.transport.isConnected()) {
-            this.transport.send({ type: 'subscribe', id, method, params, ...(onPatch ? { patch: true } : {}) });
-        }
+        this.sendSubscribe(id);
 
         return () => {
             this.subscriptions.delete(id);
             this.pending.delete(id);
+            this.subscribeAnswered(id);
             if (this.transport.isConnected()) {
                 this.transport.send({ type: 'unsubscribe', id });
             }

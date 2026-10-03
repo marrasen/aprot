@@ -8,7 +8,10 @@ package e2eapi
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/marrasen/aprot"
 )
@@ -203,5 +206,57 @@ func Register(registry *aprot.Registry) {
 	registry.Register(&FixedArrayHandlers{})
 	registry.Register(NewBlobHandlers())
 	registry.Register(NewPatchHandlers())
+	registry.Register(Burst)
 	registry.SetValidator(aprot.NewPlaygroundValidator())
+}
+
+// BurstHandlers exercises the client's cap on unanswered subscribe frames.
+// Get is slow enough that hundreds of first runs overlap, and records the
+// most that ran at once.
+type BurstHandlers struct {
+	running atomic.Int64
+	peak    atomic.Int64
+	// Disconnect drops every connection of a user. The server main sets it
+	// to Server.DisconnectUser.
+	Disconnect func(userID string) int
+}
+
+// Burst is the instance Register wires in, so the server main can set
+// Disconnect.
+var Burst = &BurstHandlers{}
+
+// Get returns n after 20ms, as a subscribable query.
+func (h *BurstHandlers) Get(ctx context.Context, n int) (int, error) {
+	aprot.RegisterRefreshTrigger(ctx, "burst")
+	cur := h.running.Add(1)
+	defer h.running.Add(-1)
+	for {
+		p := h.peak.Load()
+		if cur <= p || h.peak.CompareAndSwap(p, cur) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	return n, nil
+}
+
+// TakePeak returns the most Get calls that ran at once, and resets it.
+func (h *BurstHandlers) TakePeak(ctx context.Context) (int, error) {
+	return int(h.peak.Swap(0)), nil
+}
+
+// DropMe closes the caller's connection shortly after replying, so a test
+// can force a reconnect.
+func (h *BurstHandlers) DropMe(ctx context.Context) error {
+	conn := aprot.Connection(ctx)
+	if conn == nil || h.Disconnect == nil {
+		return aprot.ErrInternal(nil)
+	}
+	id := fmt.Sprintf("burst-drop-%d", conn.ID())
+	conn.SetUserID(id)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		h.Disconnect(id)
+	}()
+	return nil
 }

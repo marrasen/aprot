@@ -34,6 +34,16 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Fixed
 
+- **A client with hundreds of subscriptions no longer has some refused
+  after a reconnect.** The server runs each subscription's first query in one
+  of the connection's request slots, and refuses frames beyond
+  `MaxConcurrentRequests` (256 by default) with `CodeTooManyRequests`. After a
+  reconnect, the generated TypeScript client re-sent every subscription at
+  once, so with slow enough queries some were refused, and their `onError`
+  fired instead of data arriving. The same could happen when a page opened
+  hundreds of subscriptions at once. The client now keeps about 64 subscribe
+  frames waiting for their first answer and sends the rest as answers arrive.
+
 - **An unsubscribe or cancel right behind its subscribe or request is no
   longer lost.** The server registered a request inside the goroutine that
   runs it, but handled `unsubscribe` and `cancel` straight away on the read
