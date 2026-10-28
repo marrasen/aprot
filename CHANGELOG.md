@@ -35,11 +35,13 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
   reconnecting go out once that connection's `config` frame has arrived, so
   they are checked against the limit of the server they go to. `connect()`
   resolves at the same point. Both server transports send `config` first on
-  every connection. An attempt that gets no `config` frame within
-  `connectTimeout` (10 s when that is 0) fails with a `network-error` that
-  says so, and reconnects normally: the backoff keeps growing, and the
-  attempt counts toward `reconnectMaxAttempts`. So a custom
-  `ClientTransport` must forward that frame.
+  every connection they accept, after the connect hooks have run. The wait
+  has no time limit, so a slow connect hook delays the connection instead of
+  failing it. If no `config` frame has arrived after `connectTimeout`,
+  `onConnectionError` gets one `network-error` that says so, and the client
+  keeps waiting. A custom `ClientTransport` must forward that frame, and a
+  bridge that serves several client connections over one long-lived
+  `ServeStream` must replay it to each of them.
 - **An auth failure raised on the client keeps its cause.** When
   `getAuthToken` fails, or the auth frame is larger than the server's
   `maxMessageSize`, the `AuthFailed` error reads `authentication failed:

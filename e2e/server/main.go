@@ -70,12 +70,28 @@ func main() {
 	e2eapi.Register(noLimitRegistry)
 	noLimitServer := aprot.NewServer(noLimitRegistry, aprot.ServerOptions{MaxMessageSize: -1})
 
+	// Slow-hook server — its connect hook takes 300 ms, and config goes out
+	// only after the hooks, so a client with a shorter connectTimeout must
+	// keep waiting rather than drop the socket and rerun the hook.
+	slowHookRegistry := aprot.NewRegistry()
+	e2eapi.Register(slowHookRegistry)
+	slowHookServer := aprot.NewServer(slowHookRegistry)
+	slowHookServer.OnConnect(func(ctx context.Context, conn *aprot.Conn) error {
+		select {
+		case <-time.After(300 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server)
 	mux.Handle("/ws-reject", rejectServer)
 	mux.Handle("/ws-token", tokenServer)
 	mux.Handle("/ws-small", smallServer)
 	mux.Handle("/ws-nolimit", noLimitServer)
+	mux.Handle("/ws-slow-hook", slowHookServer)
 	mux.Handle("/api/", http.StripPrefix("/api", restAdapter))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
