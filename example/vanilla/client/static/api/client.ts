@@ -294,6 +294,11 @@ export interface TransportCloseInfo {
  *   send, such as one its serializer rejects or one over the limit given to
  *   setMaxMessageSize. The client then fails only the call that built the
  *   frame.
+ * - Deliver the server's config frame, the first frame on every connection
+ *   it accepts. The client sends nothing until it arrives. It waits with no
+ *   time limit, reporting one 'network-error' after connectTimeout. A bridge
+ *   over one long-lived ServeStream, which sends config once per stream,
+ *   must keep that frame and deliver it again on every connect().
  * - The client calls connect() again for reconnects; a transport instance
  *   must be reusable after disconnect()/onClose.
  */
@@ -673,6 +678,13 @@ export class ApiClient {
     // server it goes to.
     private configApplied = false;
     private configWaiter: ((outcome: 'config' | 'closed') => void) | null = null;
+    // configOverdue is the report waitForConfig made once the current
+    // attempt had waited connectTimeout for its config frame, or null. While
+    // it is set, a manual reconnectNow() or a page wake gives up on the
+    // waiting socket and starts over: it may have died without a close
+    // event, and nothing is sent on it that would make TCP notice. It is
+    // also cleared from lastConnectionError when this attempt connects.
+    private configOverdue: ConnectionError | null = null;
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
@@ -779,7 +791,9 @@ export class ApiClient {
      * client may be in a state connect() reads as "nothing to do": a socket
      * the runtime left half-open still reports 'connected' until its close
      * event lands. Resolves when the attempt finishes, connected or not, and
-     * joins an attempt already in flight rather than starting a second one.
+     * joins an attempt already in flight rather than starting a second one,
+     * unless that attempt has waited connectTimeout for the server's config
+     * frame: then its socket is dropped and a fresh attempt starts.
      */
     reconnectNow(): Promise<void> {
         return this.startConnect();
@@ -812,7 +826,17 @@ export class ApiClient {
         }
         if (this.connectInFlight) {
             if (this.connectInFlightGeneration === this.disconnectGeneration) {
-                return this.connectInFlight;
+                if (!this.configOverdue) return this.connectInFlight;
+                // The attempt in flight is overdue for its config frame (see
+                // configOverdue). Mark it stale so its socket's late events
+                // are ignored, release its wait, drop the socket, and start
+                // a fresh attempt once it has settled. Buffered calls stay
+                // buffered for the new one.
+                this.configOverdue = null;
+                this.connectAttemptId++;
+                this.configWaiter?.('closed');
+                this.transport.disconnect();
+                return this.connectInFlight.then(() => this.doConnect());
             }
             // disconnect() abandoned the attempt in flight (it is settling
             // now). Joining it would end disconnected; start a fresh attempt
@@ -876,6 +900,7 @@ export class ApiClient {
         let closeReported = false;
         // A limit belongs to the connection that advertised it.
         this.configApplied = false;
+        this.configOverdue = null;
         this.transport.setMaxMessageSize?.(undefined);
         return this.transport.connect(
             url,
@@ -894,6 +919,10 @@ export class ApiClient {
             // task.
             const config = await this.waitForConfig(stale);
             if (config === 'closed' || stale() || !this.transport.isConnected()) return;
+            // The server answered, so this socket is alive: from here on a
+            // manual reconnect joins the attempt instead of replacing it.
+            const overdue = this.configOverdue;
+            this.configOverdue = null;
             // The server answered, so the backoff starts over. Reset only now:
             // a channel that opens and then closes before config must keep
             // growing the backoff and count toward reconnectMaxAttempts.
@@ -937,6 +966,11 @@ export class ApiClient {
             if (this.lastRejectionAttemptId !== attemptId) {
                 this.lastRejection = null;
             }
+            // A late config frame only meant a slow connect hook: once it
+            // has arrived, the report about it no longer describes anything.
+            if (overdue && this.lastConnectionError === overdue) {
+                this.lastConnectionError = null;
+            }
             this.setState('connected');
         }).catch(() => {
             // The transport's promise rejected before opening. If onClose
@@ -973,10 +1007,12 @@ export class ApiClient {
                 timer = setTimeout(() => {
                     timer = undefined;
                     if (this.configWaiter !== settle || stale()) return;
-                    this.notifyConnectionError(new ConnectionError(
+                    const err = new ConnectionError(
                         'network-error',
                         `Network error: the connection opened, but no config frame has arrived after ${after} ms; still waiting`,
-                    ));
+                    );
+                    this.configOverdue = err;
+                    this.notifyConnectionError(err);
                 }, after);
             }
         });
@@ -1020,6 +1056,11 @@ export class ApiClient {
                 throw new Error('refreshAuth requires a token argument or a getAuthToken option');
             }
             t = await this.options.getAuthToken();
+        }
+        // Nothing is sent before the connection's config frame. The
+        // handshake authenticates with getAuthToken once it arrives.
+        if (!this.configApplied) {
+            throw new Error('refreshAuth needs an open connection: the server\'s config frame has not arrived yet');
         }
         return new Promise<void>((resolve, reject) => {
             this.authWaiter?.reject(new Error('superseded by a newer auth'));
@@ -1454,7 +1495,9 @@ export class ApiClient {
     private handlePageWake(): void {
         if (this.manualDisconnect) return;
         if (this.state === 'connected' && this.transport.isConnected()) return;
-        if (this.state === 'connecting') return;
+        // An attempt overdue for its config frame may sit on a socket that
+        // died while the page slept; doConnect() replaces it.
+        if (this.state === 'connecting' && !this.configOverdue) return;
 
         this.clearReconnectTimer();
         this.reconnectAttempts = 0;

@@ -840,6 +840,18 @@
 // ClientTransport must forward the config frame, and can implement
 // setMaxMessageSize to refuse oversized frames itself.
 //
+// The server sends the config frame only after its connect hooks finish, so
+// connect() resolves, and the state turns 'connected', at that point. The
+// client waits for the frame with no time limit, so a slow connect hook
+// delays the connection instead of failing it. If no config frame has
+// arrived after connectTimeout, onConnectionError gets one 'network-error'
+// that says so, and the client keeps the socket and keeps waiting. That
+// error is cleared when the client connects. While the wait is overdue,
+// reconnectNow() and a page wake drop the waiting socket and start a fresh
+// attempt. ServeStream sends config once per stream, so a bridge that keeps
+// one stream open across client reloads must replay the frame on every
+// connect().
+//
 // The 'server-rejected' bucket is also surfaced via the existing
 // onConnectionRejected ApiClientOption callback — both fire for the same
 // underlying event, kept for backward compatibility.

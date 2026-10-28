@@ -30,18 +30,31 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ### Changed
 
-- **The TypeScript client waits for the server's `config` frame before
-  sending.** Calls, resubscribes, and streams queued while connecting or
-  reconnecting go out once that connection's `config` frame has arrived, so
-  they are checked against the limit of the server they go to. `connect()`
-  resolves at the same point. Both server transports send `config` first on
-  every connection they accept, after the connect hooks have run. The wait
-  has no time limit, so a slow connect hook delays the connection instead of
-  failing it. If no `config` frame has arrived after `connectTimeout`,
-  `onConnectionError` gets one `network-error` that says so, and the client
-  keeps waiting. A custom `ClientTransport` must forward that frame, and a
-  bridge that serves several client connections over one long-lived
-  `ServeStream` must replay it to each of them.
+- **Breaking: the TypeScript client waits for the server's `config` frame
+  before sending.** A custom `ClientTransport` or test mock that never
+  delivers `config` now leaves `connect()` unresolved and every call queued.
+  In v0.65.0 it worked. Forward that frame. A bridge that serves several
+  client connections over one long-lived `ServeStream` must replay it to
+  each of them.
+
+  Calls, resubscribes, and streams queued while connecting or reconnecting
+  go out once that connection's `config` frame has arrived, so they are
+  checked against the limit of the server they go to. `connect()` resolves,
+  and the state turns `connected`, at the same point: after the server's
+  connect hooks have finished, not when the socket opens. Both server
+  transports send `config` first on every connection they accept, after the
+  connect hooks have run.
+
+  The wait has no time limit, so a slow connect hook delays the connection
+  instead of failing it. If no `config` frame has arrived after
+  `connectTimeout`, `onConnectionError` gets one `network-error` that says
+  so, and the client keeps waiting. That error is cleared from
+  `getLastConnectionError()` when the frame arrives and the client connects.
+  While the wait is overdue, `reconnectNow()`, the tab becoming visible, and
+  the browser going online drop the waiting socket and start a fresh
+  attempt, since that socket may have died without a close event.
+  `refreshAuth()` before the `config` frame rejects; the handshake
+  authenticates with `getAuthToken` once it arrives.
 - **An auth failure raised on the client keeps its cause.** When
   `getAuthToken` fails, or the auth frame is larger than the server's
   `maxMessageSize`, the `AuthFailed` error reads `authentication failed:

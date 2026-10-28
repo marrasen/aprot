@@ -425,6 +425,85 @@ describe('maxMessageSize with a custom transport', () => {
         expect(client.getState()).toBe('connected');
         expect(t.connects).toBe(1);
         expect(errors).toHaveLength(1);
+        // The report described a wait that is over.
+        expect(client.getLastConnectionError()).toBeNull();
+        client.disconnect();
+    });
+
+    test('reconnectNow() replaces a socket that is overdue for its config frame', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 50 });
+        void client.connect();
+        const request = client.request('BlobHandlers.SetBlob', ['fits']);
+        await sleep(100);
+
+        const again = client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(2);
+        expect(client.getState()).toBe('connecting');
+
+        // The new socket gets its config frame; the call held across the
+        // swap goes out on it.
+        t.sendConfig({ type: 'config' });
+        await again;
+        await expect(request).resolves.toBeNull();
+        expect(client.getState()).toBe('connected');
+        client.disconnect();
+    });
+
+    test('a page wake replaces only a socket that is overdue for its config frame', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 50 });
+        const wake = () => (client as unknown as { handlePageWake: () => void }).handlePageWake();
+        void client.connect();
+
+        // Within connectTimeout the wait is not overdue: join it.
+        await sleep(10);
+        wake();
+        void client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(1);
+
+        await sleep(80);
+        wake();
+        await sleep(10);
+        expect(t.connects).toBe(2);
+        client.disconnect();
+    });
+
+    test('once a late config frame arrives, reconnectNow() joins the attempt', async () => {
+        const t = new LimitTransport(null);
+        let giveToken: (token: string) => void = () => {};
+        const client = new ApiClient('ws://unused', {
+            transport: t, reconnect: false, connectTimeout: 50,
+            getAuthToken: () => new Promise<string>((resolve) => { giveToken = resolve; }),
+        });
+        const connecting = client.connect();
+        await sleep(100);
+
+        // Config arrives late, and the handshake waits on the token: the
+        // socket is alive now, so a manual reconnect must not replace it.
+        t.sendConfig({ type: 'config' });
+        await sleep(10);
+        void client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(1);
+
+        giveToken('token');
+        await connecting;
+        expect(client.getState()).toBe('connected');
+        expect(t.connects).toBe(1);
+        client.disconnect();
+    });
+
+    test('refreshAuth() before the config frame rejects and sends nothing', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false });
+        void client.connect();
+        await sleep(10);
+
+        await expect(client.refreshAuth('token')).rejects.toThrow('config frame has not arrived');
+        expect(t.sent).toEqual([]);
         client.disconnect();
     });
 
