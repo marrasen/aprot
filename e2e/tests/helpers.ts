@@ -29,6 +29,17 @@ export function wsTokenUrl(): string {
     return `ws://${getServerAddr()}/ws-token`;
 }
 
+// wsSmallLimitUrl reaches a server whose MaxMessageSize is 4096 bytes.
+export function wsSmallLimitUrl(): string {
+    return `ws://${getServerAddr()}/ws-small`;
+}
+
+// wsNoLimitUrl reaches a server with MaxMessageSize disabled, so its config
+// frame advertises no limit.
+export function wsNoLimitUrl(): string {
+    return `ws://${getServerAddr()}/ws-nolimit`;
+}
+
 // wsTextOnlyUrl declines binary frames, so Blob results arrive as the JSON
 // $blob envelope (#279).
 export function wsTextOnlyUrl(): string {

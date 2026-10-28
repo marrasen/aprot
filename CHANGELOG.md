@@ -10,6 +10,49 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **The TypeScript client enforces the server's `maxMessageSize`.** A
+  request, stream, or subscription whose frame is larger than the limit in
+  the server's `config` frame now fails locally with a new
+  `MessageTooLargeError` (`size`, `limit`, in bytes of UTF-8 JSON). Before,
+  the frame went out and the server closed the connection, failing every
+  in-flight call and stream along with it. An oversized subscription reports
+  the error through `onError` and is dropped instead of being retried on
+  every reconnect. Servers that disable the limit, or predate the field, get
+  no local check. The Go client already did this (`ErrMessageTooLarge`).
+- **`ClientTransport.setMaxMessageSize`** (optional). The client passes it
+  the server's `maxMessageSize`, and a transport that implements it throws
+  `MessageTooLargeError` from `send()` for a larger frame. The built-in
+  WebSocket transport does this, serializing each frame once. A `send()` that
+  throws now fails only the call that built the frame, instead of leaving it
+  pending.
+
+### Changed
+
+- **The TypeScript client waits for the server's `config` frame before
+  sending.** Calls, resubscribes, and streams queued while connecting or
+  reconnecting go out once that connection's `config` frame has arrived, so
+  they are checked against the limit of the server they go to. `connect()`
+  resolves at the same point. Both server transports send `config` first on
+  every connection. An attempt that gets no `config` frame within
+  `connectTimeout` (10 s when that is 0) fails with a `network-error` that
+  says so, and reconnects normally: the backoff keeps growing, and the
+  attempt counts toward `reconnectMaxAttempts`. So a custom
+  `ClientTransport` must forward that frame.
+- **An auth failure raised on the client keeps its cause.** When
+  `getAuthToken` fails, or the auth frame is larger than the server's
+  `maxMessageSize`, the `AuthFailed` error reads `authentication failed:
+  <cause>` instead of a bare `authentication failed`.
+- **Abort listeners are removed when a call settles.** A request or stream
+  that finishes, including a request buffered while connecting, no longer
+  leaves its listener on the `AbortSignal`, so a signal shared by many calls
+  does not collect them, and aborting it later sends no `cancel` for a
+  finished request. A task request aborted or rejected while still buffered
+  now removes its task-progress listeners, as a sent one does. A `cancel` or `unsubscribe` frame
+  the transport refuses is dropped instead of throwing out of the abort
+  listener or the unsubscribe call.
+
 ## [0.65.0] - 2026-10-03
 
 Adds a Go client: a runtime package, `aprot/client`, and a generator,

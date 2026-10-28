@@ -25,6 +25,8 @@ class AuthGateTransport implements ClientTransport {
         this.onClose = onClose;
         this.open = true;
         this.authed = false;
+        // Like the server, open every connection with the config frame.
+        this.deliver({ type: 'config' });
         return Promise.resolve();
     }
 

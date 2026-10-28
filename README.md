@@ -863,7 +863,7 @@ Reasons:
 | `offline` | `navigator.onLine` was `false` at failure time. |
 | `server-rejected` | The server sent an `ApiError` with code `ConnectionRejected` (e.g. invalid session) before closing, or a first-message `auth_error` failed the handshake. The original `ApiError` is attached as `err.cause`. |
 | `server-closed` | Transport closed cleanly after the WebSocket upgrade completed. `err.closeCode` and `err.closeReason` carry the WebSocket `CloseEvent` fields. |
-| `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. Also used when the handshake exceeded `connectTimeout`. |
+| `network-error` | Pre-upgrade failure or close code 1006 — refused, unreachable, TLS, or HTTP error during the WebSocket upgrade. Browsers deliberately collapse these into one bucket; finer classification is not achievable from JS. Also used when the handshake exceeded `connectTimeout`, or when an open connection delivered no `config` frame in that time. |
 | `connect-params-failed` | The URL function or `getConnectParams` threw before any transport activity — typically a token-provider fetch failing. The thrown error is attached as `err.cause`. The normal reconnect backoff still applies, so this distinguishes "my token service is down" from "the socket dropped". |
 | `manual` | The caller invoked `client.disconnect()`. |
 
@@ -879,6 +879,18 @@ const off = client.onConnectionError((err) => {
     else hideOfflineBanner();
 });
 ```
+
+**Oversized messages fail locally.** The server announces its `MaxMessageSize` in the `config` frame. The client refuses a request, stream, or subscription whose frame is larger, with a `MessageTooLargeError` carrying `size` and `limit` (bytes of UTF-8 JSON). Sent anyway, the frame would make the server close the connection and fail every call on it; refused locally, only that call fails and the connection stays up. An oversized subscription reports the error through `onError` and is dropped, since it would fail again on every reconnect.
+
+```typescript
+try {
+    await importRows(client, rows);
+} catch (err) {
+    if (err instanceof MessageTooLargeError) showError(`The import is ${err.size} bytes; the server accepts ${err.limit}.`);
+}
+```
+
+The client sends nothing on a connection until that connection's `config` frame arrives, so every frame, including calls queued while connecting or reconnecting, is checked against the limit of the server it goes to. A server that disables the limit (`MaxMessageSize: -1`) or predates the field gets no local check.
 
 **Rejections are terminal by default** — after a `server-rejected` failure the client stops auto-reconnecting, which is the right response to a real sign-out. For short-lived credentials, where a rejection is usually an expired token, propagation lag just after sign-in, or clock skew, opt into retries with `reconnectOnRejected` (pair it with `getConnectParams` / `getAuthToken` so each retry carries a fresh token):
 
@@ -1278,6 +1290,8 @@ class BridgeTransport implements ClientTransport {
 const client = new ApiClient('bridge:', { transport: new BridgeTransport() });
 client.connect();
 ```
+
+Forward every server frame, including the first one, `config`: the client waits for it before sending anything. An attempt that gets no `config` frame within `connectTimeout` (10 s when that is 0) fails with a `network-error` whose message says so, and the client reconnects as it would after any failed attempt. To refuse oversized frames locally the way the built-in transport does, implement the optional `setMaxMessageSize(limit)`: the client passes it the server's `maxMessageSize`, and `send()` throws a `MessageTooLargeError` for a larger frame, measured as it goes onto the channel. A `send()` that throws fails only the call that built the frame.
 
 **Electron note:** a renderer can open `ws://127.0.0.1:<port>` directly, so for most Electron apps the simplest wiring is still a loopback WebSocket to the spawned Go process — pair it with `OnAuth` (a spawn-time random token) and `SetCheckOrigin` so other local processes and browser tabs can't connect. Use `ServeStream` + a custom `ClientTransport` when you want no listening port at all: Go child speaks NDJSON on stdio to the main process, which relays to the renderer over a `MessagePort`.
 

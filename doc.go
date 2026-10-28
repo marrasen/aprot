@@ -827,6 +827,19 @@
 // an "Offline" banner; client.getLastConnectionError() returns the most
 // recently observed error or null.
 //
+// The client refuses a request, stream, or subscription whose frame is larger
+// than the maxMessageSize the server announced in its config frame (see
+// [ServerOptions.MaxMessageSize]). It fails that one call with a
+// MessageTooLargeError, carrying size and limit in bytes of UTF-8 JSON,
+// instead of sending a frame that would make the server close the connection
+// and fail every call on it. An oversized subscription reports the error
+// through onError and is dropped. The client sends nothing on a connection
+// until that connection's config frame arrives, so every frame, including
+// calls queued while reconnecting, is checked against the limit of the server
+// it goes to. A server that omits the limit gets no local check. A custom
+// ClientTransport must forward the config frame, and can implement
+// setMaxMessageSize to refuse oversized frames itself.
+//
 // The 'server-rejected' bucket is also surfaced via the existing
 // onConnectionRejected ApiClientOption callback — both fire for the same
 // underlying event, kept for backward compatibility.

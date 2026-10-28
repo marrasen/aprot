@@ -18,6 +18,8 @@ class EchoTransport implements ClientTransport {
         this.onMessage = onMessage as (d: string) => void;
         this.onClose = onClose;
         this.open = true;
+        // Like the server, open every connection with the config frame.
+        this.deliver({ type: 'config' });
         return Promise.resolve();
     }
     send(message: object): void {

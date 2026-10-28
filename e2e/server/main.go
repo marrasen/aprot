@@ -58,10 +58,24 @@ func main() {
 		return nil
 	})
 
+	// Small-limit server — a 4 KiB MaxMessageSize, so the client's local check
+	// of the advertised limit can be exercised with small payloads.
+	smallRegistry := aprot.NewRegistry()
+	e2eapi.Register(smallRegistry)
+	smallServer := aprot.NewServer(smallRegistry, aprot.ServerOptions{MaxMessageSize: 4096})
+
+	// No-limit server — MaxMessageSize -1 disables the limit, so the config
+	// frame omits maxMessageSize and the client must not check locally.
+	noLimitRegistry := aprot.NewRegistry()
+	e2eapi.Register(noLimitRegistry)
+	noLimitServer := aprot.NewServer(noLimitRegistry, aprot.ServerOptions{MaxMessageSize: -1})
+
 	mux := http.NewServeMux()
 	mux.Handle("/ws", server)
 	mux.Handle("/ws-reject", rejectServer)
 	mux.Handle("/ws-token", tokenServer)
+	mux.Handle("/ws-small", smallServer)
+	mux.Handle("/ws-nolimit", noLimitServer)
 	mux.Handle("/api/", http.StripPrefix("/api", restAdapter))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
