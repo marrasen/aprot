@@ -1,6 +1,6 @@
 import { getEventListeners } from 'node:events';
 import { describe, test, expect, afterEach, vi } from 'vitest';
-import { wsUrl, wsSmallLimitUrl, wsNoLimitUrl } from './helpers';
+import { wsUrl, wsSmallLimitUrl, wsNoLimitUrl, wsSlowHookUrl } from './helpers';
 import { ApiClient, ConnectionError, MessageTooLargeError, type ClientTransport, type ConnectionState, type TransportCloseInfo } from '../api/client';
 import { setBlob, subscribeSetBlob } from '../api/blob-handlers';
 import { getConnURL } from '../api/conn-handlers';
@@ -91,16 +91,18 @@ describe('maxMessageSize from the config frame', () => {
 
     test('the limit counts UTF-8 bytes, not string length', async () => {
         client = (await connected(wsSmallLimitUrl())).client;
+        const frames = recordFrames(client);
+        const utf8 = (frame: object) => new TextEncoder().encode(JSON.stringify(frame)).length;
 
         // 3000 characters but 6000 bytes of UTF-8.
         const err = await setBlob(client, 'é'.repeat(3000)).catch((e: unknown) => e);
         expect(err).toBeInstanceOf(MessageTooLargeError);
-        expect((err as MessageTooLargeError).size).toBeGreaterThan(6000);
+        expect((err as MessageTooLargeError).size).toBe(utf8(frames[0]));
 
         // 1500 four-byte characters (surrogate pairs) are 6000 bytes too.
         const emoji = await setBlob(client, '😀'.repeat(1500)).catch((e: unknown) => e);
         expect(emoji).toBeInstanceOf(MessageTooLargeError);
-        expect((emoji as MessageTooLargeError).size).toBeGreaterThan(6000);
+        expect((emoji as MessageTooLargeError).size).toBe(utf8(frames[1]));
 
         // 3000 single-byte characters fit.
         await expect(setBlob(client, 'e'.repeat(3000))).resolves.toBeNull();
@@ -249,6 +251,22 @@ describe('maxMessageSize from the config frame', () => {
         expect(requestFrames).toHaveLength(1);
     });
 
+    test('a connect hook slower than connectTimeout delays the connection without failing it', async () => {
+        const errors: string[] = [];
+        client = new ApiClient(wsSlowHookUrl(), { connectTimeout: 100, reconnectInterval: 50, reconnectMaxInterval: 50 });
+        const states: ConnectionState[] = [];
+        client.onStateChange((s) => states.push(s));
+        client.onConnectionError((e) => errors.push(e.message));
+
+        await client.connect();
+        await expect(getConnURL(client)).resolves.toBeDefined();
+
+        // One socket, one report while the hook ran, no reconnect.
+        expect(states).toEqual(['connecting', 'connected']);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toContain('no config frame has arrived after 100 ms; still waiting');
+    });
+
     test('with no advertised limit nothing is rejected locally', async () => {
         client = (await connected(wsNoLimitUrl())).client;
 
@@ -272,6 +290,12 @@ class LimitTransport implements ClientTransport {
     private onClose: ((i?: TransportCloseInfo) => void) | null = null;
     private open = false;
     constructor(private config: object | null) {}
+
+    // sendConfig delivers a config frame on the open channel, as a server
+    // whose connect hook finished late would.
+    sendConfig(config: object): void {
+        this.deliver(config);
+    }
 
     connect(_url: string, onMessage: (d: string | Blob | ArrayBuffer) => void, onClose: (i?: TransportCloseInfo) => void): Promise<void> {
         this.onMessage = onMessage as (d: string) => void;
@@ -307,10 +331,10 @@ class LimitTransport implements ClientTransport {
     isConnected(): boolean { return this.open; }
 }
 
-// RejectAfterConfigTransport plays a byte-stream server whose connect hook
-// rejects the connection: that server sends config first, then the
-// rejection. Both arrive in one task, and disconnect() reports the close
-// synchronously.
+// RejectAfterConfigTransport delivers a config frame and then a rejection in
+// one task, and its disconnect() reports the close synchronously. Neither
+// aprot server sends config to a connection it rejects, but a custom
+// transport can deliver a frame and its close together like this.
 class RejectAfterConfigTransport implements ClientTransport {
     private open = false;
     private onClose: ((i?: TransportCloseInfo) => void) | null = null;
@@ -374,48 +398,149 @@ describe('maxMessageSize with a custom transport', () => {
         client.disconnect();
     });
 
-    test('an attempt with no config frame fails with an error that says so', async () => {
+    test('a late config frame is reported once and the client keeps waiting', async () => {
         const t = new LimitTransport(null);
         const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 50 });
         const errors: Error[] = [];
         client.onConnectionError((e) => errors.push(e));
 
-        const connecting = client.connect();
-        const request = client.request('BlobHandlers.SetBlob', ['fits']).catch((e: unknown) => e);
+        let connected = false;
+        const connecting = client.connect().then(() => { connected = true; });
+        const request = client.request('BlobHandlers.SetBlob', ['fits']);
+        await sleep(200);
+
+        // One report, the socket is kept, and nothing has been sent.
+        expect(errors).toHaveLength(1);
+        expect(errors[0].message).toContain('no config frame has arrived after 50 ms; still waiting');
+        expect(client.getState()).toBe('connecting');
+        expect(connected).toBe(false);
+        expect(t.connects).toBe(1);
+        expect(t.sent).toEqual([]);
+
+        // A slow connect hook finishes: the client connects on the same
+        // channel and sends what it held.
+        t.sendConfig({ type: 'config' });
         await connecting;
+        await expect(request).resolves.toBeNull();
+        expect(client.getState()).toBe('connected');
+        expect(t.connects).toBe(1);
+        expect(errors).toHaveLength(1);
+        // The report described a wait that is over.
+        expect(client.getLastConnectionError()).toBeNull();
+        client.disconnect();
+    });
+
+    test('reconnectNow() replaces a socket that is overdue for its config frame', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 50 });
+        void client.connect();
+        const request = client.request('BlobHandlers.SetBlob', ['fits']);
+        await sleep(100);
+
+        const again = client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(2);
+        expect(client.getState()).toBe('connecting');
+
+        // The new socket gets its config frame; the call held across the
+        // swap goes out on it.
+        t.sendConfig({ type: 'config' });
+        await again;
+        await expect(request).resolves.toBeNull();
+        expect(client.getState()).toBe('connected');
+        client.disconnect();
+    });
+
+    test('a page wake replaces only a socket that is overdue for its config frame', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 50 });
+        const wake = () => (client as unknown as { handlePageWake: () => void }).handlePageWake();
+        void client.connect();
+
+        // Within connectTimeout the wait is not overdue: join it.
+        await sleep(10);
+        wake();
+        void client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(1);
+
+        await sleep(80);
+        wake();
+        await sleep(10);
+        expect(t.connects).toBe(2);
+        client.disconnect();
+    });
+
+    test('once a late config frame arrives, reconnectNow() joins the attempt', async () => {
+        const t = new LimitTransport(null);
+        let giveToken: (token: string) => void = () => {};
+        const client = new ApiClient('ws://unused', {
+            transport: t, reconnect: false, connectTimeout: 50,
+            getAuthToken: () => new Promise<string>((resolve) => { giveToken = resolve; }),
+        });
+        const connecting = client.connect();
+        await sleep(100);
+
+        // Config arrives late, and the handshake waits on the token: the
+        // socket is alive now, so a manual reconnect must not replace it.
+        t.sendConfig({ type: 'config' });
+        await sleep(10);
+        void client.reconnectNow();
+        await sleep(10);
+        expect(t.connects).toBe(1);
+
+        giveToken('token');
+        await connecting;
+        expect(client.getState()).toBe('connected');
+        expect(t.connects).toBe(1);
+        client.disconnect();
+    });
+
+    test('refreshAuth() before the config frame rejects and sends nothing', async () => {
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false });
+        void client.connect();
         await sleep(10);
 
-        expect(client.getState()).toBe('disconnected');
+        await expect(client.refreshAuth('token')).rejects.toThrow('config frame has not arrived');
         expect(t.sent).toEqual([]);
-        // Reported once: the transport's own close report is not handled again.
-        expect(errors).toHaveLength(1);
-        expect(errors[0].message).toContain('no config frame arrived within 50 ms');
-        expect(client.getLastConnectionError()?.isNetworkError()).toBe(true);
-        expect(await request).toBe(errors[0]);
+        client.disconnect();
     });
 
-    test('attempts with no config frame count toward reconnectMaxAttempts', async () => {
+    test('a config frame within connectTimeout reports nothing', async () => {
         const t = new LimitTransport(null);
-        const client = new ApiClient('ws://unused', {
-            transport: t, connectTimeout: 20, reconnectInterval: 5, reconnectMaxInterval: 5, reconnectMaxAttempts: 2,
-        });
-        await client.connect();
-        await sleep(400);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 100 });
+        const errors: Error[] = [];
+        client.onConnectionError((e) => errors.push(e));
 
-        // The first attempt and two retries, then the client gives up.
-        expect(t.connects).toBe(3);
-        expect(client.getState()).toBe('disconnected');
+        const connecting = client.connect();
+        await sleep(20);
+        t.sendConfig({ type: 'config' });
+        await connecting;
+        await sleep(150);
+
+        expect(client.getState()).toBe('connected');
+        expect(errors).toEqual([]);
+        client.disconnect();
     });
 
-    test('with connectTimeout 0 the config wait is still bounded', async () => {
+    test('with connectTimeout 0 the config wait reports nothing', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-        const client = new ApiClient('ws://unused', { transport: new LimitTransport(null), reconnect: false, connectTimeout: 0 });
+        const t = new LimitTransport(null);
+        const client = new ApiClient('ws://unused', { transport: t, reconnect: false, connectTimeout: 0 });
+        const errors: Error[] = [];
+        client.onConnectionError((e) => errors.push(e));
         const connecting = client.connect();
-        await vi.advanceTimersByTimeAsync(10_000);
-        await connecting;
+        await vi.advanceTimersByTimeAsync(60_000);
 
-        expect(client.getState()).toBe('disconnected');
-        expect(client.getLastConnectionError()?.message).toContain('no config frame arrived within 10000 ms');
+        expect(client.getState()).toBe('connecting');
+        expect(errors).toEqual([]);
+
+        t.sendConfig({ type: 'config' });
+        await vi.advanceTimersByTimeAsync(0);
+        await connecting;
+        expect(client.getState()).toBe('connected');
+        client.disconnect();
     });
 
     test('an auth frame over the limit is reported with its cause', async () => {
@@ -535,14 +660,17 @@ describe('abort listeners', () => {
     });
 
     test('a buffered request rejected with the buffer settles its options and listener', async () => {
-        // The attempt gets no config frame and, with reconnect off, the
-        // client gives up and rejects the buffer.
-        client = new ApiClient('ws://unused', { transport: new LimitTransport(null), reconnect: false, connectTimeout: 20 });
+        // The channel closes before any config frame and, with reconnect
+        // off, the client gives up and rejects the buffer.
+        const t = new LimitTransport(null);
+        client = new ApiClient('ws://unused', { transport: t, reconnect: false });
         const settled: string[] = [];
         const ac = new AbortController();
         const connecting = client.connect();
         const request = client.request('BlobHandlers.SetBlob', ['b'], { signal: ac.signal, _onSettle: () => settled.push('settled') })
             .catch((e: unknown) => e);
+        await sleep(10);
+        t.disconnect();
         await connecting;
 
         expect(await request).toBeInstanceOf(ConnectionError);

@@ -294,6 +294,11 @@ export interface TransportCloseInfo {
  *   send, such as one its serializer rejects or one over the limit given to
  *   setMaxMessageSize. The client then fails only the call that built the
  *   frame.
+ * - Deliver the server's config frame, the first frame on every connection
+ *   it accepts. The client sends nothing until it arrives. It waits with no
+ *   time limit, reporting one 'network-error' after connectTimeout. A bridge
+ *   over one long-lived ServeStream, which sends config once per stream,
+ *   must keep that frame and deliver it again on every connect().
  * - The client calls connect() again for reconnects; a transport instance
  *   must be reusable after disconnect()/onClose.
  */
@@ -338,10 +343,12 @@ export interface ApiClientOptions {
      * like any transport error, so the normal reconnect path applies.
      * 0 disables the timeout. Default: 10000
      *
-     * On every transport it also bounds the wait for the server's config
-     * frame once the channel is open (10000 when this is 0). An attempt
-     * that gets no config frame in time fails with a 'network-error' that
-     * says so, and the normal reconnect path applies.
+     * Once the channel is open, the client also waits for the server's
+     * config frame before it turns 'connected'. That wait has no bound: the
+     * server sends config only after its connect hooks finish, and a slow
+     * hook must not fail the attempt. If no config frame has arrived after
+     * connectTimeout, onConnectionError gets one 'network-error' that says
+     * so, and the client keeps waiting (no report when this is 0).
      */
     connectTimeout?: number;
     /**
@@ -670,7 +677,14 @@ export class ApiClient {
     // then means each frame is checked against the maxMessageSize of the
     // server it goes to.
     private configApplied = false;
-    private configWaiter: ((outcome: 'config' | 'closed' | 'timeout') => void) | null = null;
+    private configWaiter: ((outcome: 'config' | 'closed') => void) | null = null;
+    // configOverdue is the report waitForConfig made once the current
+    // attempt had waited connectTimeout for its config frame, or null. While
+    // it is set, a manual reconnectNow() or a page wake gives up on the
+    // waiting socket and starts over: it may have died without a close
+    // event, and nothing is sent on it that would make TCP notice. It is
+    // also cleared from lastConnectionError when this attempt connects.
+    private configOverdue: ConnectionError | null = null;
     private pushHandlers = new Map<string, Set<(data: unknown) => void>>();
     private stateListeners = new Set<(state: ConnectionState) => void>();
     private loadingListeners = new Set<(count: number) => void>();
@@ -722,10 +736,6 @@ export class ApiClient {
     // cause. Wrapped in an object so a thrown null/undefined still counts.
     // Consumed by handleClose(), exactly like pendingRejection.
     private connectParamsFailure: { cause: unknown } | null = null;
-    // configMissing is set when an open connection delivered no config frame
-    // in time, just before the failure is routed through handleClose(), so
-    // its ConnectionError says so. Consumed by handleClose().
-    private configMissing = false;
     // lastConnectionError is the most recently observed ConnectionError,
     // exposed via getLastConnectionError() so a UI can render an offline
     // banner / "server unreachable" message after the fact.
@@ -781,7 +791,9 @@ export class ApiClient {
      * client may be in a state connect() reads as "nothing to do": a socket
      * the runtime left half-open still reports 'connected' until its close
      * event lands. Resolves when the attempt finishes, connected or not, and
-     * joins an attempt already in flight rather than starting a second one.
+     * joins an attempt already in flight rather than starting a second one,
+     * unless that attempt has waited connectTimeout for the server's config
+     * frame: then its socket is dropped and a fresh attempt starts.
      */
     reconnectNow(): Promise<void> {
         return this.startConnect();
@@ -814,7 +826,17 @@ export class ApiClient {
         }
         if (this.connectInFlight) {
             if (this.connectInFlightGeneration === this.disconnectGeneration) {
-                return this.connectInFlight;
+                if (!this.configOverdue) return this.connectInFlight;
+                // The attempt in flight is overdue for its config frame (see
+                // configOverdue). Mark it stale so its socket's late events
+                // are ignored, release its wait, drop the socket, and start
+                // a fresh attempt once it has settled. Buffered calls stay
+                // buffered for the new one.
+                this.configOverdue = null;
+                this.connectAttemptId++;
+                this.configWaiter?.('closed');
+                this.transport.disconnect();
+                return this.connectInFlight.then(() => this.doConnect());
             }
             // disconnect() abandoned the attempt in flight (it is settling
             // now). Joining it would end disconnected; start a fresh attempt
@@ -878,6 +900,7 @@ export class ApiClient {
         let closeReported = false;
         // A limit belongs to the connection that advertised it.
         this.configApplied = false;
+        this.configOverdue = null;
         this.transport.setMaxMessageSize?.(undefined);
         return this.transport.connect(
             url,
@@ -891,27 +914,17 @@ export class ApiClient {
             // Nothing is sent before the config frame, so buffered requests,
             // resubscribes and waiting streams are all checked against this
             // server's maxMessageSize. A close while waiting has already been
-            // handled by handleClose(). So has one that came after the config
-            // frame but before this line: the byte-stream server sends config
-            // ahead of a connect hook's rejection, and a transport can deliver
-            // both, and its close, in one task.
-            const config = await this.waitForConfig();
+            // handled by handleClose(). The isConnected() check covers a
+            // transport that delivers the config frame and its close in one
+            // task.
+            const config = await this.waitForConfig(stale);
             if (config === 'closed' || stale() || !this.transport.isConnected()) return;
-            if (config === 'timeout') {
-                // Every aprot server opens with config, so the far end is not
-                // one, or the transport drops frames. Fail the attempt like a
-                // hung handshake: the normal reconnect path applies, and the
-                // ConnectionError names the cause. Marking the attempt stale
-                // first keeps the transport's own report of this close from
-                // being handled a second time.
-                this.configMissing = true;
-                this.connectAttemptId++;
-                this.transport.disconnect();
-                this.handleClose({ wasClean: false });
-                return;
-            }
+            // The server answered, so this socket is alive: from here on a
+            // manual reconnect joins the attempt instead of replacing it.
+            const overdue = this.configOverdue;
+            this.configOverdue = null;
             // The server answered, so the backoff starts over. Reset only now:
-            // a channel that opens but never delivers config must keep
+            // a channel that opens and then closes before config must keep
             // growing the backoff and count toward reconnectMaxAttempts.
             this.reconnectAttempts = 0;
             // First-message auth: authenticate before the connection is
@@ -953,6 +966,11 @@ export class ApiClient {
             if (this.lastRejectionAttemptId !== attemptId) {
                 this.lastRejection = null;
             }
+            // A late config frame only meant a slow connect hook: once it
+            // has arrived, the report about it no longer describes anything.
+            if (overdue && this.lastConnectionError === overdue) {
+                this.lastConnectionError = null;
+            }
             this.setState('connected');
         }).catch(() => {
             // The transport's promise rejected before opening. If onClose
@@ -966,27 +984,37 @@ export class ApiClient {
     }
 
     // waitForConfig resolves once the current connection's config frame has
-    // been applied, or with 'closed' when the connection ends first. A
-    // transport that never delivers the frame gets 'timeout' after
-    // connectTimeout, or after configWaitMs when connectTimeout is 0: that
-    // option disables the handshake bound, and an unbounded wait here would
-    // leave the client in 'connecting' with no error at all.
-    private static readonly configWaitMs = 10000;
-    private configWaitBound(): number {
-        return this.options.connectTimeout > 0 ? this.options.connectTimeout : ApiClient.configWaitMs;
-    }
-    private waitForConfig(): Promise<'config' | 'closed' | 'timeout'> {
+    // been applied, or with 'closed' when the connection ends first. It
+    // never gives up on an open connection: the server sends config only
+    // after its connect hooks finish, so a late frame usually means a slow
+    // hook, and dropping the socket would rerun that hook on every attempt.
+    // A transport that never delivers the frame would leave the client in
+    // 'connecting' with no word why, so after connectTimeout one
+    // ConnectionError says what it is waiting for.
+    private waitForConfig(stale: () => boolean): Promise<'config' | 'closed'> {
         if (this.configApplied) return Promise.resolve('config');
         return new Promise((resolve) => {
             let timer: ReturnType<typeof setTimeout> | undefined;
-            const settle = (outcome: 'config' | 'closed' | 'timeout') => {
+            const settle = (outcome: 'config' | 'closed') => {
                 if (timer !== undefined) clearTimeout(timer);
                 if (this.configWaiter === settle) this.configWaiter = null;
                 resolve(outcome);
             };
             this.configWaiter?.('closed');
             this.configWaiter = settle;
-            timer = setTimeout(() => settle('timeout'), this.configWaitBound());
+            const after = this.options.connectTimeout;
+            if (after > 0) {
+                timer = setTimeout(() => {
+                    timer = undefined;
+                    if (this.configWaiter !== settle || stale()) return;
+                    const err = new ConnectionError(
+                        'network-error',
+                        `Network error: the connection opened, but no config frame has arrived after ${after} ms; still waiting`,
+                    );
+                    this.configOverdue = err;
+                    this.notifyConnectionError(err);
+                }, after);
+            }
         });
     }
 
@@ -1028,6 +1056,11 @@ export class ApiClient {
                 throw new Error('refreshAuth requires a token argument or a getAuthToken option');
             }
             t = await this.options.getAuthToken();
+        }
+        // Nothing is sent before the connection's config frame. The
+        // handshake authenticates with getAuthToken once it arrives.
+        if (!this.configApplied) {
+            throw new Error('refreshAuth needs an open connection: the server\'s config frame has not arrived yet');
         }
         return new Promise<void>((resolve, reject) => {
             this.authWaiter?.reject(new Error('superseded by a newer auth'));
@@ -1099,9 +1132,7 @@ export class ApiClient {
                     : `Server closed connection (code ${info?.code ?? 'unknown'})`;
                 break;
             case 'network-error':
-                message = this.configMissing
-                    ? `Network error: the connection opened, but no config frame arrived within ${this.configWaitBound()} ms`
-                    : 'Network error: connection lost';
+                message = 'Network error: connection lost';
                 break;
             case 'connect-params-failed': {
                 const cause = this.connectParamsFailure?.cause;
@@ -1160,7 +1191,6 @@ export class ApiClient {
         if (this.manualDisconnect && this.state === 'disconnected') {
             this.pendingRejection = null;
             this.connectParamsFailure = null;
-            this.configMissing = false;
             return;
         }
         // Slots belong to the connection that just closed; resubscribeAll()
@@ -1178,7 +1208,6 @@ export class ApiClient {
         // be misclassified.
         this.pendingRejection = null;
         this.connectParamsFailure = null;
-        this.configMissing = false;
 
         // Reject all pending requests (but keep subscription entries for reconnect)
         const subIds = new Set(this.subscriptions.keys());
@@ -1466,7 +1495,9 @@ export class ApiClient {
     private handlePageWake(): void {
         if (this.manualDisconnect) return;
         if (this.state === 'connected' && this.transport.isConnected()) return;
-        if (this.state === 'connecting') return;
+        // An attempt overdue for its config frame may sit on a socket that
+        // died while the page slept; doConnect() replaces it.
+        if (this.state === 'connecting' && !this.configOverdue) return;
 
         this.clearReconnectTimer();
         this.reconnectAttempts = 0;

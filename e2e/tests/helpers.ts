@@ -40,6 +40,12 @@ export function wsNoLimitUrl(): string {
     return `ws://${getServerAddr()}/ws-nolimit`;
 }
 
+// wsSlowHookUrl reaches a server whose connect hook takes 300 ms, so its
+// config frame arrives late.
+export function wsSlowHookUrl(): string {
+    return `ws://${getServerAddr()}/ws-slow-hook`;
+}
+
 // wsTextOnlyUrl declines binary frames, so Blob results arrive as the JSON
 // $blob envelope (#279).
 export function wsTextOnlyUrl(): string {
