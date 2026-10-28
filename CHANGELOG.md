@@ -10,6 +10,19 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.66.0] - 2026-10-28
+
+The TypeScript client now refuses frames larger than the server's
+`maxMessageSize`, so one oversized call fails on its own instead of closing
+the connection and failing every call on it (#411, #413). To do this, the
+client waits for the server's `config` frame before it sends anything. That
+is **breaking** for a custom `ClientTransport` or test mock that never
+delivers `config` (see Changed).
+
+The Go server's behavior and the wire protocol are unchanged; Go
+dependencies got minor and patch bumps. Regenerate TypeScript
+clients to get the new behavior.
+
 ### Added
 
 - **The TypeScript client enforces the server's `maxMessageSize`.** A
@@ -1377,7 +1390,8 @@ authorization input (#330, #336, #337).
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.65.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.66.0...HEAD
+[0.66.0]: https://github.com/marrasen/aprot/compare/v0.65.0...v0.66.0
 [0.65.0]: https://github.com/marrasen/aprot/compare/v0.64.0...v0.65.0
 [0.64.0]: https://github.com/marrasen/aprot/compare/v0.63.0...v0.64.0
 [0.63.0]: https://github.com/marrasen/aprot/compare/v0.62.0...v0.63.0
