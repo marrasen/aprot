@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/go-json-experiment/json v0.0.0-20260819210203-93dd53efdd9e
-	github.com/go-playground/validator/v10 v10.30.5
+	github.com/go-playground/validator/v10 v10.30.6
 	github.com/gorilla/websocket v1.5.3
 )
 
