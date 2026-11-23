@@ -73,12 +73,14 @@ type ServerOptions struct {
 	// it up to 2*PingInterval so healthy connections aren't dropped. Only
 	// effective while pings are enabled. Set to -1 to disable. Default: 60s.
 	PongTimeout time.Duration
-	// SendBufferSize is how many outbound frames a connection queues before a
-	// send has to wait. [Server.Broadcast], [Server.PushToUser] and
-	// [Conn.PushNoWait] close the connection when the queue is full, so size
-	// it for the largest burst of pushes the server sends at once. Zero or a
-	// negative value applies the default. Default: 1024.
-	SendBufferSize int
+	// PushTimeout is the longest [Server.Broadcast], [Server.PushToUser] and
+	// [Conn.Push] wait for room in one connection's send buffer. A WebSocket
+	// connection that has no room for that long is closed, so a client that
+	// stops reading holds up a caller once, for PushTimeout. A client that
+	// cannot take one frame in that time is closed as well, so raise it for
+	// slow links. The byte-stream transport ignores it. Set to -1 to wait
+	// until WriteTimeout closes the connection. Default: 1s.
+	PushTimeout time.Duration
 	// MaxConcurrentRequests caps the number of in-flight requests a single
 	// connection may run at once. Each inbound request/subscribe frame occupies
 	// one slot for the duration of its handler (a streaming handler holds its
@@ -176,7 +178,7 @@ func defaultServerOptions() ServerOptions {
 		WriteTimeout:         30 * time.Second,
 		PingInterval:         30 * time.Second,
 		PongTimeout:          60 * time.Second,
-		SendBufferSize:       defaultSendBufferSize,
+		PushTimeout:          time.Second,
 
 		MaxConcurrentRequests:       256,
 		MaxServerConcurrentRequests: 10000,
@@ -244,8 +246,8 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		if opt.PongTimeout != 0 {
 			options.PongTimeout = opt.PongTimeout
 		}
-		if opt.SendBufferSize > 0 {
-			options.SendBufferSize = opt.SendBufferSize
+		if opt.PushTimeout != 0 {
+			options.PushTimeout = opt.PushTimeout
 		}
 		if opt.MaxConcurrentRequests != 0 {
 			options.MaxConcurrentRequests = opt.MaxConcurrentRequests
@@ -425,9 +427,7 @@ func (s *Server) authRequired() bool {
 
 // ForEachConn iterates over a snapshot of the active connections. The
 // callback runs outside the server's lock, so it may block or send; note
-// that a connection may be closing concurrently while it is visited. Push
-// with [Conn.PushNoWait] inside the callback, so one connection that stops
-// reading does not hold up the rest of the loop.
+// that a connection may be closing concurrently while it is visited.
 func (s *Server) ForEachConn(fn func(conn *Conn)) {
 	for _, conn := range s.connsSnapshot() {
 		fn(conn)
@@ -606,13 +606,14 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (r
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 //
-// PushToUser does not wait for a connection. A connection whose send buffer
-// is full is closed, as [Conn.PushNoWait] describes.
+// PushToUser waits at most [ServerOptions.PushTimeout] for each connection,
+// as [Server.Broadcast] does.
 func (s *Server) PushToUser(userID string, data any) {
 	event := s.registry.eventName(data)
 
-	// Snapshot under the lock, send outside it: a push that finds a full send
-	// buffer closes the connection, which must not happen while holding s.mu.
+	// Snapshot under the lock, send outside it: pushes can block on a slow
+	// connection's send buffer, and blocking while holding s.mu would stall
+	// register/unregister for every other connection.
 	s.mu.RLock()
 	conns := make([]*Conn, 0, len(s.userConns[userID]))
 	for conn := range s.userConns[userID] {
@@ -629,7 +630,7 @@ func (s *Server) PushToUser(userID string, data any) {
 		if conn.UserID() != userID {
 			continue
 		}
-		_ = conn.pushNoWait(event, data)
+		_ = conn.push(event, data)
 	}
 }
 
@@ -799,13 +800,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 //
-// Broadcast does not wait for a connection. A connection whose send buffer is
-// full is closed, as [Conn.PushNoWait] describes, so one client that stops
-// reading cannot hold up the caller or the other clients.
+// Broadcast waits for room in a connection's send buffer for at most
+// [ServerOptions.PushTimeout]. A WebSocket connection that has no room for
+// that long is closed and its client reconnects, so one client that stops
+// reading holds up the caller once, for PushTimeout. Pushes sent while a
+// client is away are not replayed.
 func (s *Server) Broadcast(data any) {
 	event := s.registry.eventName(data)
 	for _, conn := range s.connsSnapshot() {
-		_ = conn.pushNoWait(event, data)
+		_ = conn.push(event, data)
 	}
 }
 

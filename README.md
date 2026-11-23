@@ -915,7 +915,7 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
     WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
     PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
     PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
-    SendBufferSize: 1024,             // outbound frames queued per connection (default 1024)
+    PushTimeout:    time.Second,      // longest a push waits for one connection (default 1s)
 
     MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
     MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
@@ -923,14 +923,14 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
 })
 ```
 
-Set any of these to `-1` to disable it. Defaults apply when the field is zero. `SendBufferSize` cannot be disabled: zero or a negative value applies the default.
+Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 
 - **Panic recovery** — a panic in a handler (or middleware) is recovered per request and sent to the client as an internal error. One buggy handler cannot take down the process, and the guarantee holds on every transport and dispatch path: a socket request gets an error frame, a stream gets a terminal `stream_end` frame, a server-driven subscription refresh gets an error frame on the subscription id, a REST request gets a 500 JSON error, and an MCP tool call gets a tool result with `isError` set — never a dropped connection. Clients receive a generic `handler panicked` message on all of these paths; a panic value can embed internal state (a token, a DSN), so the value and stack go only to `ServerOptions.Logger`. The one exception is `http.ErrAbortHandler`: the REST and MCP adapters re-panic it into `net/http`, preserving the stdlib's abort-the-response-quietly convention. A panicking `OnAuth` hook is recovered the same way and reported to the client as a plain `authentication failed` — the auth boundary's redaction rule applies to a panic value like it does to any other non-`ProtocolError` — and anything the hook set before panicking stays set, so set the address and the principal provider last.
 
   The guarantee covers handlers and request-path middleware. **Task middleware that panics *after* calling `next()`** is the one case outside it: by then the task entry point has already returned, so there is no caller to receive the panic and no client to send an error to. It is re-raised on the task's goroutine rather than swallowed, so a bug there is loud instead of silent. A task middleware panic *before* `next()` is handed back to the caller and behaves like any other.
 - **Message size limits** — oversized WebSocket frames close the connection.
 - **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`.
-- **Pushes never wait** — `Broadcast`, `PushToUser` and `Conn.PushNoWait` return at once. A connection whose send buffer is full is closed, so one client that stops reading cannot hold up the caller or the other clients. The client reconnects and re-subscribes; pushes sent while it was away are not replayed. `SendBufferSize` is the number of frames a connection queues, so size it for the largest burst of pushes the server sends at once. `Conn.Push` still waits for room: use it from a handler pushing to its own connection, where the wait slows only that handler. The byte-stream transport has no write deadline, so this is what closes a stream peer that stops reading.
+- **Push timeout** — `Broadcast`, `PushToUser` and `Conn.Push` wait for room in a connection's send buffer for at most `PushTimeout`. A WebSocket connection that has no room for that long is closed, so a client that stops reading holds up the caller once, for `PushTimeout`, and the other clients keep receiving. The client reconnects and re-subscribes; pushes sent while it was away are not replayed. A client that is reading frees a slot each time a frame is written, so a full buffer under load (a large stream, a burst of pushes) only slows the sender down. A client that cannot take one frame within `PushTimeout` is closed as well, so raise it for slow links. Set `-1` to wait until `WriteTimeout` closes the connection. The byte-stream transport ignores `PushTimeout`, as it ignores `WriteTimeout`: a stdio peer cannot reconnect.
 - **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
 - **Concurrency caps** — a single connection can otherwise pin unbounded work: every inbound frame runs on its own goroutine and a connection can register unlimited subscriptions (each amplifying server-side `TriggerRefresh` fan-out). `MaxConcurrentRequests` bounds in-flight requests per connection, `MaxServerConcurrentRequests` bounds them across the whole server, and `MaxSubscriptions` bounds active subscriptions per connection. A frame over a cap is rejected with `CodeTooManyRequests` (`-32004`; the TS client exposes `err.isTooManyRequests()`) rather than spawning more goroutines. A streaming handler holds its request slot until the stream ends.
 
@@ -1089,7 +1089,7 @@ func (metrics) SendBufferFull(*aprot.Conn) { sendBufferFull.Inc() } // early bac
 server := aprot.NewServer(registry, aprot.ServerOptions{Observer: metrics{}})
 ```
 
-Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), `WriteTimedOut`, and `SlowConsumerClosed` (a push found the send buffer full and closed the connection).
+Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), `WriteTimedOut`, and `SlowConsumerClosed` (a push waited `PushTimeout` for room and the connection was closed).
 
 - **Embed `NoopObserver`** so you implement only the events you care about and stay forward-compatible as new ones are added.
 - **Hot-path discipline** — callbacks run synchronously on the server's hot paths and may fire concurrently, so keep them fast and non-blocking; offload heavy work to a goroutine.

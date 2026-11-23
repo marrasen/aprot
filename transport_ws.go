@@ -46,7 +46,7 @@ func (t *wsTransport) observer() Observer {
 func newWSTransport(ws *websocket.Conn, opts ServerOptions, binary bool) *wsTransport {
 	return &wsTransport{
 		ws:     ws,
-		send:   make(chan outboundFrame, sendBufferSize(opts)),
+		send:   make(chan outboundFrame, 256),
 		done:   make(chan struct{}),
 		opts:   opts,
 		binary: binary,
@@ -61,17 +61,28 @@ func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
 }
 
-func (t *wsTransport) TrySend(data []byte) error {
+func (t *wsTransport) SendTimeout(data []byte, d time.Duration) error {
+	if d <= 0 {
+		return t.Send(data)
+	}
+	frame := outboundFrame{messageType: websocket.TextMessage, data: data}
 	select {
 	case <-t.done:
 		return ErrConnectionClosed
-	default:
-	}
-	select {
-	case t.send <- outboundFrame{messageType: websocket.TextMessage, data: data}:
+	case t.send <- frame:
 		return nil
 	default:
-		return errSendBufferFull
+		t.reportBufferFull()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- frame:
+		return nil
+	case <-timer.C:
+		return errSendTimeout
 	}
 }
 
@@ -94,7 +105,7 @@ func (t *wsTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
 }
 
 func (t *wsTransport) sendFrame(ctx context.Context, frame outboundFrame) error {
-	// Blocking send — waits for room in the send buffer. Unblocks
+	// Blocking send — waits for room in the 256-slot buffer. Unblocks
 	// immediately if the transport is closed. Previously this method dropped
 	// on a full buffer, which silently lost responses/progress for slow
 	// clients; streams need guaranteed delivery and all other message types
@@ -135,10 +146,13 @@ func (t *wsTransport) Close() error {
 }
 
 // Abort closes the socket without writing the queued frames. Closing the
-// socket fails a write that is waiting on a peer that stopped reading.
+// socket fails a write that is waiting on a peer that stopped reading. The
+// close runs on its own goroutine because a TLS socket may spend up to five
+// seconds sending its close alert.
 func (t *wsTransport) Abort() error {
 	close(t.done)
-	return t.ws.Close()
+	go func() { _ = t.ws.Close() }()
+	return nil
 }
 
 func (t *wsTransport) CloseGracefully() error {

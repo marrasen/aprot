@@ -376,41 +376,18 @@ func (c *Conn) ServerBroadcaster() Broadcaster {
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 //
-// Push waits for room when the connection's send buffer is full. Use it from
-// a handler pushing to its own connection, where the wait slows only that
-// handler. Use [Conn.PushNoWait] when one goroutine pushes to many
-// connections.
+// Push waits for room when the connection's send buffer is full, for at most
+// [ServerOptions.PushTimeout]. A WebSocket connection that has no room for
+// that long is closed, and Push returns [ErrConnectionClosed].
 func (c *Conn) Push(data any) error {
 	event := c.server.registry.eventName(data)
 	return c.push(event, data)
 }
 
-// PushNoWait sends a push message to this connection without waiting. When
-// the connection's send buffer is full it closes the connection and returns
-// [ErrConnectionClosed]. The client reconnects and re-subscribes; pushes sent
-// while it was away are not replayed.
-//
-// [Server.Broadcast] and [Server.PushToUser] send this way. The event name is
-// derived from the Go type of data, which must have been registered via
-// RegisterPushEventFor.
-func (c *Conn) PushNoWait(data any) error {
-	event := c.server.registry.eventName(data)
-	return c.pushNoWait(event, data)
-}
-
-// push sends a push message with an explicit event name (internal use).
+// push sends a push message with an explicit event name (internal use). It
+// closes a connection whose send buffer has no room for PushTimeout, so a
+// goroutine pushing to many connections waits that long at most for each.
 func (c *Conn) push(event string, data any) error {
-	msg := PushMessage{
-		Type:  TypePush,
-		Event: event,
-		Data:  data,
-	}
-	return c.sendJSON(msg)
-}
-
-// pushNoWait is push without the wait: a full send buffer closes the
-// connection.
-func (c *Conn) pushNoWait(event string, data any) error {
 	raw, err := marshalJSON(PushMessage{
 		Type:  TypePush,
 		Event: event,
@@ -427,8 +404,8 @@ func (c *Conn) pushNoWait(event string, data any) error {
 		return ErrConnectionClosed
 	}
 
-	err = c.transport.TrySend(raw)
-	if !errors.Is(err, errSendBufferFull) {
+	err = c.transport.SendTimeout(raw, c.server.options.PushTimeout)
+	if !errors.Is(err, errSendTimeout) {
 		return err
 	}
 	if c.closeWithCause(ErrConnectionClosed, closeAbort) {

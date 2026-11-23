@@ -9,6 +9,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // streamTransport adapts any bidirectional byte stream — stdio pipes to a
@@ -32,7 +33,7 @@ type streamTransport struct {
 func newStreamTransport(rw io.ReadWriteCloser, opts ServerOptions) *streamTransport {
 	return &streamTransport{
 		rw:   rw,
-		send: make(chan []byte, sendBufferSize(opts)),
+		send: make(chan []byte, 256),
 		done: make(chan struct{}),
 		opts: opts,
 	}
@@ -91,18 +92,10 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	}
 }
 
-func (t *streamTransport) TrySend(data []byte) error {
-	select {
-	case <-t.done:
-		return ErrConnectionClosed
-	default:
-	}
-	select {
-	case t.send <- data:
-		return nil
-	default:
-		return errSendBufferFull
-	}
+// SendTimeout waits like Send and ignores d. A byte-stream peer such as a
+// stdio parent cannot reconnect, so a push is never a reason to close it.
+func (t *streamTransport) SendTimeout(data []byte, _ time.Duration) error {
+	return t.Send(data)
 }
 
 // reportBufferFull signals send-buffer backpressure to the observer. The

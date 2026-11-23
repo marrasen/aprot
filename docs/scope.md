@@ -227,17 +227,20 @@ consistent with them.
   owning a sweeper goroutine, a default that is wrong for someone, and the
   definition of "slow". Ship the numbers; the consumer's alert is one
   comparison. Ruling recorded for #374.
-- **A push never waits on a connection; a connection that cannot take one
-  is closed.** `Server.Broadcast`, `Server.PushToUser` and `Conn.PushNoWait`
-  enqueue without waiting, and a full send buffer closes that connection
-  (#423). One goroutine pushing to many connections must not be held up by
-  the slowest one, and a push dropped without telling the client is the
-  failure the waiting send was introduced to end; closing is the remaining
-  choice, because a client that reconnects re-subscribes and knows it missed
-  pushes. The limit is a transport fact, the length of the send buffer
-  (`ServerOptions.SendBufferSize`). aprot ships no time-based "too slow"
-  threshold. `Conn.Push` keeps waiting: a handler pushing to its own
-  connection is slowed by its own client and holds up nobody else. Ruling
+- **A push waits for one connection for at most `PushTimeout`; then the
+  connection is closed.** `Server.Broadcast`, `Server.PushToUser` and
+  `Conn.Push` wait for room in a WebSocket connection's send buffer for
+  `ServerOptions.PushTimeout` and close a connection that has had none
+  (#423). One goroutine pushing to many connections must not be held up for
+  `WriteTimeout` by the slowest one, and a push dropped without telling the
+  client is the failure the waiting send was introduced to end; closing is
+  the remaining choice, because a client that reconnects re-subscribes and
+  knows it missed pushes. A full buffer alone closes nothing: a client that
+  is receiving a stream has a full buffer and is reading. `PushTimeout` is a
+  transport limit of the same kind as `WriteTimeout`, a bound on how long a
+  send waits on a socket, and says nothing about how long a handler may run.
+  The byte-stream transport ignores it, as it ignores `WriteTimeout`: a
+  stdio peer cannot reconnect, so closing it is never the remedy. Ruling
   recorded for #423.
 - **Connection state answers transport questions; aprot exports no
   connection-level auth accessor.** `Conn.Detached()` reports whether there

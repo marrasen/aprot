@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // WithTestConnection returns a context carrying a minimal [Conn] with the
@@ -46,7 +47,7 @@ func (t *recordingTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
-func (t *recordingTransport) TrySend(data []byte) error { return t.Send(data) }
+func (t *recordingTransport) SendTimeout(data []byte, _ time.Duration) error { return t.Send(data) }
 
 func (t *recordingTransport) SupportsBinary() bool { return true }
 

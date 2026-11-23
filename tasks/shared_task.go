@@ -206,7 +206,7 @@ func (tm *taskManager) snapshotAllForConn(connID uint64, userID string) []Shared
 func (tm *taskManager) broadcastNow() {
 	tm.server.ForEachConn(func(conn *aprot.Conn) {
 		states := tm.snapshotAllForConn(conn.ID(), conn.UserID())
-		_ = conn.PushNoWait(TaskStateEvent{Tasks: states})
+		_ = conn.Push(TaskStateEvent{Tasks: states})
 	})
 }
 
