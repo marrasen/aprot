@@ -10,6 +10,16 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-11-23
+
+One client that stops reading no longer holds up `Server.Broadcast` for
+`WriteTimeout`. A push now closes a WebSocket connection that writes no
+frame for the new `PushTimeout`, 5 seconds by default (#423, #424). That is
+**breaking** for `Conn.Push`, which used to wait without limit, and for an
+`Observer` that implements the interface in full (see Changed).
+
+The wire protocol and the TypeScript and Go clients are unchanged.
+
 ### Added
 
 - **`ServerOptions.PushTimeout`.** How long a WebSocket connection may write
@@ -1415,7 +1425,8 @@ authorization input (#330, #336, #337).
   resource-exhaustion blast radius of a single misbehaving connection (#222).
 - Static analysis (`gosec`) and vulnerability scanning (`govulncheck`) added to CI (#207 P3).
 
-[Unreleased]: https://github.com/marrasen/aprot/compare/v0.66.0...HEAD
+[Unreleased]: https://github.com/marrasen/aprot/compare/v0.67.0...HEAD
+[0.67.0]: https://github.com/marrasen/aprot/compare/v0.66.0...v0.67.0
 [0.66.0]: https://github.com/marrasen/aprot/compare/v0.65.0...v0.66.0
 [0.65.0]: https://github.com/marrasen/aprot/compare/v0.64.0...v0.65.0
 [0.64.0]: https://github.com/marrasen/aprot/compare/v0.63.0...v0.64.0
