@@ -376,17 +376,18 @@ func (c *Conn) ServerBroadcaster() Broadcaster {
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
 //
-// Push waits for room when the connection's send buffer is full, for at most
-// [ServerOptions.PushTimeout]. A WebSocket connection that has no room for
-// that long is closed, and Push returns [ErrConnectionClosed].
+// Push waits for room when the connection's send buffer is full. A WebSocket
+// connection that writes no frame for [ServerOptions.PushTimeout] during that
+// wait is closed, and Push returns [ErrConnectionClosed].
 func (c *Conn) Push(data any) error {
 	event := c.server.registry.eventName(data)
 	return c.push(event, data)
 }
 
 // push sends a push message with an explicit event name (internal use). It
-// closes a connection whose send buffer has no room for PushTimeout, so a
-// goroutine pushing to many connections waits that long at most for each.
+// closes a connection that writes no frame for PushTimeout while the push
+// waits for room, so a goroutine pushing to many connections is held up that
+// long at most by one that stopped reading.
 func (c *Conn) push(event string, data any) error {
 	raw, err := marshalJSON(PushMessage{
 		Type:  TypePush,
@@ -408,10 +409,13 @@ func (c *Conn) push(event string, data any) error {
 	if !errors.Is(err, errSendTimeout) {
 		return err
 	}
-	if c.closeWithCause(ErrConnectionClosed, closeAbort) {
+	// Report before closing the transport, so SlowConsumerClosed comes
+	// before the ConnectionClosed that the closed socket leads to.
+	if c.markClosed(ErrConnectionClosed) {
 		if o := c.server.observer; o != nil {
 			o.SlowConsumerClosed(c)
 		}
+		c.closeTransport(closeAbort)
 	}
 	return ErrConnectionClosed
 }
@@ -1512,6 +1516,17 @@ const (
 // says. It reports whether this call performed the transition; false means the
 // connection was already closed.
 func (c *Conn) closeWithCause(cause error, mode closeMode) bool {
+	if !c.markClosed(cause) {
+		return false
+	}
+	c.closeTransport(mode)
+	return true
+}
+
+// markClosed marks the connection closed, cancels its in-flight requests with
+// cause and unregisters its subscriptions. It reports whether this call
+// performed the transition. The caller then closes the transport.
+func (c *Conn) markClosed(cause error) bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1524,6 +1539,11 @@ func (c *Conn) closeWithCause(cause error, mode closeMode) bool {
 	}
 	c.mu.Unlock()
 	c.server.subscriptions.unregisterConn(c.id)
+	return true
+}
+
+// closeTransport closes the transport as mode says.
+func (c *Conn) closeTransport(mode closeMode) {
 	switch mode {
 	case closeGraceful:
 		_ = c.transport.CloseGracefully()
@@ -1532,5 +1552,4 @@ func (c *Conn) closeWithCause(cause error, mode closeMode) bool {
 	default:
 		_ = c.transport.Close()
 	}
-	return true
 }

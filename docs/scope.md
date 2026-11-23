@@ -227,21 +227,23 @@ consistent with them.
   owning a sweeper goroutine, a default that is wrong for someone, and the
   definition of "slow". Ship the numbers; the consumer's alert is one
   comparison. Ruling recorded for #374.
-- **A push waits for one connection for at most `PushTimeout`; then the
-  connection is closed.** `Server.Broadcast`, `Server.PushToUser` and
-  `Conn.Push` wait for room in a WebSocket connection's send buffer for
-  `ServerOptions.PushTimeout` and close a connection that has had none
-  (#423). One goroutine pushing to many connections must not be held up for
-  `WriteTimeout` by the slowest one, and a push dropped without telling the
-  client is the failure the waiting send was introduced to end; closing is
-  the remaining choice, because a client that reconnects re-subscribes and
-  knows it missed pushes. A full buffer alone closes nothing: a client that
-  is receiving a stream has a full buffer and is reading. `PushTimeout` is a
-  transport limit of the same kind as `WriteTimeout`, a bound on how long a
-  send waits on a socket, and says nothing about how long a handler may run.
-  The byte-stream transport ignores it, as it ignores `WriteTimeout`: a
-  stdio peer cannot reconnect, so closing it is never the remedy. Ruling
-  recorded for #423.
+- **A connection that holds up a push without writing a frame for
+  `PushTimeout` is closed.** `Server.Broadcast`, `Server.PushToUser` and
+  `Conn.Push` wait for room in a WebSocket connection's send buffer, and
+  close the connection when it has written no frame for
+  `ServerOptions.PushTimeout` during that wait (#423). One goroutine pushing
+  to many connections must not be held up for `WriteTimeout` by one that
+  stopped reading, and a push dropped without telling the client is the
+  failure the waiting send was introduced to end; closing is the remaining
+  choice, because a client that reconnects re-subscribes and knows it missed
+  pushes. The test is whether the connection writes frames, not whether its
+  buffer is full or how long the push has waited: a client receiving a
+  stream has a full buffer and is reading, and a push behind other senders
+  waits its turn. `PushTimeout` is a transport limit of the same kind as
+  `WriteTimeout`, a bound on how long a socket may take nothing, and says
+  nothing about how long a handler may run. The byte-stream transport
+  ignores it, as it ignores `WriteTimeout`: a stdio peer cannot reconnect,
+  so closing it is never the remedy. Ruling recorded for #423.
 - **Connection state answers transport questions; aprot exports no
   connection-level auth accessor.** `Conn.Detached()` reports whether there
   is a socket behind the connection, so code that must choose a delivery
