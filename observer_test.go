@@ -25,6 +25,7 @@ type recordingObserver struct {
 	fanouts      map[string]int
 	bufferFull   int
 	writeTimeout int
+	slowClosed   int
 }
 
 func newRecordingObserver() *recordingObserver {
@@ -76,6 +77,12 @@ func (o *recordingObserver) SendBufferFull(*Conn) {
 func (o *recordingObserver) WriteTimedOut(*Conn) {
 	o.mu.Lock()
 	o.writeTimeout++
+	o.mu.Unlock()
+}
+
+func (o *recordingObserver) SlowConsumerClosed(*Conn) {
+	o.mu.Lock()
+	o.slowClosed++
 	o.mu.Unlock()
 }
 

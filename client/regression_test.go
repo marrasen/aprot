@@ -273,6 +273,7 @@ func (o *patchObserver) RefreshFanout(string, int)                            {}
 func (o *patchObserver) PatchFanout(string, int, int)                         {}
 func (o *patchObserver) SendBufferFull(*aprot.Conn)                           {}
 func (o *patchObserver) WriteTimedOut(*aprot.Conn)                            {}
+func (o *patchObserver) SlowConsumerClosed(*aprot.Conn)                       {}
 func (o *patchObserver) SubscriptionRegistered(_ *aprot.Conn, _, id string) {
 	if o.onRegistered != nil {
 		o.onRegistered(id)

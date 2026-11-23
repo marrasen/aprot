@@ -10,6 +10,31 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **`ServerOptions.PushTimeout`.** How long a WebSocket connection may write
+  no frame while a push waits for room in its send buffer. Default 5s; `-1`
+  waits until `WriteTimeout` closes the connection, as before.
+- **`Observer.SlowConsumerClosed`.** Fires when a connection is closed for
+  reaching `PushTimeout`.
+
+### Changed
+
+- **Breaking: a push closes a WebSocket connection that writes no frame for
+  `PushTimeout`** (#423). This covers `Server.Broadcast`,
+  `Server.PushToUser` and `Conn.Push`, which used to wait without limit; the
+  push returns `ErrConnectionClosed`. The client reconnects and
+  re-subscribes; pushes sent while it was away are not replayed. Before, one
+  client that stopped reading held up every `Broadcast` caller until
+  `WriteTimeout` closed it, 30 seconds by default. A client that keeps
+  reading stays connected, and the push waits its turn. Raise `PushTimeout`
+  when one frame can take longer than that to send on your slowest
+  link, or set `-1` for the old behaviour. The byte-stream transport ignores
+  `PushTimeout`.
+- **Breaking: `Observer` has a new method, `SlowConsumerClosed`.** An
+  observer that embeds `NoopObserver` needs no change. One that implements
+  the interface in full must add the method.
+
 ## [0.66.0] - 2026-10-28
 
 The TypeScript client now refuses frames larger than the server's

@@ -73,6 +73,14 @@ type ServerOptions struct {
 	// it up to 2*PingInterval so healthy connections aren't dropped. Only
 	// effective while pings are enabled. Set to -1 to disable. Default: 60s.
 	PongTimeout time.Duration
+	// PushTimeout is how long a WebSocket connection may write no frame while
+	// a push ([Server.Broadcast], [Server.PushToUser], [Conn.Push]) waits for
+	// room in its send buffer. A connection that reaches it is closed, so a
+	// client that stops reading holds up a caller once, for PushTimeout. A
+	// client that keeps reading stays connected, and the push waits its turn
+	// behind the frames ahead of it. The byte-stream transport ignores it.
+	// Set to -1 to wait until WriteTimeout closes the connection. Default: 5s.
+	PushTimeout time.Duration
 	// MaxConcurrentRequests caps the number of in-flight requests a single
 	// connection may run at once. Each inbound request/subscribe frame occupies
 	// one slot for the duration of its handler (a streaming handler holds its
@@ -170,6 +178,7 @@ func defaultServerOptions() ServerOptions {
 		WriteTimeout:         30 * time.Second,
 		PingInterval:         30 * time.Second,
 		PongTimeout:          60 * time.Second,
+		PushTimeout:          5 * time.Second,
 
 		MaxConcurrentRequests:       256,
 		MaxServerConcurrentRequests: 10000,
@@ -236,6 +245,9 @@ func NewServer(registry *Registry, opts ...ServerOptions) *Server {
 		}
 		if opt.PongTimeout != 0 {
 			options.PongTimeout = opt.PongTimeout
+		}
+		if opt.PushTimeout != 0 {
+			options.PushTimeout = opt.PushTimeout
 		}
 		if opt.MaxConcurrentRequests != 0 {
 			options.MaxConcurrentRequests = opt.MaxConcurrentRequests
@@ -593,6 +605,8 @@ func (s *Server) invoke(ctx context.Context, info *HandlerInfo, req *Request) (r
 // PushToUser sends a push message to all connections for a specific user.
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
+//
+// PushToUser waits for a connection as [Server.Broadcast] does.
 func (s *Server) PushToUser(userID string, data any) {
 	event := s.registry.eventName(data)
 
@@ -652,7 +666,7 @@ func (s *Server) DisconnectUser(userID string) int {
 		if conn.UserID() != userID {
 			continue
 		}
-		if conn.closeWithCause(ErrConnectionClosed, true) {
+		if conn.closeWithCause(ErrConnectionClosed, closeGraceful) {
 			closed++
 		}
 	}
@@ -784,6 +798,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Broadcast sends a push message to all connected clients.
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
+//
+// Broadcast waits for room when a connection's send buffer is full. A
+// WebSocket connection that writes no frame for [ServerOptions.PushTimeout]
+// during that wait is closed and its client reconnects, so one client that
+// stops reading holds up the caller once, for PushTimeout. Pushes sent while
+// a client is away are not replayed.
 func (s *Server) Broadcast(data any) {
 	event := s.registry.eventName(data)
 	for _, conn := range s.connsSnapshot() {

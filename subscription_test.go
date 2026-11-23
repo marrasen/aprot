@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestSubscriptionManager_RegisterAndRefresh(t *testing.T) {
@@ -306,5 +307,7 @@ func (m *mockTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
 	}
 	return m.SendBinary(data)
 }
-func (m *mockTransport) Close() error           { return nil }
-func (m *mockTransport) CloseGracefully() error { return nil }
+func (m *mockTransport) SendTimeout(data []byte, _ time.Duration) error { return m.Send(data) }
+func (m *mockTransport) Close() error                                   { return nil }
+func (m *mockTransport) CloseGracefully() error                         { return nil }
+func (m *mockTransport) Abort() error                                   { return nil }

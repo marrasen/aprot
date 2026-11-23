@@ -3,6 +3,7 @@ package aprot
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // transport is the internal interface for connection I/O.
@@ -16,6 +17,10 @@ type transport interface {
 	// for stream items where a canceled request should promptly stop yielding
 	// even if the outbound queue is full.
 	SendCtx(ctx context.Context, data []byte) error
+	// SendTimeout is like Send but returns errSendTimeout when the transport
+	// has written no frame for d while data waited for room in the outbound
+	// queue. A d of zero or less waits like Send. Used for push messages.
+	SendTimeout(data []byte, d time.Duration) error
 	// SupportsBinary reports whether the transport has a native binary frame
 	// channel. Callers must check it before using SendBinary/SendBinaryCtx;
 	// binary-frame encoding is skipped entirely on transports without it.
@@ -29,7 +34,14 @@ type transport interface {
 	Close() error
 	// CloseGracefully sends a close frame (if supported) before closing.
 	CloseGracefully() error
+	// Abort closes the transport at once and discards the frames still
+	// queued. It releases a write the peer is not reading.
+	Abort() error
 }
+
+// errSendTimeout is returned by SendTimeout when the transport wrote no
+// frame for the whole timeout.
+var errSendTimeout = errors.New("aprot: timed out waiting for room in the send buffer")
 
 // errBinaryUnsupported is returned by SendBinary/SendBinaryCtx on transports
 // without a native binary channel. Callers avoid it by checking

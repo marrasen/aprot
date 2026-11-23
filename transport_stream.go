@@ -9,6 +9,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // streamTransport adapts any bidirectional byte stream — stdio pipes to a
@@ -91,6 +92,12 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	}
 }
 
+// SendTimeout waits like Send and ignores d. A byte-stream peer such as a
+// stdio parent cannot reconnect, so a push is never a reason to close it.
+func (t *streamTransport) SendTimeout(data []byte, _ time.Duration) error {
+	return t.Send(data)
+}
+
 // reportBufferFull signals send-buffer backpressure to the observer. The
 // frame is not dropped; the caller falls back to a blocking send.
 func (t *streamTransport) reportBufferFull() {
@@ -111,6 +118,12 @@ func (t *streamTransport) Close() error {
 // CloseGracefully is identical to Close: the framing has no close frame, so
 // the peer detects shutdown via EOF.
 func (t *streamTransport) CloseGracefully() error {
+	return t.Close()
+}
+
+// Abort is identical to Close, which closes the stream without writing the
+// queued frames.
+func (t *streamTransport) Abort() error {
 	return t.Close()
 }
 

@@ -391,6 +391,7 @@
 //	    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
 //	    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
 //	    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+//	    PushTimeout:    5 * time.Second,  // drop peers that hold up a push (default 5s)
 //
 //	    MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
 //	    MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
@@ -689,6 +690,17 @@
 //
 // Push event types must be registered with [Registry.RegisterPushEventFor].
 // The event name on the wire is derived from the Go type name.
+//
+// [Server.Broadcast], [Server.PushToUser] and [Conn.Push] wait for room when
+// a connection's send buffer is full. A WebSocket connection that writes no
+// frame for [ServerOptions.PushTimeout] during that wait, five seconds by
+// default, is closed. A client that stops reading therefore holds up the
+// caller once, for PushTimeout, and the other clients keep receiving. The
+// client reconnects and re-subscribes; pushes sent while it was away are not
+// replayed. A client that keeps reading stays connected, and the push waits
+// its turn. [Observer.SlowConsumerClosed] reports each connection closed this
+// way. The byte-stream transport ignores PushTimeout: a stdio peer cannot
+// reconnect.
 //
 // # Subscription Refresh
 //

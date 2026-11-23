@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -19,6 +20,10 @@ type wsTransport struct {
 	send chan outboundFrame
 	done chan struct{} // closed once to signal shutdown; makes Send a no-op
 	opts ServerOptions // read limit, write timeout, and keepalive settings
+	// lastTake is when the write pump last took a frame from send, in Unix
+	// nanoseconds. SendTimeout reads it to tell a peer that is reading from
+	// one that has stopped.
+	lastTake atomic.Int64
 	// binary reports whether this connection accepts binary frames. Negotiated
 	// per-connection at upgrade time rather than fixed per-transport, so a
 	// client that only decodes text can take the JSON $blob fallback path.
@@ -59,6 +64,68 @@ func (t *wsTransport) Send(data []byte) error {
 
 func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
+}
+
+func (t *wsTransport) SendTimeout(data []byte, d time.Duration) error {
+	if d <= 0 {
+		return t.Send(data)
+	}
+	frame := outboundFrame{messageType: websocket.TextMessage, data: data}
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- frame:
+		return nil
+	default:
+		t.reportBufferFull()
+	}
+	// The timer runs on another goroutine so this one stays in a single
+	// select: leaving it to check the time would put the push behind every
+	// sender that is already waiting for room.
+	stalled := make(chan struct{})
+	finished := make(chan struct{})
+	defer close(finished)
+	go t.watchStall(d, stalled, finished)
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	case t.send <- frame:
+		return nil
+	case <-stalled:
+		return errSendTimeout
+	}
+}
+
+// watchStall closes stalled once the write pump has taken no frame for d. The
+// peer is reading as long as the pump keeps taking frames, so the time runs
+// from the last frame taken, not from the start of the wait. It returns when
+// finished is closed.
+func (t *wsTransport) watchStall(d time.Duration, stalled chan<- struct{}, finished <-chan struct{}) {
+	start := time.Now()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	for {
+		select {
+		case <-finished:
+			return
+		case <-timer.C:
+			idleSince := start
+			if taken := time.Unix(0, t.lastTake.Load()); taken.After(start) {
+				idleSince = taken
+			}
+			remaining := d - time.Since(idleSince)
+			if remaining <= 0 {
+				close(stalled)
+				return
+			}
+			timer.Reset(remaining)
+		}
+	}
+}
+
+// tookFrame records that the write pump took a frame from send.
+func (t *wsTransport) tookFrame() {
+	t.lastTake.Store(time.Now().UnixNano())
 }
 
 func (t *wsTransport) SupportsBinary() bool { return t.binary }
@@ -117,6 +184,16 @@ func (t *wsTransport) reportBufferFull() {
 
 func (t *wsTransport) Close() error {
 	close(t.done)
+	return nil
+}
+
+// Abort closes the socket without writing the queued frames. Closing the
+// socket fails a write that is waiting on a peer that stopped reading. The
+// close runs on its own goroutine because a TLS socket may spend up to five
+// seconds sending its close alert.
+func (t *wsTransport) Abort() error {
+	close(t.done)
+	go func() { _ = t.ws.Close() }()
 	return nil
 }
 
@@ -192,6 +269,7 @@ func (t *wsTransport) writePump() {
 				return
 			}
 		case frame := <-t.send:
+			t.tookFrame()
 			if err := t.writeMessage(frame.messageType, frame.data); err != nil {
 				return
 			}

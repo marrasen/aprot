@@ -915,6 +915,7 @@ server := aprot.NewServer(registry, aprot.ServerOptions{
     WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
     PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
     PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+    PushTimeout:    5 * time.Second,  // drop peers that hold up a push (default 5s)
 
     MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
     MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
@@ -928,7 +929,8 @@ Set any of these to `-1` to disable it. Defaults apply when the field is zero.
 
   The guarantee covers handlers and request-path middleware. **Task middleware that panics *after* calling `next()`** is the one case outside it: by then the task entry point has already returned, so there is no caller to receive the panic and no client to send an error to. It is re-raised on the task's goroutine rather than swallowed, so a bug there is loud instead of silent. A task middleware panic *before* `next()` is handed back to the caller and behaves like any other.
 - **Message size limits** — oversized WebSocket frames close the connection.
-- **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`, so it cannot back-pressure broadcasts or other connections.
+- **Write timeout** — a client that stops reading is disconnected once a write blocks longer than `WriteTimeout`.
+- **Push timeout** — `Broadcast`, `PushToUser` and `Conn.Push` wait for room when a connection's send buffer is full. A WebSocket connection that writes no frame for `PushTimeout` during that wait is closed, so a client that stops reading holds up the caller once, for `PushTimeout`, and the other clients keep receiving. The client reconnects and re-subscribes; pushes sent while it was away are not replayed. A client that keeps reading stays connected however slow it is: the push waits its turn behind the frames ahead of it. Raise `PushTimeout` when one frame can take longer than that to send on your slowest link. Set `-1` to wait until `WriteTimeout` closes the connection. The byte-stream transport ignores `PushTimeout`, as it ignores `WriteTimeout`: a stdio peer cannot reconnect.
 - **Keepalive** — the server pings on `PingInterval` and drops connections with no inbound traffic for `PongTimeout`, so half-open connections (NATs, dropped Wi-Fi) are cleaned up. `PongTimeout` must exceed `PingInterval`; if it's set lower, `NewServer` clamps it to `2*PingInterval` rather than dropping healthy connections.
 - **Concurrency caps** — a single connection can otherwise pin unbounded work: every inbound frame runs on its own goroutine and a connection can register unlimited subscriptions (each amplifying server-side `TriggerRefresh` fan-out). `MaxConcurrentRequests` bounds in-flight requests per connection, `MaxServerConcurrentRequests` bounds them across the whole server, and `MaxSubscriptions` bounds active subscriptions per connection. A frame over a cap is rejected with `CodeTooManyRequests` (`-32004`; the TS client exposes `err.isTooManyRequests()`) rather than spawning more goroutines. A streaming handler holds its request slot until the stream ends.
 
@@ -1087,7 +1089,7 @@ func (metrics) SendBufferFull(*aprot.Conn) { sendBufferFull.Inc() } // early bac
 server := aprot.NewServer(registry, aprot.ServerOptions{Observer: metrics{}})
 ```
 
-Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), and `WriteTimedOut`.
+Events: `ConnectionOpened` / `ConnectionClosed`, `RequestCompleted` (method, subscribe flag, duration, error code), `SubscriptionRegistered` / `SubscriptionUnregistered`, `RefreshFanout` (trigger key + fan-out size), `SendBufferFull` (slow-consumer backpressure — the precursor to a stalled-client drop), `WriteTimedOut`, and `SlowConsumerClosed` (a connection held up a push for `PushTimeout` and was closed).
 
 - **Embed `NoopObserver`** so you implement only the events you care about and stay forward-compatible as new ones are added.
 - **Hot-path discipline** — callbacks run synchronously on the server's hot paths and may fire concurrently, so keep them fast and non-blocking; offload heavy work to a goroutine.
