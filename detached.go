@@ -19,8 +19,10 @@ type detachedTransport struct {
 
 func (detachedTransport) Send([]byte) error                     { return ErrDetachedConn }
 func (detachedTransport) SendCtx(context.Context, []byte) error { return ErrDetachedConn }
+func (detachedTransport) TrySend([]byte) error                  { return ErrDetachedConn }
 func (detachedTransport) Close() error                          { return nil }
 func (detachedTransport) CloseGracefully() error                { return nil }
+func (detachedTransport) Abort() error                          { return nil }
 
 // NewDetachedConn returns a connection that is not bound to any transport.
 // It exists so request-scoped transports (REST, MCP) can satisfy middleware

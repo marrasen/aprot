@@ -391,6 +391,7 @@
 //	    WriteTimeout:   10 * time.Second, // drop peers that stop reading (default 30s)
 //	    PingInterval:   30 * time.Second, // WebSocket keepalive ping interval (default 30s)
 //	    PongTimeout:    60 * time.Second, // drop peers with no inbound traffic (default 60s)
+//	    SendBufferSize: 1024,             // outbound frames queued per connection (default 1024)
 //
 //	    MaxConcurrentRequests:       256,   // in-flight requests per connection (default 256)
 //	    MaxServerConcurrentRequests: 10000, // in-flight requests across all connections (default 10000)
@@ -398,6 +399,8 @@
 //	})
 //
 // Set a field to -1 to disable that limit; zero applies the default.
+// SendBufferSize cannot be disabled: zero or a negative value applies the
+// default.
 // Handler panics are recovered per request and surfaced to the client as
 // internal errors — one buggy handler cannot take down the process. The
 // guarantee holds on every transport and dispatch path: a socket request
@@ -689,6 +692,18 @@
 //
 // Push event types must be registered with [Registry.RegisterPushEventFor].
 // The event name on the wire is derived from the Go type name.
+//
+// [Server.Broadcast], [Server.PushToUser] and [Conn.PushNoWait] return
+// without waiting. A connection whose send buffer is full is closed, so one
+// client that stops reading cannot hold up the caller or the other clients.
+// The client reconnects and re-subscribes; pushes sent while it was away are
+// not replayed. [ServerOptions.SendBufferSize] is the number of frames a
+// connection queues: size it for the largest burst of pushes the server sends
+// at once. [Observer.SlowConsumerClosed] reports each connection closed this
+// way.
+//
+// [Conn.Push] waits for room in the send buffer. Use it from a handler
+// pushing to its own connection, where the wait slows only that handler.
 //
 // # Subscription Refresh
 //

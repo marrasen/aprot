@@ -56,12 +56,19 @@ type Observer interface {
 	// SendBufferFull fires when a connection's outbound WebSocket buffer is full
 	// at enqueue time — an early backpressure / slow-consumer signal and the
 	// precursor to a stalled-client write timeout. The frame is not dropped: the
-	// send blocks until room frees or the write times out.
+	// send blocks until room frees or the write times out. It fires for sends
+	// that wait (responses, stream items, refreshes, [Conn.Push]); a push that
+	// does not wait fires SlowConsumerClosed.
 	SendBufferFull(conn *Conn)
 
 	// WriteTimedOut fires when an outbound WebSocket write exceeds
 	// [ServerOptions.WriteTimeout] and the connection is dropped.
 	WriteTimedOut(conn *Conn)
+
+	// SlowConsumerClosed fires when [Server.Broadcast], [Server.PushToUser]
+	// or [Conn.PushNoWait] finds a connection's send buffer full and closes
+	// the connection. It runs on the goroutine that pushed.
+	SlowConsumerClosed(conn *Conn)
 }
 
 // RequestEvent describes a completed request or subscribe, passed to
@@ -138,3 +145,4 @@ func (NoopObserver) RefreshFanout(string, int)                      {}
 func (NoopObserver) PatchFanout(string, int, int)                   {}
 func (NoopObserver) SendBufferFull(*Conn)                           {}
 func (NoopObserver) WriteTimedOut(*Conn)                            {}
+func (NoopObserver) SlowConsumerClosed(*Conn)                       {}

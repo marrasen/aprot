@@ -46,7 +46,7 @@ func (t *wsTransport) observer() Observer {
 func newWSTransport(ws *websocket.Conn, opts ServerOptions, binary bool) *wsTransport {
 	return &wsTransport{
 		ws:     ws,
-		send:   make(chan outboundFrame, 256),
+		send:   make(chan outboundFrame, sendBufferSize(opts)),
 		done:   make(chan struct{}),
 		opts:   opts,
 		binary: binary,
@@ -59,6 +59,20 @@ func (t *wsTransport) Send(data []byte) error {
 
 func (t *wsTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.sendFrame(ctx, outboundFrame{messageType: websocket.TextMessage, data: data})
+}
+
+func (t *wsTransport) TrySend(data []byte) error {
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	default:
+	}
+	select {
+	case t.send <- outboundFrame{messageType: websocket.TextMessage, data: data}:
+		return nil
+	default:
+		return errSendBufferFull
+	}
 }
 
 func (t *wsTransport) SupportsBinary() bool { return t.binary }
@@ -80,7 +94,7 @@ func (t *wsTransport) SendBinaryCtx(ctx context.Context, data []byte) error {
 }
 
 func (t *wsTransport) sendFrame(ctx context.Context, frame outboundFrame) error {
-	// Blocking send — waits for room in the 256-slot buffer. Unblocks
+	// Blocking send — waits for room in the send buffer. Unblocks
 	// immediately if the transport is closed. Previously this method dropped
 	// on a full buffer, which silently lost responses/progress for slow
 	// clients; streams need guaranteed delivery and all other message types
@@ -118,6 +132,13 @@ func (t *wsTransport) reportBufferFull() {
 func (t *wsTransport) Close() error {
 	close(t.done)
 	return nil
+}
+
+// Abort closes the socket without writing the queued frames. Closing the
+// socket fails a write that is waiting on a peer that stopped reading.
+func (t *wsTransport) Abort() error {
+	close(t.done)
+	return t.ws.Close()
 }
 
 func (t *wsTransport) CloseGracefully() error {

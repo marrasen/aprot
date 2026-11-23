@@ -46,6 +46,8 @@ func (t *recordingTransport) SendCtx(ctx context.Context, data []byte) error {
 	return t.Send(data)
 }
 
+func (t *recordingTransport) TrySend(data []byte) error { return t.Send(data) }
+
 func (t *recordingTransport) SupportsBinary() bool { return true }
 
 func (t *recordingTransport) SendBinary(data []byte) error {
@@ -61,6 +63,7 @@ func (t *recordingTransport) SendBinaryCtx(ctx context.Context, data []byte) err
 
 func (t *recordingTransport) Close() error           { return nil }
 func (t *recordingTransport) CloseGracefully() error { return nil }
+func (t *recordingTransport) Abort() error           { return nil }
 
 func (t *recordingTransport) Messages() [][]byte {
 	t.mu.Lock()

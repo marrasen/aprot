@@ -16,6 +16,9 @@ type transport interface {
 	// for stream items where a canceled request should promptly stop yielding
 	// even if the outbound queue is full.
 	SendCtx(ctx context.Context, data []byte) error
+	// TrySend enqueues data without waiting. It returns errSendBufferFull
+	// when the outbound queue has no room.
+	TrySend(data []byte) error
 	// SupportsBinary reports whether the transport has a native binary frame
 	// channel. Callers must check it before using SendBinary/SendBinaryCtx;
 	// binary-frame encoding is skipped entirely on transports without it.
@@ -29,6 +32,25 @@ type transport interface {
 	Close() error
 	// CloseGracefully sends a close frame (if supported) before closing.
 	CloseGracefully() error
+	// Abort closes the transport at once and discards the frames still
+	// queued. It releases a write the peer is not reading.
+	Abort() error
+}
+
+// errSendBufferFull is returned by TrySend when the outbound queue has no room.
+var errSendBufferFull = errors.New("aprot: send buffer full")
+
+// defaultSendBufferSize is the outbound queue length when
+// [ServerOptions.SendBufferSize] is not set.
+const defaultSendBufferSize = 1024
+
+// sendBufferSize returns the outbound queue length for a transport created
+// with opts.
+func sendBufferSize(opts ServerOptions) int {
+	if opts.SendBufferSize > 0 {
+		return opts.SendBufferSize
+	}
+	return defaultSendBufferSize
 }
 
 // errBinaryUnsupported is returned by SendBinary/SendBinaryCtx on transports

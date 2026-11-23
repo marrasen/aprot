@@ -10,6 +10,41 @@ This file was introduced at v0.44.0; for the history of earlier releases see the
 
 ## [Unreleased]
 
+### Added
+
+- **`ServerOptions.SendBufferSize`.** The number of outbound frames a
+  connection queues. Default 1024; it was fixed at 256.
+- **`Conn.PushNoWait`.** Sends a push message without waiting. A full send
+  buffer closes the connection and returns `ErrConnectionClosed`. Use it
+  when one goroutine pushes to many connections, for example inside
+  `Server.ForEachConn`.
+- **`Observer.SlowConsumerClosed`.** Fires when a push finds a connection's
+  send buffer full and closes the connection.
+
+### Changed
+
+- **`Server.Broadcast` and `Server.PushToUser` no longer wait for a
+  connection** (#423). A connection whose send buffer is full is closed, and
+  the call returns. The client reconnects and re-subscribes; pushes sent
+  while it was away are not replayed. Before, one client that stopped
+  reading held up every `Broadcast` caller until `WriteTimeout` closed it,
+  30 seconds by default. A server that sends more than `SendBufferSize`
+  pushes in one burst closes healthy connections too, so raise
+  `SendBufferSize` to cover the largest burst. The shared task state push in
+  `tasks` sends the same way.
+- **`Conn.Push` is unchanged and still waits for room.** Use it from a
+  handler pushing to its own connection.
+- **Breaking: `Observer` has a new method, `SlowConsumerClosed`.** An
+  observer that embeds `NoopObserver` needs no change. One that implements
+  the interface in full must add the method.
+
+### Fixed
+
+- **A byte-stream peer that stops reading is closed.** The byte-stream
+  transport has no write deadline, so such a peer held up every sender
+  until the stream was closed from outside. A push that finds its send
+  buffer full now closes it.
+
 ## [0.66.0] - 2026-10-28
 
 The TypeScript client now refuses frames larger than the server's

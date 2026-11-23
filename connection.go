@@ -375,9 +375,27 @@ func (c *Conn) ServerBroadcaster() Broadcaster {
 // Push sends a push message to this connection.
 // The event name is derived from the Go type of data, which must have been
 // registered via RegisterPushEventFor.
+//
+// Push waits for room when the connection's send buffer is full. Use it from
+// a handler pushing to its own connection, where the wait slows only that
+// handler. Use [Conn.PushNoWait] when one goroutine pushes to many
+// connections.
 func (c *Conn) Push(data any) error {
 	event := c.server.registry.eventName(data)
 	return c.push(event, data)
+}
+
+// PushNoWait sends a push message to this connection without waiting. When
+// the connection's send buffer is full it closes the connection and returns
+// [ErrConnectionClosed]. The client reconnects and re-subscribes; pushes sent
+// while it was away are not replayed.
+//
+// [Server.Broadcast] and [Server.PushToUser] send this way. The event name is
+// derived from the Go type of data, which must have been registered via
+// RegisterPushEventFor.
+func (c *Conn) PushNoWait(data any) error {
+	event := c.server.registry.eventName(data)
+	return c.pushNoWait(event, data)
 }
 
 // push sends a push message with an explicit event name (internal use).
@@ -388,6 +406,37 @@ func (c *Conn) push(event string, data any) error {
 		Data:  data,
 	}
 	return c.sendJSON(msg)
+}
+
+// pushNoWait is push without the wait: a full send buffer closes the
+// connection.
+func (c *Conn) pushNoWait(event string, data any) error {
+	raw, err := marshalJSON(PushMessage{
+		Type:  TypePush,
+		Event: event,
+		Data:  data,
+	})
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrConnectionClosed
+	}
+
+	err = c.transport.TrySend(raw)
+	if !errors.Is(err, errSendBufferFull) {
+		return err
+	}
+	if c.closeWithCause(ErrConnectionClosed, closeAbort) {
+		if o := c.server.observer; o != nil {
+			o.SlowConsumerClosed(c)
+		}
+	}
+	return ErrConnectionClosed
 }
 
 func (c *Conn) sendJSON(v any) error {
@@ -1462,19 +1511,30 @@ func (c *Conn) handleUnsubscribe(id string) {
 }
 
 func (c *Conn) close() {
-	c.closeWithCause(ErrConnectionClosed, false)
+	c.closeWithCause(ErrConnectionClosed, closePlain)
 }
 
 func (c *Conn) closeGracefully() {
-	c.closeWithCause(ErrServerShutdown, true)
+	c.closeWithCause(ErrServerShutdown, closeGraceful)
 }
 
+// closeMode selects how closeWithCause closes the transport.
+type closeMode int
+
+const (
+	// closePlain calls transport.Close.
+	closePlain closeMode = iota
+	// closeGraceful sends a close frame first, where the transport has one.
+	closeGraceful
+	// closeAbort discards the queued frames and closes at once.
+	closeAbort
+)
+
 // closeWithCause marks the connection closed, cancels its in-flight requests
-// with cause, unregisters its subscriptions, and closes the transport (with a
-// close frame when graceful and the transport supports one). It reports
-// whether this call performed the transition; false means the connection was
-// already closed.
-func (c *Conn) closeWithCause(cause error, graceful bool) bool {
+// with cause, unregisters its subscriptions, and closes the transport as mode
+// says. It reports whether this call performed the transition; false means the
+// connection was already closed.
+func (c *Conn) closeWithCause(cause error, mode closeMode) bool {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -1487,9 +1547,12 @@ func (c *Conn) closeWithCause(cause error, graceful bool) bool {
 	}
 	c.mu.Unlock()
 	c.server.subscriptions.unregisterConn(c.id)
-	if graceful {
+	switch mode {
+	case closeGraceful:
 		_ = c.transport.CloseGracefully()
-	} else {
+	case closeAbort:
+		_ = c.transport.Abort()
+	default:
 		_ = c.transport.Close()
 	}
 	return true

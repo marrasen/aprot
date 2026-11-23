@@ -32,7 +32,7 @@ type streamTransport struct {
 func newStreamTransport(rw io.ReadWriteCloser, opts ServerOptions) *streamTransport {
 	return &streamTransport{
 		rw:   rw,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, sendBufferSize(opts)),
 		done: make(chan struct{}),
 		opts: opts,
 	}
@@ -91,6 +91,20 @@ func (t *streamTransport) SendCtx(ctx context.Context, data []byte) error {
 	}
 }
 
+func (t *streamTransport) TrySend(data []byte) error {
+	select {
+	case <-t.done:
+		return ErrConnectionClosed
+	default:
+	}
+	select {
+	case t.send <- data:
+		return nil
+	default:
+		return errSendBufferFull
+	}
+}
+
 // reportBufferFull signals send-buffer backpressure to the observer. The
 // frame is not dropped; the caller falls back to a blocking send.
 func (t *streamTransport) reportBufferFull() {
@@ -111,6 +125,12 @@ func (t *streamTransport) Close() error {
 // CloseGracefully is identical to Close: the framing has no close frame, so
 // the peer detects shutdown via EOF.
 func (t *streamTransport) CloseGracefully() error {
+	return t.Close()
+}
+
+// Abort is identical to Close, which closes the stream without writing the
+// queued frames.
+func (t *streamTransport) Abort() error {
 	return t.Close()
 }
 
